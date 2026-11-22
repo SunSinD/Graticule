@@ -18,6 +18,11 @@ export function wrapPhase(degrees: number): number {
   return ((degrees + 180) % 360 + 360) % 360 - 180;
 }
 
+export function scaleOffset(offset: number, divisor: number, multiplier: number): number {
+  const ratio = offset / divisor;
+  return Number.isFinite(ratio) && (ratio !== 0 || offset === 0) ? ratio * multiplier : (offset * multiplier) / divisor;
+}
+
 interface SineFit {
   readonly amplitude: number;
   readonly phaseDeg: number;
@@ -47,8 +52,10 @@ export interface SharedFit {
 function solveFit(rows: readonly SharedSample[], frequencyHz: number, key: 'input' | 'output'): SineFit | null {
   if (rows.length < 5) return null;
   const first = rows[0]!.time;
-  const firstVoltage = rows[0]![key];
-  const angular = 2 * Math.PI * frequencyHz;
+  let scale = 0;
+  for (const row of rows) scale = Math.max(scale, Math.abs(row[key]));
+  if (scale === 0) return null;
+  const firstVoltage = rows[0]![key] / scale;
   let sumCos = 0;
   let sumSin = 0;
   let sumY = 0;
@@ -59,10 +66,12 @@ function solveFit(rows: readonly SharedSample[], frequencyHz: number, key: 'inpu
   let sumYSin = 0;
   let sumY2 = 0;
   for (const row of rows) {
-    const t = (row.time - first) * angular;
+    const cycles = (row.time - first) * frequencyHz;
+    if (!Number.isFinite(cycles)) return null;
+    const t = (cycles % 1) * (2 * Math.PI);
     const cos = Math.cos(t);
     const sin = Math.sin(t);
-    const y = row[key] - firstVoltage;
+    const y = row[key] / scale - firstVoltage;
     sumCos += cos;
     sumSin += sin;
     sumY += y;
@@ -85,7 +94,7 @@ function solveFit(rows: readonly SharedSample[], frequencyHz: number, key: 'inpu
   if (det <= n * n * 1e-12 || y2 <= Number.EPSILON * Math.max(sumY2, Number.MIN_VALUE) * 16) return null;
   const a = (yCos * sin2 - ySin * cosSin) / det;
   const b = (ySin * cos2 - yCos * cosSin) / det;
-  const amplitude = Math.hypot(a, b);
+  const amplitude = Math.hypot(a, b) * scale;
   const r2 = (a * yCos + b * ySin) / y2;
   if (!Number.isFinite(amplitude) || !Number.isFinite(r2)) return null;
   return {

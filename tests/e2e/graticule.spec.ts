@@ -740,3 +740,117 @@ test('inspecting a Bode point focuses Back, and going back focuses that point ag
   await page.keyboard.press('Enter');
   await expect(page.locator('.bode-table td.file .linklike', { hasText: name })).toBeFocused();
 });
+
+async function damagedPng(name: string): Promise<FilePayload> {
+  const bytes = Buffer.from(await fs.readFile(SWEEP[0]!));
+  let pos = 8;
+  while (pos + 8 <= bytes.length) {
+    const len = bytes.readUInt32BE(pos);
+    if (bytes.toString('latin1', pos + 4, pos + 8) === 'IDAT') {
+      for (let i = pos + 8; i < pos + 8 + Math.min(len, 256); i++) bytes[i] = bytes[i]! ^ 0xff;
+      break;
+    }
+    pos += 12 + len;
+  }
+  return { name, mimeType: 'image/png', buffer: bytes };
+}
+
+async function asPayload(file: string): Promise<FilePayload> {
+  return { name: path.basename(file), mimeType: 'image/png', buffer: await fs.readFile(file) };
+}
+
+test('one unreadable file in a multi file upload keeps the others and names the skipped file', async ({ page }) => {
+  const garbage: FilePayload = { name: 'broken_capture.png', mimeType: 'image/png', buffer: Buffer.from('not a png at all') };
+  await addFiles(page, [await asPayload(SWEEP[0]!), garbage, await asPayload(SWEEP[1]!)]);
+  const note = page.locator('[data-testid="file-note"]');
+  await expect(note).toBeVisible();
+  await expect(note).toContainText('broken_capture.png');
+  await expect(page.locator('.file-row', { hasText: 'sweep_01.png' })).toBeVisible();
+  await expect(page.locator('.file-row', { hasText: 'sweep_02.png' })).toBeVisible();
+  await expect(page.locator('.file-row', { hasText: 'broken_capture.png' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Extract Bode (2)' })).toBeVisible();
+
+  await addFiles(page, [garbage]);
+  await expect(note).toContainText('broken_capture.png');
+  await expect(page.locator('.file-row')).toHaveCount(2);
+});
+
+test('a damaged PNG in a Bode batch becomes a rejected row that can be inspected and edited', async ({ page }) => {
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  await addFiles(page, [...(await Promise.all(SWEEP.map(asPayload))), await damagedPng('sweep_11.png')]);
+  await page.getByRole('button', { name: 'Extract Bode (11)' }).click();
+  await expect(page.locator('[aria-label="Gain plot"]')).toBeVisible({ timeout: 15_000 });
+  const row = page.locator('.bode-table tr', { hasText: 'sweep_11.png' });
+  await expect(row).toHaveClass(/rej/);
+  await expect(row).toContainText('capture could not be read or analyzed');
+  await expect(page.locator('.bode-table tr.ok')).not.toHaveCount(0);
+
+  await row.locator('td.file .linklike').click();
+  await expect(page.getByRole('button', { name: 'Back to Bode' })).toBeFocused();
+  const failed = page.locator('[data-testid="inspect-failed"]');
+  await expect(failed).toBeVisible();
+  await expect(failed).toContainText('capture could not be read or analyzed');
+  for (const name of ['SVG', '2x PNG', 'CSV', 'Copy']) await expect(page.getByRole('button', { name, exact: true })).toBeDisabled();
+  await page.locator('h2', { hasText: 'Profile' }).click();
+  await page.keyboard.press('Control+c');
+  await expect(page.locator('[data-testid="export-feedback"]')).toHaveText('');
+
+  await page.getByRole('button', { name: 'Back to Bode' }).click();
+  const freq = page.getByRole('textbox', { name: 'sweep_11.png Frequency' });
+  await freq.fill('5000');
+  await freq.press('Enter');
+  const gain = page.getByRole('textbox', { name: 'sweep_11.png Gain dB' });
+  await gain.fill('-2');
+  await gain.press('Enter');
+  await expect(row.locator('.tag')).toBeVisible();
+  await expect(gain).toHaveValue(/^-2([.,]0+)?$/);
+  await expect(row).toHaveClass(/ok/);
+  await expect(page.getByRole('main').getByRole('alert')).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+});
+
+test('coincident cursors show zero for delta t and a dash for 1 over delta t', async ({ page }) => {
+  await extractSine(page);
+  await page.keyboard.press('c');
+  const readout = page.locator('[data-testid="cursor-readout"]');
+  await expect(readout).toBeVisible();
+  const x1 = page.getByRole('slider', { name: 'X1' });
+  await x1.focus();
+  for (let i = 0; i < 10; i++) await page.keyboard.press('Shift+ArrowRight');
+  await expect(x1).toHaveAttribute('aria-valuenow', '75');
+  const value = (k: string) => readout.locator('.cursor-item', { has: page.locator('.k', { hasText: new RegExp(`^${k}$`) }) }).locator('.v');
+  await expect(value('Δt')).toHaveText(/^0\s*s$/);
+  await expect(value('1/Δt')).toHaveText('—');
+});
+
+test('a cursor move saved right before a reload is kept', async ({ page }) => {
+  await extractSine(page);
+  await page.waitForTimeout(300);
+  await page.keyboard.press('c');
+  const x1 = page.getByRole('slider', { name: 'X1' });
+  await x1.focus();
+  await page.keyboard.press('Shift+ArrowRight');
+  await page.keyboard.press('Shift+ArrowRight');
+  await expect(x1).toHaveAttribute('aria-valuenow', '35');
+  await page.waitForTimeout(100);
+  await page.reload();
+  await page.locator('.file-row', { hasText: 'sine_schmitt.png' }).click();
+  await expect(page.getByRole('button', { name: 'Clean Plot' })).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('c');
+  await expect(page.getByRole('slider', { name: 'X1' })).toHaveAttribute('aria-valuenow', '35');
+});
+
+test('a custom title goes into the downloaded CSV', async ({ page }) => {
+  await extractSine(page);
+  const title = page.getByRole('textbox', { name: 'Title' });
+  await title.fill('Lab 5 RC filter');
+  await title.press('Enter');
+  const csvDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'CSV', exact: true }).click();
+  const download = await csvDownload;
+  expect(download.suggestedFilename()).toBe('Lab 5 RC filter.csv');
+  const csv = await fs.readFile((await download.path())!, 'utf8');
+  expect(csv).toContain('# title: Lab 5 RC filter');
+  expect(csv).toContain('# file: sine_schmitt.png');
+});

@@ -1,6 +1,6 @@
 import type { Locale } from '../types.js';
 
-export const GRATICULE_VERSION = '1.1.2';
+export const GRATICULE_VERSION = '1.1.3';
 export const EMPTY_CELL = '\u2014';
 
 export function spreadsheetText(text: string): string {
@@ -129,20 +129,15 @@ function cleanFloat(value: number): number {
 
 export function stepScale125(value: number, dir: 1 | -1): number {
   if (!Number.isFinite(value) || value <= 0) return 1;
-  const exp = Math.floor(Math.log10(value));
-  const decade = 10 ** exp;
-  const mantissa = value / decade;
+  const exp = Math.max(-323, Math.floor(Math.log10(value)));
   const eps = 1e-6;
-  if (dir > 0) {
-    for (const c of [1, 2, 5, 10]) {
-      if (c > mantissa * (1 + eps)) return cleanFloat(c * decade);
-    }
-    return cleanFloat(20 * decade);
+  for (const coefficient of dir > 0 ? [1, 2, 5, 10, 20] : [5, 2, 1, 0.5, 0.2]) {
+    const candidate = Number(`${coefficient}e${exp}`);
+    if (!Number.isFinite(candidate) || candidate === 0) continue;
+    const ratio = candidate / value;
+    if (dir > 0 ? ratio > 1 + eps : ratio < 1 - eps) return candidate;
   }
-  for (const c of [5, 2, 1, 0.5]) {
-    if (c < mantissa * (1 - eps)) return cleanFloat(c * decade);
-  }
-  return cleanFloat(0.2 * decade);
+  return value;
 }
 
 const MULTIPLIERS: Readonly<Record<string, number>> = {

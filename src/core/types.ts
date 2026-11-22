@@ -241,6 +241,7 @@ export interface BodePoint {
   readonly edited: boolean;
   readonly override?: BodePointOverride;
   readonly preferManualFrequency?: boolean;
+  readonly baseReason?: string;
   readonly extraction: ExtractionResult | null;
 }
 

@@ -1,4 +1,4 @@
-import { unzlibSync } from 'fflate';
+import { Inflate } from 'fflate';
 import type { RgbaImage } from './types.js';
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
@@ -8,6 +8,9 @@ const CHANNELS: Readonly<Record<number, number>> = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 
 const DEPTHS: Readonly<Record<number, readonly number[]>> = {
   0: [1, 2, 4, 8, 16], 2: [8, 16], 3: [1, 2, 4, 8], 4: [8, 16], 6: [8, 16],
 };
+const ADAM7 = [
+  [0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2],
+] as const;
 const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, byte) => {
   let crc = byte;
   for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
@@ -64,10 +67,49 @@ function paethPredictor(a: number, b: number, c: number): number {
   return c;
 }
 
+function inflateScanlines(compressed: Uint8Array, scanlineBytes: number): Uint8Array {
+  const cmf = compressed[0]!;
+  const flg = compressed[1]!;
+  if (compressed.length < 8 || (cmf & 15) !== 8 || (cmf >> 4) > 7 || (flg & 32) || ((cmf << 8) | flg) % 31 !== 0) {
+    throw new Error('Invalid PNG: invalid zlib header');
+  }
+  const inflated = new Uint8Array(scanlineBytes);
+  let written = 0;
+  const stream = new Inflate(chunk => {
+    if (chunk.length > inflated.length - written) throw new Error('Decompressed scanline byte length mismatch');
+    inflated.set(chunk, written);
+    written += chunk.length;
+  });
+  // fflate's raw stream retains unread input and the current bit offset. Its public
+  // API does not report the DEFLATE end, which precedes Adler-32 and any padding.
+  const position = stream as unknown as { p: Uint8Array; s: { p: number; f?: number; l?: Uint16Array } };
+  let trailer = -1;
+  try {
+    const limit = compressed.length - 4;
+    for (let offset = 2; offset < limit;) {
+      // Bound temporary decompression allocations before checking the declared output size.
+      const end = Math.min(offset + 1024, limit);
+      stream.push(compressed.subarray(offset, end), end === limit);
+      if (position.s.f && !position.s.l) {
+        trailer = end - position.p.length + Math.ceil(position.s.p / 8);
+        break;
+      }
+      offset = end;
+    }
+  } catch (error) {
+    throw new Error('Invalid PNG: unable to decompress scanlines', { cause: error });
+  }
+  if (trailer < 0 || written !== scanlineBytes) throw new Error('Invalid PNG: decompressed scanline byte length mismatch');
+  if (adler32(inflated) !== readU32BE(compressed, trailer)) {
+    throw new Error('Invalid PNG: zlib Adler-32 checksum mismatch');
+  }
+  return inflated;
+}
+
 /**
  * Pure TypeScript PNG decoder using fflate.
  * Produces bit-for-bit identical RGBA buffers in browser, Web Worker, and Node CLI.
- * Supports all non-interlaced PNG color types and bit depths.
+ * Supports all PNG color types and bit depths, including Adam7 interlacing.
  */
 export function decodePng(bytes: Uint8Array): RgbaImage {
   if (bytes.length < 33) {
@@ -132,9 +174,7 @@ export function decodePng(bytes: Uint8Array): RgbaImage {
     throw new Error('Invalid PNG: missing or zero IHDR dimensions');
   }
   if (width > MAX_DIMENSION || height > MAX_DIMENSION) throw new Error('Invalid PNG: dimensions too large');
-  if (interlace !== 0) {
-    throw new Error('Unsupported PNG: Adam7 interlaced PNGs are not supported in core decoder');
-  }
+  if (interlace > 1) throw new Error('Invalid PNG: unknown interlace method');
   if (!ended || !totalIdatLen) throw new Error('Invalid PNG: missing IDAT or IEND');
   if (!DEPTHS[colorType]?.includes(bitDepth)) {
     throw new Error(`Unsupported PNG format: colorType=${colorType} bitDepth=${bitDepth}`);
@@ -150,8 +190,12 @@ export function decodePng(bytes: Uint8Array): RgbaImage {
   const channels = CHANNELS[colorType]!;
   const bitsPerPixel = channels * bitDepth;
   const bpp = Math.max(1, Math.ceil(bitsPerPixel / 8));
-  const stride = Math.ceil(width * bitsPerPixel / 8);
-  const scanlineBytes = height * (stride + 1);
+  const passes = (interlace === 1 ? ADAM7 : [[0, 0, 1, 1]] as const).map(([x, y, dx, dy]) => {
+    const columns = Math.ceil((width - x) / dx);
+    const rows = Math.ceil((height - y) / dy);
+    return { x, y, dx, dy, columns, rows, stride: Math.ceil(columns * bitsPerPixel / 8) };
+  }).filter(pass => pass.columns > 0 && pass.rows > 0);
+  const scanlineBytes = passes.reduce((total, pass) => total + pass.rows * (pass.stride + 1), 0);
   const rgbaBytes = width * height * 4;
   if (rgbaBytes + scanlineBytes > MAX_DECODED_BYTES) throw new Error('Invalid PNG: decoded byte budget exceeded');
 
@@ -162,80 +206,72 @@ export function decodePng(bytes: Uint8Array): RgbaImage {
     offset += part.length;
   }
 
-  let inflated: Uint8Array;
-  try {
-    // The extra byte detects overflow even when the inflater fills the fixed buffer.
-    inflated = unzlibSync(compressed, { out: new Uint8Array(scanlineBytes + 1) });
-  } catch (error) {
-    throw new Error('Invalid PNG: unable to decompress scanlines', { cause: error });
-  }
-  if (inflated.length !== scanlineBytes) throw new Error('Invalid PNG: decompressed scanline byte length mismatch');
-  if (adler32(inflated) !== readU32BE(compressed, compressed.length - 4)) {
-    throw new Error('Invalid PNG: zlib Adler-32 checksum mismatch');
-  }
-
+  const inflated = inflateScanlines(compressed, scanlineBytes);
   const out = new Uint8ClampedArray(rgbaBytes);
-  let prev = new Uint8Array(stride);
-  let curr = new Uint8Array(stride);
   const transparentR = trns && colorType !== 3 ? readU16BE(trns, 0) : -1;
   const transparentG = trns && colorType === 2 ? readU16BE(trns, 2) : -1;
   const transparentB = trns && colorType === 2 ? readU16BE(trns, 4) : -1;
   const packedMask = (1 << bitDepth) - 1;
-  const sample = (i: number) => bitDepth === 16 ? readU16BE(curr, i * 2) : curr[i]!;
   const rgba8 = (value: number) => bitDepth === 16 ? value >> 8 : value;
 
-  for (let y = 0; y < height; y++) {
-    const rowStart = y * (stride + 1);
-    const filter = inflated[rowStart]!;
-    if (filter > 4) throw new Error(`Invalid PNG: unknown scanline filter ${filter}`);
+  let rowStart = 0;
+  for (const { x: x0, y: y0, dx, dy, columns, rows, stride } of passes) {
+    let prev = new Uint8Array(stride);
+    let curr = new Uint8Array(stride);
+    const sample = (i: number) => bitDepth === 16 ? readU16BE(curr, i * 2) : curr[i]!;
+    for (let row = 0; row < rows; row++) {
+      const y = y0 + row * dy;
+      const filter = inflated[rowStart]!;
+      if (filter > 4) throw new Error(`Invalid PNG: unknown scanline filter ${filter}`);
 
-    for (let i = 0; i < stride; i++) {
-      const rawByte = inflated[rowStart + 1 + i] ?? 0;
-      const a = i >= bpp ? (curr[i - bpp] ?? 0) : 0;
-      const b = prev[i] ?? 0;
-      const c = i >= bpp ? (prev[i - bpp] ?? 0) : 0;
-      let val = rawByte;
-      if (filter === 1) val = (rawByte + a) & 0xff;
-      else if (filter === 2) val = (rawByte + b) & 0xff;
-      else if (filter === 3) val = (rawByte + ((a + b) >> 1)) & 0xff;
-      else if (filter === 4) val = (rawByte + paethPredictor(a, b, c)) & 0xff;
-      curr[i] = val;
-    }
+      for (let i = 0; i < stride; i++) {
+        const rawByte = inflated[rowStart + 1 + i] ?? 0;
+        const a = i >= bpp ? (curr[i - bpp] ?? 0) : 0;
+        const b = prev[i] ?? 0;
+        const c = i >= bpp ? (prev[i - bpp] ?? 0) : 0;
+        let val = rawByte;
+        if (filter === 1) val = (rawByte + a) & 0xff;
+        else if (filter === 2) val = (rawByte + b) & 0xff;
+        else if (filter === 3) val = (rawByte + ((a + b) >> 1)) & 0xff;
+        else if (filter === 4) val = (rawByte + paethPredictor(a, b, c)) & 0xff;
+        curr[i] = val;
+      }
 
-    if (colorType === 6 && bitDepth === 8) {
-      out.set(curr, y * width * 4);
-    } else {
-      for (let x = 0; x < width; x++) {
-        const di = (y * width + x) * 4;
-        const si = x * channels;
-        const bit = x * bitDepth;
-        const value = bitDepth < 8 ? (curr[bit >> 3]! >> (8 - bitDepth - (bit & 7))) & packedMask : sample(si);
-        if (colorType === 3) {
-          const pi = value * 3;
-          if (pi >= palette!.length) throw new Error('Invalid PNG: palette index out of range');
-          out[di] = palette![pi]!;
-          out[di + 1] = palette![pi + 1]!;
-          out[di + 2] = palette![pi + 2]!;
-          out[di + 3] = trns?.[value] ?? 255;
-        } else if (colorType === 2 || colorType === 6) {
-          const g = sample(si + 1);
-          const b = sample(si + 2);
-          out[di] = rgba8(value);
-          out[di + 1] = rgba8(g);
-          out[di + 2] = rgba8(b);
-          out[di + 3] = colorType === 6 ? rgba8(sample(si + 3))
-            : value === transparentR && g === transparentG && b === transparentB ? 0 : 255;
-        } else {
-          const g = bitDepth < 8 ? value * 255 / packedMask : rgba8(value);
-          out[di] = g;
-          out[di + 1] = g;
-          out[di + 2] = g;
-          out[di + 3] = colorType === 4 ? rgba8(sample(si + 1)) : value === transparentR ? 0 : 255;
+      if (colorType === 6 && bitDepth === 8 && dx === 1) {
+        out.set(curr, y * width * 4);
+      } else {
+        for (let x = 0; x < columns; x++) {
+          const di = (y * width + x0 + x * dx) * 4;
+          const si = x * channels;
+          const bit = x * bitDepth;
+          const value = bitDepth < 8 ? (curr[bit >> 3]! >> (8 - bitDepth - (bit & 7))) & packedMask : sample(si);
+          if (colorType === 3) {
+            const pi = value * 3;
+            if (pi >= palette!.length) throw new Error('Invalid PNG: palette index out of range');
+            out[di] = palette![pi]!;
+            out[di + 1] = palette![pi + 1]!;
+            out[di + 2] = palette![pi + 2]!;
+            out[di + 3] = trns?.[value] ?? 255;
+          } else if (colorType === 2 || colorType === 6) {
+            const g = sample(si + 1);
+            const b = sample(si + 2);
+            out[di] = rgba8(value);
+            out[di + 1] = rgba8(g);
+            out[di + 2] = rgba8(b);
+            out[di + 3] = colorType === 6 ? rgba8(sample(si + 3))
+              : value === transparentR && g === transparentG && b === transparentB ? 0 : 255;
+          } else {
+            const g = bitDepth < 8 ? value * 255 / packedMask : rgba8(value);
+            out[di] = g;
+            out[di + 1] = g;
+            out[di + 2] = g;
+            out[di + 3] = colorType === 4 ? rgba8(sample(si + 1)) : value === transparentR ? 0 : 255;
+          }
         }
       }
+      [prev, curr] = [curr, prev];
+      rowStart += stride + 1;
     }
-
-    [prev, curr] = [curr, prev];
   }
 
   return { width, height, data: out };

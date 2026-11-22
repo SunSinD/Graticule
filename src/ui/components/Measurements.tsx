@@ -222,7 +222,7 @@ export function BodeSummary({ tx, locale, result, gate, onGate }: BodeProps) {
           <div>
             <dt>{tx.cutoff}</dt>
             <dd className="num">
-              {result?.cutoffHz != null ? formatEng(result.cutoffHz, 'Hz', locale, { sig: 4 }) : tx.noCutoff}
+              {result?.cutoffHz != null ? formatEng(result.cutoffHz, 'Hz', locale, { sig: 4 }) : result ? tx.noCutoff : EMPTY_CELL}
             </dd>
           </div>
         )}

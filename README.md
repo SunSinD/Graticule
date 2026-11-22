@@ -147,6 +147,7 @@ The same engine runs in Node and gives the exact same CSV as the browser.
 
 ```sh
 npm run cli -- capture.png --csv --out capture.csv
+npm run cli -- capture.png --csv --title "Lab 3 Schmitt trigger" --out capture.csv
 npm run cli -- capture.png --svg --locale fr --out capture.svg
 npm run cli -- capture.png --table --format latex
 npm run cli -- photo.png --deskew 120,80,1800,60,1820,1010,100,1030 --csv --out photo.csv

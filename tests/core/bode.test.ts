@@ -51,6 +51,78 @@ function pair(frequencyHz: number, gain: number, phase: number, options: SineOpt
 describe('Bode sine fit', () => {
   const response = (f: number) => pair(f, 2 / Math.hypot(1, f / 1000), -Math.atan(f / 1000) * 180 / Math.PI);
 
+  test('keeps valid captures when individual PNGs fail decoding or analysis', () => {
+    const png = sample('sine_schmitt.png');
+    const batch = analyzeBodeBatch([
+      { fileName: 'corrupt 1 kHz.png', bytes: new Uint8Array([1, 2, 3]) },
+      { fileName: 'invalid calibration.png', bytes: png, overrides: { secPerDiv: Number.MAX_VALUE } },
+      { fileName: 'valid 2 kHz.png', bytes: png },
+    ]);
+    expect(batch.points).toHaveLength(3);
+    expect(batch.points.find(point => point.fileName === 'valid 2 kHz.png')?.extraction).not.toBeNull();
+    for (const name of ['corrupt 1 kHz.png', 'invalid calibration.png']) {
+      expect(batch.points.find(point => point.fileName === name)).toMatchObject({ extraction: null, accepted: false,
+        baseReason: 'capture_unreadable', rejectionReasons: ['capture_unreadable'] });
+    }
+  });
+
+  test('rescues unreadable captures with manual measurements and restores their reason when edits are reset', () => {
+    const fileName = 'capture 1 kHz.png';
+    const capture = { fileName, rejectionReason: 'capture_unreadable' };
+    const edit = { frequencyHz: 1200, vinVpp: 1, voutVpp: 2, phaseDeg: 270 };
+    const base = analyzeBodeBatch([capture], {}, { [fileName]: edit });
+    expect(base.points[0]).toMatchObject({ frequencyHz: 1000, frequencySource: 'filename', accepted: true });
+    expect(analyzeBodeBatch([capture], { preferManualFrequency: true }, { [fileName]: edit }).points[0])
+      .toMatchObject({ frequencyHz: 1200, frequencySource: 'manual' });
+    const edited = recomputeBodeResult(base, new Map([[fileName, edit]]));
+    expect(edited.acceptedCount).toBe(1);
+    expect(edited.points[0]).toMatchObject({ frequencyHz: 1200, frequencySource: 'manual', vinVpp: 1, voutVpp: 2, phaseDeg: -90,
+      baseReason: 'capture_unreadable', accepted: true, warnings: ['manual_measurement'], rejectionReasons: [], edited: true, override: edit });
+    expect(edited.points[0]!.gainDb).toBeCloseTo(20 * Math.log10(2));
+    expect(recomputeBodeResult(edited, { minR2: 0.9 }).points[0]!.frequencyHz).toBe(1200);
+    const reset = recomputeBodeResult(edited, {});
+    expect(reset.points[0]).toMatchObject({ frequencyHz: 1000, gainDb: null, accepted: false, edited: false,
+      rejectionReasons: ['capture_unreadable'] });
+    expect(reset.points[0]!.override).toBeUndefined();
+  });
+
+  test('requires manual gain on an unreadable row and clears pair-specific edits when channels change', () => {
+    const fileName = 'unreadable.png';
+    const base = analyzeBodeBatch([{ fileName, rejectionReason: 'capture_unreadable' }]);
+    const edit = { frequencyHz: 1200, vinVpp: 1, voutVpp: 2, gainDb: -5, phaseDeg: 42 };
+    expect(recomputeBodeResult(base, { [fileName]: { frequencyHz: 1200, vinVpp: 2, phaseDeg: 42 } }).points[0])
+      .toMatchObject({ accepted: false, gainDb: null, rejectionReasons: ['capture_unreadable'] });
+    expect(analyzeBodeBatch([{ fileName, rejectionReason: 'capture_unreadable' }], { outputChannel: 'C1' }, { [fileName]: edit }).points[0])
+      .toMatchObject({ accepted: false, gainDb: -5, rejectionReasons: ['capture_unreadable'] });
+    const excluded = recomputeBodeResult(base, { [fileName]: { ...edit, excluded: true } });
+    expect(excluded.points[0]).toMatchObject({ accepted: false, gainDb: -5, rejectionReasons: ['capture_unreadable', 'manually_excluded'] });
+    const changed = recomputeBodeResult(excluded, { outputChannel: 'C3' });
+    expect(changed.points[0]).toMatchObject({ frequencyHz: 1200, frequencySource: 'manual', vinVpp: null, voutVpp: null,
+      gainDb: null, phaseDeg: null, edited: true, override: { frequencyHz: 1200, excluded: true } });
+    expect(changed.points[0]!.override).toEqual({ frequencyHz: 1200, excluded: true });
+  });
+
+  test.each([1e155, 1e-170])('preserves gain and R² when both fitted channels are rescaled by %s', scale => {
+    const capture = pair(1000, 0.7, -35, { distortion: 0.08 });
+    const reference = analyzeBodeBatch([capture]).points[0]!;
+    const traces = capture.traces.map(trace => ({ ...trace,
+      settings: { ...trace.settings, voltsPerDiv: trace.settings.voltsPerDiv * scale },
+      samples: trace.samples.map(point => ({ ...point, voltage: point.voltage === null ? null : point.voltage * scale })),
+    }));
+    const fitted = analyzeBodeBatch([{ ...capture, traces }]).points[0]!;
+    expect(fitted.accepted).toBe(true);
+    expect(fitted.gainDb).toBeCloseTo(reference.gainDb!, 10);
+    expect(fitted.r2In).toBeCloseTo(reference.r2In!, 12);
+    expect(fitted.r2Out).toBeCloseTo(reference.r2Out!, 12);
+  });
+
+  test('fits a finite angle when angular frequency would overflow', () => {
+    const fitted = analyzeBodeBatch([pair(5e307, 0.8, -40)]).points[0]!;
+    expect(fitted.accepted).toBe(true);
+    expect(fitted.gainDb).toBeCloseTo(20 * Math.log10(0.8), 9);
+    expect(fitted.phaseDeg).toBeCloseTo(-40, 9);
+  });
+
   test('recovers gain, lag, flat passband and a log-interpolated cutoff', () => {
     const result = analyzeBodeBatch([2300, 900, 40, 75, 1100, 500].map(response));
     expect(result.acceptedCount).toBe(6);

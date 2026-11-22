@@ -285,6 +285,7 @@ export function measureChannel(trace: ChannelTrace, pxPerVDiv: number): ChannelM
     && singleCycleSpan.end - singleCycleSpan.start >= typical * 1.5);
   const periodSec = enoughObservation && confirmed.length >= periods.length * 0.75
     && longestHold <= typical * 1.25 && stableDuty ? median(confirmed) : null;
+  const frequencyHz = periodSec === null ? null : 1 / periodSec;
   const completeCycles = periodSec === null ? 0 : Math.max(rises.filter(plausible).length, falls.filter(plausible).length);
   const span = (vmax ?? 0) - (vmin ?? 0);
   const ratios = peak > 0 ? values.map(value => value / peak) : values;
@@ -294,7 +295,7 @@ export function measureChannel(trace: ChannelTrace, pxPerVDiv: number): ChannelM
     channel: trace.channel, vmax, vmin, vpp: values.length && Number.isFinite(span) ? span : null,
     vavg: values.length ? peak * mean : null,
     vrms: values.length ? peak * Math.sqrt(meanSquare) : null,
-    periodSec, frequencyHz: periodSec !== null ? 1 / periodSec : null,
+    periodSec, frequencyHz: Number.isFinite(frequencyHz) ? frequencyHz : null,
     dutyCyclePct: periodSec !== null && pulseLike && completeCycles >= 2 && duty.length >= 2 ? median(duty) : null,
     completeCycles, clipped: trace.clippedCount > 0,
     ...measureEdges(samples, pixelVoltage, (levels.at(-1) ?? 0) - (levels[0] ?? 0), sampleInterval),

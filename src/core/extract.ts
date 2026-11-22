@@ -1,3 +1,4 @@
+import { scaleOffset } from './dsp.js';
 import { CURSOR, OVERLAY } from './mask.js';
 import type { OverlayMask } from './mask.js';
 import type { ScopeMetadata } from './ocr.js';
@@ -130,7 +131,7 @@ function pickSettings(channel: ChannelId, index: number, metadata: ScopeMetadata
   const manualOffset = finite(manual?.offsetVolts) ? manual.offsetVolts : null;
   const cardOffset = card?.offsetVolts ?? null;
   const offset = manualOffset ?? cardOffset;
-  const expectedZero = offset === null ? null : centerY - offset / voltsPerDiv * pxPerVDiv;
+  const expectedZero = offset === null ? null : centerY - scaleOffset(offset, voltsPerDiv, pxPerVDiv);
   const calibratedCard = cardOffset !== null && scaleSource !== 'default';
   const manualZero = finite(manual?.zeroY) ? manual.zeroY : null;
   const useCard = calibratedCard && expectedZero !== null;
@@ -140,7 +141,7 @@ function pickSettings(channel: ChannelId, index: number, metadata: ScopeMetadata
 
   return {
     channel, enabled, voltsPerDiv,
-    offsetVolts: manualZero === null && (manualOffset !== null || useCard) ? offset! : (centerY - zeroY) / pxPerVDiv * voltsPerDiv,
+    offsetVolts: manualZero === null && (manualOffset !== null || useCard) ? offset! : scaleOffset(centerY - zeroY, pxPerVDiv, voltsPerDiv),
     zeroY,
     probeAttenuation: card?.probeAttenuation ?? 1, coupling: card?.coupling ?? 'UNKNOWN', scaleSource, zeroSource,
     rawScaleText: card?.rawScaleText ?? null, rawOffsetText: card?.rawOffsetText ?? null,
@@ -340,7 +341,11 @@ export function extractTraces(image: RgbaImage, detection: ProfileDetection, met
         })) status = 'overlap_ambiguous';
       }
       const yPx = status === 'ok' ? cluster!.y : null;
-      return { col, xPx, yPx, timeSec, voltage: yPx === null ? null : (trace.settings.zeroY - yPx) / grid.pxPerVDiv * trace.settings.voltsPerDiv, status };
+      const voltage = yPx === null ? null : scaleOffset(trace.settings.zeroY - yPx, grid.pxPerVDiv, trace.settings.voltsPerDiv);
+      if (voltage !== null && !Number.isFinite(voltage)) {
+        return { col, xPx, yPx: null, timeSec, voltage: null, status: 'unresolved' };
+      }
+      return { col, xPx, yPx, timeSec, voltage, status };
     });
     const count = (...statuses: GapStatus[]) => samples.reduce((n, sample) => n + Number(statuses.includes(sample.status)), 0);
     return {

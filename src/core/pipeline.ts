@@ -56,6 +56,13 @@ export interface BodeCaptureInput {
 export function analyzeBodeBatch(captures: readonly (BodeCaptureInput | ExtractionResult | BodeRejectedCapture)[], options?: BodeGateOptions,
   overrides?: BodeOverrides): BodeResult {
   const start = performance.now();
-  const extractions = captures.map(capture => 'bytes' in capture ? analyzePngBytes(capture.bytes, capture.fileName, capture.overrides) : capture);
+  const extractions = captures.map(capture => {
+    if (!('bytes' in capture)) return capture;
+    try {
+      return analyzePngBytes(capture.bytes, capture.fileName, capture.overrides);
+    } catch {
+      return { fileName: capture.fileName, rejectionReason: 'capture_unreadable' };
+    }
+  });
   return { ...fitBatch(extractions, options, overrides), elapsedMs: performance.now() - start };
 }

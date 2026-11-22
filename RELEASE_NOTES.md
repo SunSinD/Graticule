@@ -1,45 +1,43 @@
-# Graticule 1.1.2
+# Graticule 1.1.3
 
 Try it live at [sunsind.github.io/Graticule](https://sunsind.github.io/Graticule/).
 
-A fix release for offline mode, phones, Bode plots and the history.
+A fix release for uploads, Bode plots, cursors, exports and the history.
 
-## Offline
+## Uploads
 
-- Offline mode now serves the app from its own cache every time, so a reload with no connection opens Graticule instead of an error page
-- The icons and the app manifest still work offline and update quietly in the background when you are online
-- `graticule-portable.html` now shows its icon when opened from a local server too
+- One damaged or unreadable image no longer cancels the whole upload. The other files are added and a message names the files that were skipped
+- Choosing a new file after a bad photo can no longer delete the open capture by mistake when the pick fails
+- Image previews are cleaned up properly, even when the page closes during an upload
 
-## Phones
+## Bode
 
-- With cursors on, swiping an empty part of the plot scrolls the page again. Dragging a cursor line still moves the cursor
-- The 4 corners message in the crop bar gets its own full row on a narrow screen instead of being squeezed into a thin column
+- A damaged PNG in a Bode batch shows up as a rejected row instead of stopping the whole batch
+- You can type a frequency and a gain for that row, and it joins the plot as a manual point
+- Opening that row explains why it could not be read, and the export buttons stay off instead of exporting the whole Bode plot
+- The cutoff in the summary shows a dash before anything is extracted, instead of saying not found
+- Sine fits stay accurate at very high frequencies and very small voltages
 
-## Keyboard
+## Cursors
 
-- Escape closes the crop box, even when the Crop button still has focus
-- Opening a point from the Bode table moves focus to Back to Bode, and going back puts focus on that point again
-- Pressing E when the export buttons are not ready yet now shows a visible focus ring on the Export panel
+- Two cursors on the same spot now read exactly 0 for Δt and a dash for 1/Δt, instead of tiny leftover numbers
+- A cursor move right before a reload, a tab switch or closing the app on a phone is saved right away instead of being lost
 
-## Bode and measurements
+## Exports
 
-- Changing the scope profile on a Bode plot keeps your manual frequency edits
-- Changing the input or output channel on a Bode plot clears old voltage, gain and phase edits from the previous channel pair
-- When only one cutoff is found, the summary says if it is the lower or the upper cutoff, like the plot and the exported tables
-- Bode points from a capture that could not be read are shown as rejected instead of stopping the whole plot
-- Time scales too large to work with now give a clear error instead of wrong numbers
-- Edge measurements like rise time, fall time and overshoot are more accurate
-- CLI deskew with a scope profile now uses that scope's grid divisions
+- Your custom title now goes into the CSV file too, on a `# title:` line
+- The CLI takes `--title` for the waveform CSV
+- Scale steps keep working on very large and very small values
 
 ## Files
 
-- PNG files are now checked with the zlib checksum too, so a damaged image is rejected instead of giving a broken plot
+- Interlaced PNG files are now read by the core decoder
+- Damaged PNG files are rejected with a clear error instead of giving a broken plot
 
 ## History
 
-- Moving a cursor right as a new extraction starts can no longer save the capture without its result
-- Undoing an edit while the save is still running now saves the right version
-- Turning off Keep history while a capture is being saved no longer leaves it in the browser storage
+- Saved captures with missing parts are ignored when the app loads instead of breaking a view
+- The app still opens when the browser blocks storage, like in some private windows or embedded pages
 
 ## Credits
 

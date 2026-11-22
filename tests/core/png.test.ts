@@ -8,12 +8,16 @@ interface PngSpec {
   readonly scanlines: readonly number[];
   readonly width?: number;
   readonly height?: number;
+  readonly interlace?: number;
   readonly transparency?: readonly number[];
   readonly palette?: readonly number[];
   readonly corruptAdler?: boolean;
+  readonly padding?: readonly number[];
+  readonly level?: 0 | 6;
 }
 
-function png({ depth, color, scanlines, width = 2, height = 1, transparency, palette, corruptAdler }: PngSpec): Uint8Array {
+function png({ depth, color, scanlines, width = 2, height = 1, interlace = 0, transparency, palette, corruptAdler,
+  padding = [], level = 6 }: PngSpec): Uint8Array {
   function chunk(type: string, data: Uint8Array): Uint8Array {
     const bytes = new Uint8Array(data.length + 12);
     const view = new DataView(bytes.buffer);
@@ -33,13 +37,15 @@ function png({ depth, color, scanlines, width = 2, height = 1, transparency, pal
   view.setUint32(0, width);
   view.setUint32(4, height);
   header.set([depth, color], 8);
-  const compressed = zlibSync(Uint8Array.from(scanlines));
+  header[12] = interlace;
+  const compressed = zlibSync(Uint8Array.from(scanlines), { level });
   if (corruptAdler) compressed[compressed.length - 1] = compressed[compressed.length - 1]! ^ 1;
   const chunks = [
     Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10), chunk('IHDR', header),
     ...(palette ? [chunk('PLTE', Uint8Array.from(palette))] : []),
     ...(transparency ? [chunk('tRNS', Uint8Array.from(transparency))] : []),
-    chunk('IDAT', compressed.subarray(0, -2)), chunk('IDAT', compressed.subarray(-2)), chunk('IEND', new Uint8Array()),
+    chunk('IDAT', compressed.subarray(0, -2)), chunk('IDAT', Uint8Array.of(...compressed.subarray(-2), ...padding)),
+    chunk('IEND', new Uint8Array()),
   ];
   const bytes = new Uint8Array(chunks.reduce((len, part) => len + part.length, 0));
   let offset = 0;
@@ -50,11 +56,91 @@ function png({ depth, color, scanlines, width = 2, height = 1, transparency, pal
   return bytes;
 }
 
+const passAt = [
+  [1, 6, 4, 6, 2, 6, 4, 6],
+  [7, 7, 7, 7, 7, 7, 7, 7],
+  [5, 6, 5, 6, 5, 6, 5, 6],
+  [7, 7, 7, 7, 7, 7, 7, 7],
+  [3, 6, 4, 6, 3, 6, 4, 6],
+  [7, 7, 7, 7, 7, 7, 7, 7],
+  [5, 6, 5, 6, 5, 6, 5, 6],
+  [7, 7, 7, 7, 7, 7, 7, 7],
+];
+
+function adam7(width: number, height: number, color: number, depth: number) {
+  const channelCount = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[color]!;
+  const max = 2 ** depth - 1;
+  const bpp = Math.ceil(channelCount * depth / 8);
+  const pixels = Array.from({ length: width * height }, (_, index) =>
+    Array.from({ length: channelCount }, (_, channel) => (index * 4949 + channel * 10723) & max));
+  const scanlines: number[] = [];
+  for (let pass = 1; pass <= 7; pass++) {
+    let previous: number[] = [];
+    for (let y = 0; y < height; y++) {
+      const samples = pixels.slice(y * width, (y + 1) * width).flatMap((pixel, x) =>
+        passAt[y % 8]![x % 8] === pass ? pixel : []);
+      if (!samples.length) continue;
+      const bytes = Array<number>(Math.ceil(samples.length * depth / 8)).fill(0);
+      for (const [i, value] of samples.entries()) {
+        const bit = i * depth;
+        bytes[bit >> 3] = bytes[bit >> 3]! | (depth === 16 ? value >> 8 : value << (8 - depth - bit % 8));
+        if (depth === 16) bytes[(bit >> 3) + 1] = value & 255;
+      }
+      const filter = (pass + y) % 5;
+      scanlines.push(filter, ...bytes.map((value, i) => {
+        const left = bytes[i - bpp] ?? 0;
+        const up = previous[i] ?? 0;
+        const diagonal = previous[i - bpp] ?? 0;
+        const predictor = left + up - diagonal;
+        const paeth = [left, up, diagonal].sort((a, b) => Math.abs(a - predictor) - Math.abs(b - predictor))[0]!;
+        return (value - [0, left, up, Math.floor((left + up) / 2), paeth][filter]!) & 255;
+      }));
+      previous = bytes;
+    }
+  }
+  const palette = color === 3 ? Array.from({ length: (max + 1) * 3 }, (_, i) => i * 19 % 256) : undefined;
+  const transparency = color === 3 ? [31] : color === 0 ? [0, 0] : color === 2
+    ? pixels[0]!.flatMap(value => [value >> 8, value & 255]) : undefined;
+  const byte = (value: number) => depth > 8 ? value >> 8 : value * 255 / max;
+  const expected = pixels.flatMap(([r, g, b, a], index) => {
+    if (color === 3) return [...palette!.slice(r! * 3, r! * 3 + 3), r === 0 ? 31 : 255];
+    if (color === 2 || color === 6) return [byte(r!), byte(g!), byte(b!), color === 6 ? byte(a!) : index === 0 ? 0 : 255];
+    return [byte(r!), byte(r!), byte(r!), color === 4 ? byte(g!) : r === 0 ? 0 : 255];
+  });
+  return { bytes: png({ width, height, color, depth, scanlines, interlace: 1, palette, transparency }), expected };
+}
+
 describe('PNG decode', () => {
   test('checks the zlib Adler-32 trailer across IDAT chunks with valid PNG CRCs', () => {
     const spec = { depth: 8, color: 0, scanlines: [0, 12, 19] };
     expect([...decodePng(png(spec)).data]).toEqual([12, 12, 12, 255, 19, 19, 19, 255]);
     expect(() => decodePng(png({ ...spec, corruptAdler: true }))).toThrow(/zlib Adler-32 checksum mismatch/);
+  });
+
+  test.each([0, 6] as const)('ignores padding after the real Adler-32 trailer at compression level %i', level => {
+    const width = 1500;
+    const scanlines = [0, ...Array.from({ length: width }, (_, i) => Math.floor(256 * Math.abs(Math.sin(i * 782.322))))];
+    const spec = { depth: 8, color: 0, width, scanlines, level };
+    const adler = zlibSync(Uint8Array.from(scanlines)).subarray(-4);
+    const expected = scanlines.slice(1).flatMap(value => [value, value, value, 255]);
+    expect([...decodePng(png({ ...spec, padding: [1, 255, 8, 23, 97] })).data]).toEqual(expected);
+    expect(() => decodePng(png({ ...spec, corruptAdler: true, padding: [8, 23, ...adler] })))
+      .toThrow(/zlib Adler-32 checksum mismatch/);
+  });
+
+  test.each([
+    [0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [2, 8], [2, 16], [3, 1], [3, 2], [3, 4], [3, 8],
+    [4, 8], [4, 16], [6, 8], [6, 16],
+  ])('decodes all Adam7 passes for color type %i at %i bits', (color, depth) => {
+    const { bytes, expected } = adam7(13, 11, color, depth);
+    expect([...decodePng(bytes).data]).toEqual(expected);
+  });
+
+  test.each([[1, 1], [2, 2], [3, 5], [7, 7]])('skips empty Adam7 passes in a %i by %i image', (width, height) => {
+    for (const [color, depth] of [[6, 8], [0, 2]] as const) {
+      const { bytes, expected } = adam7(width, height, color, depth);
+      expect(decodePng(bytes)).toEqual({ width, height, data: Uint8ClampedArray.from(expected) });
+    }
   });
   test.each(['IHDR', 'PLTE', 'IDAT', 'IEND'])('rejects a bad CRC on a structurally valid %s chunk', chunk => {
     const bytes = png({ depth: 1, color: 3, scanlines: [0, 0b01000000], palette: [10, 20, 30, 40, 50, 60] });

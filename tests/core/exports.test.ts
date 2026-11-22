@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { csvField, renderBodeCsv, renderWaveformCsv } from '../../src/core/export/csv.js';
-import { GRATICULE_VERSION, parseEngineering } from '../../src/core/export/format.js';
-import { renderOverlaySvg, renderWaveformSvg, waveformFrame } from '../../src/core/export/svg.js';
+import { GRATICULE_VERSION, parseEngineering, stepScale125 } from '../../src/core/export/format.js';
+import { renderBodeSvg, renderOverlaySvg, renderWaveformSvg, waveformFrame } from '../../src/core/export/svg.js';
 import { renderBodeTable, renderMeasurementsTable } from '../../src/core/export/table.js';
 import { splitTrace } from '../../src/core/export/trace-geometry.js';
 import { analyzeBodeBatch, analyzePngBytes } from '../../src/core/pipeline.js';
@@ -12,7 +12,7 @@ const result = analyzePngBytes(sample('sine_schmitt.png'), 'Capture_A&B%#_1.png'
 
 describe('waveform exports', () => {
   test('formats engineering scales with optional units per division and rejects overflow', () => {
-    expect(GRATICULE_VERSION).toBe('1.1.2');
+    expect(GRATICULE_VERSION).toBe('1.1.3');
     expect(parseEngineering('5 mV/div')).toBe(0.005);
     expect(parseEngineering('2,5 ms / div')).toBe(0.0025);
     expect(parseEngineering('2/div')).toBe(2);
@@ -24,6 +24,54 @@ describe('waveform exports', () => {
     expect(parseEngineering('1e1 2 V')).toBeNull();
     expect(parseEngineering('1.2e2 V')).toBe(120);
     expect(parseEngineering('3 GigaVolts')).toBeNull();
+  });
+
+  test('steps through positive representable subnormal scales', () => {
+    expect(stepScale125(1e-323, 1)).toBe(2e-323);
+    expect(stepScale125(2e-323, -1)).toBe(1e-323);
+    expect(stepScale125(Number.MIN_VALUE, -1)).toBe(Number.MIN_VALUE);
+    expect(stepScale125(1, -1)).toBe(0.5);
+    expect(stepScale125(1, 1)).toBe(2);
+  });
+
+  test('writes a sanitized CSV title after the filename and omits whitespace-only titles', () => {
+    const csv = renderWaveformCsv(result, { C1: 'Input' }, ' =scope\r\ntrace ');
+    expect(csv.split('\n').slice(1, 3)).toEqual([`# file: ${result.fileName}`, "# title: ' =scope trace"]);
+    expect(csv).toContain('Input_v,Input_status');
+    expect(renderWaveformCsv(result, undefined, ' \t\n')).not.toContain('# title:');
+  });
+
+  test('uses default SVG dimensions for invalid options in both renderers', () => {
+    const bode = analyzeBodeBatch([result]);
+    const viewport = (svg: string) => svg.match(/viewBox="([^"]+)"/)?.[1];
+    for (const value of [NaN, Infinity, -Infinity, 0, -200]) {
+      const options = { width: value, height: value };
+      expect(viewport(renderWaveformSvg(result, options))).toBe(viewport(renderWaveformSvg(result)));
+      expect(viewport(renderBodeSvg(bode, options))).toBe('0 0 960 660');
+    }
+    expect(viewport(renderBodeSvg(bode, { width: 720, height: 400 }))).toBe('0 0 720 400');
+  });
+
+  test('calibrates time and voltage against the plot origin at extreme scales', () => {
+    const traces = result.traces.map(trace => ({ ...trace, settings: { ...trace.settings, voltsPerDiv: 1e307 } }));
+    const timebase = { ...result.timebase, secPerDiv: 1e307, triggerOffsetSec: 1e308 };
+    const frame = waveformFrame({ ...result, timebase, traces });
+    const { grid } = result.detection;
+    expect(frame.timeAt(0.5)).toBe(1e308);
+    expect(frame.timeAt(1) / 1e308).toBeCloseTo(1.5, 12);
+    const trace = traces[0]!;
+    expect(frame.voltAt(trace.channel, (trace.settings.zeroY - grid.top) / grid.height)! / 1e307).toBeCloseTo(0, 12);
+    const shifted = waveformFrame({ ...result, timebase: { ...timebase, secPerDiv: 5e307, triggerOffsetSec: -1e308 } });
+    expect(shifted.timeAt(1) / 1e308).toBeCloseTo(1.5, 12);
+  });
+
+  test('prints exact zero for coincident cursors and preserves deltas at large offsets', () => {
+    const cursors = { channel: 'C1' as const, x1: 0.3, x2: 0.3 + 5e-13, y1: 0.6, y2: 0.6 - 5e-13 };
+    expect(renderWaveformSvg(result, { cursors })).toContain('\u0394t 0 s   1/\u0394t \u2014   \u0394V 0 V');
+    const timebase = { ...result.timebase, secPerDiv: 0.001, triggerOffsetSec: 1e308 };
+    const traces = result.traces.map(trace => ({ ...trace, settings: { ...trace.settings, zeroY: 1e308, voltsPerDiv: 1 } }));
+    const svg = renderWaveformSvg({ ...result, timebase, traces }, { cursors: { channel: 'C1', x1: 0, x2: 0.5, y1: 0, y2: 0.5 } });
+    expect(svg).toContain('\u0394t 5 ms   1/\u0394t 200 Hz   \u0394V 4 V');
   });
 
   test('places cursor lines in the same frame as the waveform axes and includes calibrated deltas', () => {
@@ -114,12 +162,12 @@ describe('waveform exports', () => {
   });
 
   test('keeps a positive waveform plot width and removes illegal XML characters', () => {
-    const options = { width: 1, title: 'Vin\u0000\u0008<>\u000b\u000c\u001f & trace' };
+    const options = { width: 1, title: 'Vin\u0000\u0008<>\u000b\u000c\u001f\uFFFE\uFFFF & trace' };
     expect(waveformFrame(result, options).plotW).toBeGreaterThan(0);
     expect(waveformFrame(result, { width: NaN }).plotW).toBeGreaterThan(0);
     const svg = renderWaveformSvg(result, options);
     expect(svg).toContain('Vin&lt;&gt; &amp; trace');
-    expect(svg).not.toMatch(/[\x00-\x08\x0b\x0c\x0e-\x1f]/);
+    expect(svg).not.toMatch(/[\x00-\x08\x0b\x0c\x0e-\x1f\uFFFE\uFFFF]/);
   });
 
   test('draws isolated overlay samples and shows omitted columns and a final deskewed gap', () => {

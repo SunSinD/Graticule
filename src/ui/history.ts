@@ -130,6 +130,10 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null;
 }
 
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
+}
+
 function validStored(v: unknown): v is StoredItem {
   if (!isRecord(v)) return false;
   return (
@@ -147,7 +151,11 @@ function validStored(v: unknown): v is StoredItem {
 
 function validResult(v: unknown): ExtractionResult | null {
   if (!isRecord(v)) return null;
-  if (!Array.isArray(v.traces) || !Array.isArray(v.measurements) || !isRecord(v.detection) || !isRecord(v.timebase)) return null;
+  if (!Array.isArray(v.traces) || !Array.isArray(v.measurements) || !Array.isArray(v.comparisons)) return null;
+  if (!isRecord(v.detection) || !isRecord(v.timebase)) return null;
+  const { warnings, grid } = v.detection;
+  if (!Array.isArray(warnings) || !isRecord(grid)) return null;
+  if (!isFiniteNumber(grid.hDivs) || !isFiniteNumber(grid.vDivs)) return null;
   return v as unknown as ExtractionResult;
 }
 
@@ -256,12 +264,14 @@ function isQuota(e: unknown): boolean {
 }
 
 /** Runs the work in one transaction and resolves only after it commits. */
-function commit(db: IDBDatabase, mode: IDBTransactionMode, work: (store: IDBObjectStore) => void): Promise<void> {
+function commit(db: IDBDatabase, mode: IDBTransactionMode, work: (store: IDBObjectStore) => void, now = false): Promise<void> {
   return new Promise((resolve, reject) => {
     let t: IDBTransaction;
     try {
       t = db.transaction(STORE, mode);
       work(t.objectStore(STORE));
+      // Commits right away so a write started as the page closes is not lost.
+      if (now && typeof t.commit === 'function') t.commit();
     } catch (e) {
       reject(e);
       return;
@@ -293,16 +303,16 @@ function idbStore(db: IDBDatabase): HistoryStore {
     });
     return true;
   };
-  const write = async (id: string, work: (store: IDBObjectStore) => void): Promise<boolean> => {
+  const write = async (id: string, work: (store: IDBObjectStore) => void, now = false): Promise<boolean> => {
     try {
-      await commit(db, 'readwrite', work);
+      await commit(db, 'readwrite', work, now);
       return true;
     } catch (e) {
       if (!isQuota(e)) return false;
     }
     try {
       if (!(await evictOldest(id))) return false;
-      await commit(db, 'readwrite', work);
+      await commit(db, 'readwrite', work, now);
       return true;
     } catch {
       return false;
@@ -324,7 +334,7 @@ function idbStore(db: IDBDatabase): HistoryStore {
     },
     put: (item) => {
       const record = toStored(item);
-      return write(item.id, (store) => store.put(record));
+      return write(item.id, (store) => store.put(record), true);
     },
     updateMeta: (id, patch) =>
       write(id, (store) => {
@@ -339,8 +349,9 @@ function idbStore(db: IDBDatabase): HistoryStore {
 }
 
 export async function openHistory(): Promise<HistoryStore> {
-  if (typeof indexedDB === 'undefined') return memoryStore();
   try {
+    // Reading indexedDB itself can throw in sandboxed frames and some private modes.
+    if (typeof indexedDB === 'undefined' || !indexedDB) return memoryStore();
     return idbStore(await openDb());
   } catch {
     return memoryStore();

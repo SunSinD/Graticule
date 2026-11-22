@@ -12,6 +12,7 @@ import type {
 } from '../types.js';
 import { aggregateBodeFrequencies } from '../bode.js';
 import { projectRectToQuad } from '../deskew.js';
+import { scaleOffset } from '../dsp.js';
 import { GRATICULE_VERSION, formatEng, localizeDecimal, trimTrailingZeros } from './format.js';
 import { EXPORT_TEXT, GAP_LABELS, SVG_TEXT } from './labels.js';
 import { splitTrace } from './trace-geometry.js';
@@ -63,7 +64,7 @@ export const CHANNEL_LINE_STYLES: Readonly<Record<ChannelId, LineStyle>> = {
 
 export function escapeXml(text: string): string {
   return text
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\uFFFE\uFFFF]/g, '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -72,8 +73,12 @@ export function escapeXml(text: string): string {
 }
 
 function n(value: number): string {
-  const r = Math.round(value * 100) / 100;
+  const r = Math.abs(value) < Number.MAX_VALUE / 100 ? Math.round(value * 100) / 100 : value;
   return Object.is(r, -0) ? '0' : String(r);
+}
+
+function dimension(value: number | undefined, fallback: number, min = 1): number {
+  return value !== undefined && Number.isFinite(value) && value > 0 ? Math.max(min, Math.round(value)) : fallback;
 }
 
 function svgMinus(text: string): string {
@@ -115,24 +120,6 @@ function svgOpen(width: number, height: number, label: string, paper: string): s
   ].join('');
 }
 
-interface LinearFit {
-  readonly a: number;
-  readonly b: number;
-}
-
-function timeFit(result: ExtractionResult): LinearFit {
-  const g = result.detection.grid;
-  const spd = result.timebase.secPerDiv;
-  const b = spd / Math.max(1e-9, g.pxPerHDiv);
-  return { a: result.timebase.triggerOffsetSec - g.centerX * b, b };
-}
-
-function voltFit(trace: ChannelTrace, pxPerVDiv: number): LinearFit {
-  const st = trace.settings;
-  const b = -st.voltsPerDiv / Math.max(1e-9, pxPerVDiv);
-  return { a: -b * st.zeroY, b };
-}
-
 function niceDiv(value: number, locale: Locale, unit: string): string {
   return formatEng(value, unit, locale, { sig: 3, trim: true });
 }
@@ -165,8 +152,7 @@ function waveformLayout(result: ExtractionResult, options: SvgExportOptions) {
   const x0 = 76;
   const y0 = 56;
   const marginR = traces.length > 1 ? 76 : 28;
-  const requestedWidth = options.width ?? 960;
-  const width = Number.isFinite(requestedWidth) ? Math.max(x0 + marginR + 1, Math.round(requestedWidth)) : 960;
+  const width = dimension(options.width, 960, x0 + marginR + 1);
   const plotW = width - x0 - marginR;
   const plotH = plotW / Math.max(1, grid.hDivs) * Math.max(1, grid.vDivs);
   const laneGap = 5;
@@ -174,15 +160,20 @@ function waveformLayout(result: ExtractionResult, options: SvgExportOptions) {
   const axisLabelH = options.cursors ? 52 : 34;
   const legendRowH = 18;
   const legendH = options.showLegend === false ? 0 : 16 + (traces.length + 2) * legendRowH + 30;
-  const height = Math.round(options.height ?? y0 + plotH + lanesH + axisLabelH + legendH + 12);
-  const tf = timeFit(result);
-  const fits = new Map(traces.map(trace => [trace.channel, voltFit(trace, grid.pxPerVDiv)]));
+  const height = dimension(options.height, Math.round(y0 + plotH + lanesH + axisLabelH + legendH + 12));
+  const { secPerDiv, triggerOffsetSec } = result.timebase;
+  const spanDivs = grid.width / grid.pxPerHDiv;
+  const settings = new Map(traces.map(trace => [trace.channel, trace.settings]));
   const frame: WaveformFrame = {
     width, height, x0, y0, x1: x0 + plotW, y1: y0 + plotH, plotW, plotH,
-    timeAt: fraction => tf.a + tf.b * (grid.left + fraction * grid.width),
+    timeAt(fraction) {
+      const divs = (grid.left - grid.centerX) / grid.pxPerHDiv + fraction * spanDivs;
+      const relative = divs * secPerDiv;
+      return Number.isFinite(relative) ? triggerOffsetSec + relative : (triggerOffsetSec / 2 + divs * (secPerDiv / 2)) * 2;
+    },
     voltAt(channel, fraction) {
-      const fit = fits.get(channel);
-      return fit ? fit.a + fit.b * (grid.top + fraction * grid.height) : null;
+      const trace = settings.get(channel);
+      return trace ? scaleOffset(trace.zeroY - grid.top - fraction * grid.height, grid.pxPerVDiv, trace.voltsPerDiv) : null;
     },
   };
   return { frame, traces, laneGap, lanesH, axisLabelH, legendRowH };
@@ -192,7 +183,8 @@ export function waveformFrame(result: ExtractionResult, options: SvgExportOption
   return waveformLayout(result, options).frame;
 }
 
-function cursorMarkup(frame: WaveformFrame, cursors: PlotCursors, locale: Locale, pal: PlotPalette, readoutY: number): string {
+function cursorMarkup(result: ExtractionResult, frame: WaveformFrame, cursors: PlotCursors, locale: Locale, pal: PlotPalette,
+  readoutY: number): string {
   const { x0, y0, x1, y1, plotW, plotH } = frame;
   const clamp = (value: number) => Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0;
   const xs = [clamp(cursors.x1), clamp(cursors.x2)];
@@ -208,10 +200,14 @@ function cursorMarkup(frame: WaveformFrame, cursors: PlotCursors, locale: Locale
     lines.push(line(x0, y, x1, y, pal.muted, 1, '1 3'));
     lines.push(text(x1 - 3 - i * 18, Math.max(y0 + 11, y - 3), `Y${i + 1}`, { anchor: 'end', mono: true, size: 10 }, pal.ink));
   }
-  const dt = Math.abs(frame.timeAt(xs[1]!) - frame.timeAt(xs[0]!));
-  const va = frame.voltAt(cursors.channel, ys[0]!);
-  const vb = frame.voltAt(cursors.channel, ys[1]!);
-  const dv = va === null || vb === null ? null : Math.abs(vb - va);
+  const grid = result.detection.grid;
+  const dx = Math.abs(xs[1]! - xs[0]!);
+  const dy = Math.abs(ys[1]! - ys[0]!);
+  const voltsPerDiv = result.traces.find(trace => trace.channel === cursors.channel && trace.settings.enabled)?.settings.voltsPerDiv;
+  const spanDivs = grid.width / grid.pxPerHDiv;
+  const elapsed = dx * spanDivs * result.timebase.secPerDiv;
+  const dt = dx <= 1e-12 || elapsed <= (1e-12 * spanDivs) * result.timebase.secPerDiv ? 0 : elapsed;
+  const dv = voltsPerDiv === undefined ? null : dy <= 1e-12 ? 0 : dy * (grid.height / grid.pxPerVDiv) * voltsPerDiv;
   const format = (value: number | null, unit: string) => formatEng(value, unit, locale, { sig: 4, trim: true });
   lines.push(text(x0, readoutY, `Δt ${format(dt, 's')}   1/Δt ${format(dt > 0 ? 1 / dt : null, 'Hz')}   ΔV ${format(dv, 'V')}`, { mono: true }, pal.ink));
   return lines.join('') + '</g>';
@@ -335,7 +331,7 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
   if (traces.length === 0) {
     out.push(text((x0 + x1) / 2, (y0 + y1) / 2, t.noChannels, { anchor: 'middle', size: 13, fill: pal.muted }, pal.ink));
   }
-  if (options.cursors) out.push(cursorMarkup(frame, options.cursors, locale, pal, y1 + lanesH + 35));
+  if (options.cursors) out.push(cursorMarkup(result, frame, options.cursors, locale, pal, y1 + lanesH + 35));
 
   if (showLegend) {
     let ly = y1 + lanesH + axisLabelH + 10;
@@ -480,14 +476,14 @@ export function renderBodeSvg(result: BodeResult, options: SvgExportOptions = {}
   const pal = PALETTES[options.theme ?? 'light'];
   const locale: Locale = options.locale ?? 'en';
   const t = SVG_TEXT[locale];
-  const width = Math.round(options.width ?? 960);
-  const height = Math.round(options.height ?? 660);
   const marginL = 76;
   const marginR = 28;
   const marginT = 52;
   const panelGap = 44;
   const legendH = options.showLegend === false ? 0 : 58;
   const axisH = 30;
+  const width = dimension(options.width, 960, marginL + marginR + 1);
+  const height = dimension(options.height, 660, marginT + panelGap + axisH + legendH + 14);
   const plotW = width - marginL - marginR;
   const panelH = (height - marginT - panelGap - axisH - legendH - 12) / 2;
   const x0 = marginL;

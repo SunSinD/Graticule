@@ -19,6 +19,12 @@ const cli = (...args: string[]) => spawnSync(process.execPath, ['--import', 'tsx
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 describe('command line', () => {
+  test('writes the --title argument immediately after the filename in waveform CSV', () => {
+    const result = cli(input, '--csv', '--title', 'Bench capture');
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.split('\n').slice(0, 3)).toEqual(['# Graticule v1.1.3', '# file: capture.png', '# title: Bench capture']);
+  });
+
   test('exports LaTeX and dark SVG and creates nested output directories', () => {
     const destination = join(root, 'nested', 'table.tex');
     const table = cli(input, '--format', 'latex', '--out', destination);

@@ -19,10 +19,11 @@ import { renderBodeCsv, renderWaveformCsv } from '../core/export/csv';
 import { renderBodeTable, renderMeasurementsTable } from '../core/export/table';
 import { analyzeBode, analyzeSingle, recomputeBode } from './engine';
 import { filesFromDataTransfer, isImageFile, isPhotoLike, loadFile, releaseUrl } from './files';
+import type { LoadedFile } from './files';
 import { HISTORY_LIMIT, capHistory, compareItems, openHistory, releaseItems, storedChange } from './history';
 import type { ChannelLabels, HistoryItem, HistoryStore, ItemState } from './history';
 import { baseName, copyImage, copyPlain, copyRich, downloadBlob, downloadText, svgToPng } from './download';
-import { formatDuration, t } from './i18n';
+import { formatDuration, reasonLabel, t } from './i18n';
 import { TopBar } from './components/TopBar';
 import type { AppMode } from './components/TopBar';
 import { EmptyState } from './components/EmptyState';
@@ -159,6 +160,7 @@ export function App() {
   const [dragging, setDragging] = useState(false);
   const [adding, setAdding] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [fileNote, setFileNote] = useState<string | null>(null);
   const [feedback, setFeedback] = useState('');
 
   const [items, setItems] = useState<readonly HistoryItem[]>([]);
@@ -189,6 +191,8 @@ export function App() {
   const cursorSaves = useRef<Map<string, number>>(new Map());
   const saveSeq = useRef<Map<string, number>>(new Map());
   const liveUrls = useRef<Set<string>>(new Set());
+  const mountedRef = useRef(true);
+  const flushCursorSaves = useRef<() => void>(() => undefined);
   const singleReq = useRef<Map<string, number>>(new Map());
   const bodeReq = useRef<Map<string, number>>(new Map());
   const recomputeReq = useRef<Map<string, number>>(new Map());
@@ -225,14 +229,19 @@ export function App() {
     return () => mq.removeEventListener('change', on);
   }, []);
 
-  useEffect(
-    () => () => {
-      releaseItems(itemsRef.current);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      const urls = new Set(liveUrls.current);
+      for (const item of itemsRef.current) urls.add(item.url);
+      for (const url of urls) releaseUrl(url);
+      liveUrls.current = new Set();
       window.clearTimeout(feedbackTimer.current);
       for (const timer of cursorSaves.current.values()) window.clearTimeout(timer);
-    },
-    [],
-  );
+      cursorSaves.current.clear();
+    };
+  }, []);
 
   // Object URLs are revoked here, after React commits, never inside a state updater.
   useEffect(() => {
@@ -244,11 +253,24 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const store = await openHistory();
+      let store: HistoryStore | null = null;
+      try {
+        store = await openHistory();
+      } catch {
+        store = null;
+      }
       if (cancelled) return;
       storeRef.current = store;
+      if (!store) {
+        setHistoryReady(true);
+        return;
+      }
       if (readPref('graticule.keepHistory') === '0') {
-        await store.clear();
+        try {
+          await store.clear();
+        } catch {
+          /* nothing to clear when storage is blocked */
+        }
       } else {
         let loaded: HistoryItem[] = [];
         try {
@@ -307,6 +329,15 @@ export function App() {
         }
       });
     };
+    const flushCursor = (id: string): void => {
+      cancelCursorSave(id);
+      const latest = itemsRef.current.find((i) => i.id === id);
+      if (!latest || latest.state === 'extracting' || !keepRef.current) return;
+      if (storeRef.current === store && persisted.current.has(id)) save(latest);
+    };
+    flushCursorSaves.current = () => {
+      for (const id of [...cursorSaves.current.keys()]) flushCursor(id);
+    };
     for (const item of items) {
       const was = prev.get(item.id);
       if (was && item.state === 'extracting') {
@@ -325,12 +356,7 @@ export function App() {
         const id = item.id;
         cursorSaves.current.set(
           id,
-          window.setTimeout(() => {
-            cursorSaves.current.delete(id);
-            const latest = itemsRef.current.find((i) => i.id === id);
-            if (!latest || latest.state === 'extracting' || !keepRef.current) return;
-            if (storeRef.current === store && persisted.current.has(id)) save(latest);
-          }, CURSOR_SAVE_DELAY),
+          window.setTimeout(() => flushCursor(id), CURSOR_SAVE_DELAY),
         );
       } else {
         next.set(item.id, item);
@@ -345,6 +371,21 @@ export function App() {
     }
     persisted.current = next;
   }, [items, keepHistory, historyReady]);
+
+  useEffect(() => {
+    const flush = (): void => {
+      if (cursorSaves.current.size > 0) flushCursorSaves.current();
+    };
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, []);
 
   const flash = useCallback((text: string) => {
     setFeedback(text);
@@ -493,6 +534,7 @@ export function App() {
     setActiveId(id);
     setSelected([]);
     setNotice(null);
+    setFileNote(null);
     resetCaptureView(item.result ? 'clean' : 'original');
     const now = Date.now();
     setItems((list) => list.map((i) => (i.id === id ? { ...i, lastUsed: now } : i)));
@@ -504,6 +546,7 @@ export function App() {
       const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
       setInspectedId(null);
       setNotice(null);
+      setFileNote(null);
       if (next.length === 1 && cur.length >= 2) {
         openItem(next[0]!);
         return;
@@ -553,6 +596,7 @@ export function App() {
     setActiveId(null);
     setSessions({});
     setNotice(null);
+    setFileNote(null);
     setCropDismissed(new Set());
     resetCaptureView('original');
   };
@@ -566,22 +610,47 @@ export function App() {
 
   const addFiles = useCallback(
     async (raw: readonly File[], source: Source) => {
+      // Consumed first so a failed or empty pick can never delete the open capture later.
+      const replaceId = replaceIdRef.current;
+      replaceIdRef.current = null;
       const images = raw
         .filter(isImageFile)
         .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
         .slice(0, HISTORY_LIMIT);
       if (images.length === 0) {
-        if (raw.length > 0) setNotice(tx.unsupportedFile);
+        if (raw.length > 0) {
+          setNotice(tx.unsupportedFile);
+          setFileNote(null);
+        }
         return;
       }
       setAdding(true);
       setNotice(null);
+      setFileNote(null);
       const added: HistoryItem[] = [];
+      const skipped: string[] = [];
+      let committed = false;
       try {
         const now = Date.now();
         for (const f of images) {
+          const name = f.name || 'photo.png';
           const photo = source === 'camera' || isPhotoLike(f);
-          const loaded = await loadFile(f, f.name || 'photo.png', { photo: source === 'camera' });
+          let loaded: LoadedFile;
+          try {
+            loaded = await loadFile(f, name, { photo: source === 'camera' });
+          } catch {
+            if (!mountedRef.current) {
+              releaseItems(added);
+              return;
+            }
+            skipped.push(name);
+            continue;
+          }
+          if (!mountedRef.current) {
+            releaseUrl(loaded.url);
+            releaseItems(added);
+            return;
+          }
           added.push({
             ...loaded,
             addedAt: now,
@@ -595,10 +664,15 @@ export function App() {
             isPhoto: photo,
           });
         }
-        const replaceId = replaceIdRef.current;
-        replaceIdRef.current = null;
+        if (added.length === 0) {
+          setFileNote(tx.filesUnreadable(skipped));
+          return;
+        }
         if (replaceId) singleReq.current.delete(replaceId);
         const keep = new Set(added.map((i) => i.id));
+        // Registered before the update so the URL effect revokes any that capHistory drops.
+        for (const i of added) liveUrls.current.add(i.url);
+        committed = true;
         setItems((list) => {
           const base = replaceId ? list.filter((i) => i.id !== replaceId) : list;
           return capHistory([...added, ...base].sort(compareItems), keep);
@@ -611,14 +685,15 @@ export function App() {
           setSelected(added.map((i) => i.id));
         }
         resetCaptureView('original');
+        if (skipped.length > 0) setFileNote(tx.filesSkipped(skipped));
       } catch (e) {
-        releaseItems(added);
-        setNotice(message(e));
+        if (!committed) releaseItems(added);
+        if (mountedRef.current) setNotice(message(e));
       } finally {
-        setAdding(false);
+        if (mountedRef.current) setAdding(false);
       }
     },
-    [tx.unsupportedFile],
+    [tx],
   );
 
   const openPicker = useCallback((folder: boolean, replaceId: string | null = null) => {
@@ -723,10 +798,12 @@ export function App() {
             ...(labels ? { channelLabels: labels } : {}),
             ...(svgCursors ? { cursors: svgCursors } : {}),
           }),
-        csv: () => renderWaveformCsv(capture, labels),
+        csv: () => renderWaveformCsv(capture, labels, captureTitle || undefined),
         table: (f) => renderMeasurementsTable(capture, f, locale, labels, captureTitle),
       };
     }
+    // An inspected Bode capture with no extraction has nothing to export, never the whole Bode plot.
+    if (showCapture) return null;
     if (mode === 'bode' && bode) {
       return {
         baseName: 'bode',
@@ -997,6 +1074,19 @@ export function App() {
           </div>
         )}
 
+        {mode === 'bode' && inspected && !inspected.extraction && (
+          <div className="banner" role="alert" data-testid="inspect-failed">
+            <p className="banner-title">{tx.inspectFailed}</p>
+            {inspected.rejectionReasons.length > 0 && (
+              <ul className="banner-list">
+                {inspected.rejectionReasons.map((r) => (
+                  <li key={r}>{reasonLabel(r, locale)}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
         {showCapture && captureItem && (
           <CaptureView
             key={captureItem.id}
@@ -1105,6 +1195,11 @@ export function App() {
           />
         )}
 
+        {fileNote && (
+          <p className="error" role="alert" data-testid="file-note">
+            {fileNote}
+          </p>
+        )}
         {error && (
           <p className="error" role="alert">
             {tx.error}: {error}

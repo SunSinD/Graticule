@@ -176,6 +176,11 @@ const en = {
   gapLabels: GAP_LABELS.en,
   scaleDefault: 'not read, check it',
   unsupportedFile: 'Only image files can be read.',
+  filesSkipped: (names: readonly string[]) =>
+    `${names.length === 1 ? 'Skipped 1 file that could not be read' : `Skipped ${names.length} files that could not be read`}: ${names.join(', ')}`,
+  filesUnreadable: (names: readonly string[]) =>
+    `${names.length === 1 ? 'This file could not be read' : 'None of these files could be read'}: ${names.join(', ')}`,
+  inspectFailed: 'This capture could not be analyzed, so there is no plot or data to export.',
 };
 
 export type Dict = typeof en;
@@ -344,6 +349,11 @@ const fr: Dict = {
   gapLabels: GAP_LABELS.fr,
   scaleDefault: 'non lu, à vérifier',
   unsupportedFile: 'Seules les images peuvent être lues.',
+  filesSkipped: (names: readonly string[]) =>
+    `${names.length === 1 ? '1 fichier illisible ignoré' : `${names.length} fichiers illisibles ignorés`} : ${names.join(', ')}`,
+  filesUnreadable: (names: readonly string[]) =>
+    `${names.length === 1 ? 'Ce fichier est illisible' : 'Aucun de ces fichiers n’est lisible'} : ${names.join(', ')}`,
+  inspectFailed: 'Cette capture n’a pas pu être analysée, il n’y a donc rien à exporter.',
 };
 
 export const DICTS: Readonly<Record<Locale, Dict>> = { en, fr };

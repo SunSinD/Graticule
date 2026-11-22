@@ -420,8 +420,10 @@ function fallbackGrid(image: RgbaImage, overrides: ExtractionOverrides): GridGeo
     return best;
   };
   const middleX = Math.floor(width / 4);
+  const colors = colorsFor('universal-fallback');
+  const darkOrTrace: PixelPredicate = (r, g, b) => dark(r, g, b) || channelColor(r, g, b, colors) >= 0;
   const [t, b] = longest(height, y => proportion(image,
-    { x: middleX, y, width: width - middleX * 2, height: 1 }, dark, 3) > 0.62);
+    { x: middleX, y, width: width - middleX * 2, height: 1 }, darkOrTrace, 3) > 0.62);
   const [l, r] = b > t ? longest(width, x => proportion(image,
     { x, y: t, width: 1, height: b - t }, dark, 3) > 0.66) : [0, 0];
   const bounds: [number, number, number, number] = b - t >= height / 3 && r - l >= width / 3

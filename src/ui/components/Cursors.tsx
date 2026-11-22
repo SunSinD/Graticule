@@ -9,6 +9,7 @@ import type { ChannelLabels } from '../history';
 type Key = 'x1' | 'x2' | 'y1' | 'y2';
 
 const KEYS: readonly Key[] = ['x1', 'x2', 'y1', 'y2'];
+const COINCIDENT = 1e-12;
 
 function clamp01(v: number): number {
   return Math.min(1, Math.max(0, v));
@@ -143,10 +144,15 @@ export function CursorReadout({ tx, locale, result, frame, cursors, labels, onCh
   const fmt = (v: number | null, unit: string) => formatEng(v, unit, locale, { sig: 4, trim: true });
   const t1 = frame.timeAt(clamp01(cursors.x1));
   const t2 = frame.timeAt(clamp01(cursors.x2));
-  const dt = Math.abs(t2 - t1);
+  // Coincident cursors read as exactly zero, never a float leftover like 2e-7 ps.
+  const sameX = Math.abs(clamp01(cursors.x2) - clamp01(cursors.x1)) <= COINCIDENT;
+  const sameY = Math.abs(clamp01(cursors.y2) - clamp01(cursors.y1)) <= COINCIDENT;
+  const rawDt = Math.abs(t2 - t1);
+  const dt = sameX || rawDt <= COINCIDENT * Math.max(Math.abs(t1), Math.abs(t2)) ? 0 : rawDt;
   const v1 = frame.voltAt(cursors.channel, clamp01(cursors.y1));
   const v2 = frame.voltAt(cursors.channel, clamp01(cursors.y2));
-  const dv = v1 === null || v2 === null ? null : Math.abs(v2 - v1);
+  const rawDv = v1 === null || v2 === null ? null : Math.abs(v2 - v1);
+  const dv = rawDv === null ? null : sameY || rawDv <= COINCIDENT * Math.max(Math.abs(v1!), Math.abs(v2!)) ? 0 : rawDv;
   const period = result.measurements.find((m) => m.channel === cursors.channel)?.periodSec ?? null;
   const phase = period && period > 0 && Number.isFinite(period) ? ((((dt / period) * 360) % 360) + 360) % 360 : null;
   const channels = enabledChannels(result);

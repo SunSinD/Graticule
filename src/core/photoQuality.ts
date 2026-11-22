@@ -44,9 +44,10 @@ function samplePhoto(image: RgbaImage) {
       const interior = x >= insetX && x < width - insetX && y >= insetY && y < height - insetY;
       let sum = 0;
       for (const dy of positions) {
-        const row = Math.floor((y + dy) * scale) * image.width;
+        const row = Math.min(image.height - 1, Math.floor((y + dy) * scale)) * image.width;
         for (const dx of positions) {
-          const index = (row + Math.floor((x + dx) * scale)) * 4;
+          const col = Math.min(image.width - 1, Math.floor((x + dx) * scale));
+          const index = (row + col) * 4;
           const r = image.data[index]!;
           const g = image.data[index + 1]!;
           const b = image.data[index + 2]!;

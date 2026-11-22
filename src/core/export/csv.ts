@@ -29,13 +29,14 @@ function channelComment(trace: ChannelTrace): string {
   ].join(' ');
 }
 
-export function renderWaveformCsv(result: ExtractionResult, channelLabels?: Partial<Record<ChannelId, string>>): string {
+export function renderWaveformCsv(result: ExtractionResult, channelLabels?: Partial<Record<ChannelId, string>>, title?: string): string {
   const traces = result.traces.filter((t) => t.settings.enabled);
   const tb = result.timebase;
   const grid = result.detection.grid;
   const lines: string[] = [
     `# Graticule v${GRATICULE_VERSION}`,
     `# file: ${comment(result.fileName)}`,
+    ...(title?.trim() ? [`# title: ${comment(title)}`] : []),
     `# profile: ${comment(result.detection.profileName)} (${result.detection.profileId})`,
     `# grid: ${grid.hDivs} x ${grid.vDivs} div, layout ${grid.layoutVariant}`,
     `# time_per_div_s: ${csvNumber(tb.secPerDiv)} (${tb.source})`,

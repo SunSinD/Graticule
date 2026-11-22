@@ -5,6 +5,8 @@ import { pathToFileURL } from 'node:url';
 import { test, expect } from '@playwright/test';
 
 const root = path.resolve('.');
+const pkg = JSON.parse(fs.readFileSync(path.resolve(root, 'package.json'), 'utf8')) as { version: string };
+const versionPattern = pkg.version.replace(/\./g, '\\.');
 const portable = path.resolve(root, 'dist-portable/graticule-portable.html');
 const sample = path.resolve(root, 'tests/fixtures/samples/sine_schmitt.png');
 const sweep = Array.from({ length: 10 }, (_, i) => path.resolve(root, 'tests/fixtures/samples', `sweep_${String(i + 1).padStart(2, '0')}.png`));
@@ -144,7 +146,7 @@ test('preview serves the manifest and fully precached service worker source', as
   const serviceWorker = await request.get('/sw.js');
   expect(serviceWorker.ok()).toBe(true);
   const source = await serviceWorker.text();
-  expect(source).toMatch(/CACHE_NAME = 'graticule-v1\.1\.2-[a-f0-9]{8}'/);
+  expect(source).toMatch(new RegExp(`CACHE_NAME = 'graticule-v${versionPattern}-[a-f0-9]{8}'`));
   expect(source).toMatch(/"\.\/assets\/[^"]+"/);
   expect(source).toMatch(/\.\/assets\/extract\.worker-[^"]+\.js/);
   expect(source).toMatch(/\.\/assets\/pipeline-[^"]+\.js/);

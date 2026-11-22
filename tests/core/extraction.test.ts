@@ -28,6 +28,32 @@ function plot(image: RgbaImage, ink: Rgb, fn: (column: number) => number | null,
 const traceById = (traces: readonly ChannelTrace[], channel: ChannelId) => traces.find(trace => trace.channel === channel)!;
 
 describe('column extraction and waveform measurements', () => {
+  test('keeps a flat DC trace inside the automatically detected grid', () => {
+    const image = bitmap(421, 221, [190, 190, 190]);
+    for (let y = grid.y; y <= grid.y + grid.height; y++) {
+      for (let x = grid.x; x <= grid.x + grid.width; x++) pixel(image, x, y, [0, 0, 0]);
+    }
+    plot(image, yellow, () => 150);
+    const result = analyzeCapture(image, 'dc.png');
+    expect(result.detection.grid).toMatchObject({ top: 10, bottom: 210, left: 10, right: 410 });
+    expect(traceById(result.traces, 'C1').validCount).toBe(401);
+  });
+
+  test('retains finite voltages after an intermediate overflow and marks truly overflowing values unresolved', () => {
+    const image = bitmap(41, 11);
+    for (let x = 0; x < image.width; x++) pixel(image, x, 5, yellow);
+    const extract = (voltsPerDiv: number) => analyzeCapture(image, 'large-voltage.png', {
+      manualCrop: { x: 0, y: 0, width: 40, height: 10 }, vDivs: 100,
+      channels: { C1: { enabled: true, zeroY: 1e308, voltsPerDiv } },
+    }).traces[0]!;
+    const finite = extract(1e-4);
+    expect(finite.samples[20]!.status).toBe('ok');
+    expect(finite.samples[20]!.voltage! / 1e305).toBeCloseTo(1, 12);
+    const overflowing = extract(1);
+    expect(overflowing.validCount).toBe(0);
+    expect(overflowing.samples[20]).toMatchObject({ status: 'unresolved', voltage: null, yPx: null });
+  });
+
   test('classifies inverted trace colors in the universal fallback profile', () => {
     const image = bitmap(421, 221, [255, 255, 255]);
     plot(image, [0, 0, 198], col => zero - 33 * Math.sin(2 * Math.PI * col / 80));

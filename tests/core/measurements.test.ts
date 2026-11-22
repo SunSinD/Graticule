@@ -4,9 +4,9 @@ import type { ChannelTrace, TraceSample } from '../../src/core/types.js';
 
 const dt = 1e-6;
 
-function measure(values: readonly (number | TraceSample['status'])[]) {
+function measure(values: readonly (number | TraceSample['status'])[], interval = dt) {
   const samples: TraceSample[] = values.map((value, col) => ({
-    col, xPx: col, timeSec: col * dt, voltage: typeof value === 'number' ? value : null,
+    col, xPx: col, timeSec: col * interval, voltage: typeof value === 'number' ? value : null,
     yPx: typeof value === 'number' ? 100 - value * 50 : null, status: typeof value === 'number' ? 'ok' : value,
   }));
   const trace: ChannelTrace = {
@@ -19,6 +19,12 @@ function measure(values: readonly (number | TraceSample['status'])[]) {
 }
 
 describe('period and pulse measurements', () => {
+  test('preserves a measured period even if its reciprocal is too large', () => {
+    const result = measure(Array.from({ length: 401 }, (_, i) => Math.sin(i * Math.PI / 40)), 1e-311);
+    expect(result.periodSec! / 8e-310).toBeCloseTo(1, 10);
+    expect(result.frequencyHz).toBeNull();
+  });
+
   test.each([1, 3, 5])('measures a repeating pulse with %i%% duty', duty => {
     const result = measure(Array.from({ length: 1001 }, (_, i) => i % 100 < duty ? 1 : 0));
     expect(result.frequencyHz).toBeCloseTo(10_000, 6);

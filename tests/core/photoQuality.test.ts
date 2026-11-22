@@ -39,6 +39,18 @@ function boxBlur(image: RgbaImage, radiusX: number, radiusY = radiusX): RgbaImag
 }
 
 describe('phone photo quality', () => {
+  it.each([[1920, 1], [1, 1920]])('samples the full range of a %i by %i image', (width, height) => {
+    const data = new Uint8ClampedArray(width * height * 4);
+    for (let i = 0; i < width * height; i++) {
+      const level = i < width * height / 2 ? 30 : 180;
+      data.set([level, level, level, 255], i * 4);
+    }
+    const report = assessPhotoQuality({ width, height, data });
+    expect(report.contrast).toBe(150);
+    expect(report.issues).toContain('low_resolution');
+    expect(report.issues).not.toContain('low_contrast');
+  });
+
   it('passes a sharp, high contrast, upright image', () => {
     const report = assessPhotoQuality(capture());
     expect(report).toMatchObject({ passed: true, issues: [], tiltDeg: 0, glarePct: 0, contrast: 175 });

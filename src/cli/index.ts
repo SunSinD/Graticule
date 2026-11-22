@@ -21,6 +21,7 @@ With no output flag, prints a table. Use --out with a file path for one format
 or a directory path for multiple formats.
 
   --csv | --svg | --json | --table
+  --title <text>  (waveform CSV)
   --format tsv|markdown|html|latex
   --theme light|dark
   --locale en|fr
@@ -63,7 +64,7 @@ async function run(): Promise<void> {
       bode: { type: 'string' }, csv: { type: 'boolean' }, svg: { type: 'boolean' },
       json: { type: 'boolean' }, table: { type: 'boolean' }, locale: { type: 'string' },
       out: { type: 'string', short: 'o' }, help: { type: 'boolean', short: 'h' },
-      theme: { type: 'string' }, format: { type: 'string' }, profile: { type: 'string' },
+      theme: { type: 'string' }, format: { type: 'string' }, profile: { type: 'string' }, title: { type: 'string' },
       'sec-per-div': { type: 'string' }, vdiv: { type: 'string', multiple: true }, deskew: { type: 'string' },
     },
   });
@@ -132,7 +133,7 @@ async function run(): Promise<void> {
     inputs.push(input);
     const result = analyzePngBytes(await readFile(input), basename(input), overrides);
     stem = basename(input, extname(input));
-    if (values.csv) formats.push({ extension: 'csv', text: renderWaveformCsv(result) });
+    if (values.csv) formats.push({ extension: 'csv', text: renderWaveformCsv(result, undefined, values.title) });
     if (values.svg) formats.push({ extension: 'svg', text: renderWaveformSvg(result, svgOptions) });
     if (values.json) formats.push({ extension: 'json', text: JSON.stringify(result, null, 2) + '\n' });
     if (table) formats.push({ extension: tableExtensions[format], text: renderMeasurementsTable(result, format, locale) });

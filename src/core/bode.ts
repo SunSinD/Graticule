@@ -14,6 +14,10 @@ function positive(n: number | null | undefined): n is number {
   return typeof n === 'number' && Number.isFinite(n) && n > 0;
 }
 
+function gainFromVpp(vinVpp: number | null, voutVpp: number | null): number | null {
+  return positive(vinVpp) && positive(voutVpp) ? 20 * (Math.log10(voutVpp) - Math.log10(vinVpp)) : null;
+}
+
 function gates(options: BodeGateOptions): Required<BodeGateOptions> {
   const minR2 = options.minR2 ?? defaults.minR2;
   return {
@@ -68,7 +72,7 @@ function evaluate(extraction: ExtractionResult, id: string, options: Required<Bo
   const vinVpp = positive(edit?.vinVpp) ? edit.vinVpp : fit?.input ? fit.input.amplitude * 2 : null;
   const voutVpp = positive(edit?.voutVpp) ? edit.voutVpp : fit?.output ? fit.output.amplitude * 2 : null;
   const gainDb = typeof edit?.gainDb === 'number' && Number.isFinite(edit.gainDb) ? edit.gainDb
-    : positive(vinVpp) && positive(voutVpp) ? 20 * (Math.log10(voutVpp) - Math.log10(vinVpp)) : null;
+    : gainFromVpp(vinVpp, voutVpp);
   const manualPhase = typeof edit?.phaseDeg === 'number' && Number.isFinite(edit.phaseDeg) ? wrapPhase(edit.phaseDeg) : null;
 
   const rejectionReasons: string[] = [];
@@ -108,13 +112,28 @@ function evaluate(extraction: ExtractionResult, id: string, options: Required<Bo
   };
 }
 
-function rejectedPoint(capture: BodeRejectedCapture, id: string): BodePoint {
-  const frequencyHz = frequencyFromFileName(capture.fileName);
+function rejectedPoint(capture: BodeRejectedCapture, id: string, options: Required<BodeGateOptions>, edit: BodePointOverride | undefined,
+  live: boolean): BodePoint {
+  const baseReason = capture.rejectionReason;
+  const hint = frequencyFromFileName(capture.fileName);
+  const manual = edit?.frequencyHz;
+  const useManual = positive(manual) && (live || hint === null);
+  const frequencyHz = useManual ? manual : hint;
+  const vinVpp = positive(edit?.vinVpp) ? edit.vinVpp : null;
+  const voutVpp = positive(edit?.voutVpp) ? edit.voutVpp : null;
+  const gainDb = typeof edit?.gainDb === 'number' && Number.isFinite(edit.gainDb) ? edit.gainDb : gainFromVpp(vinVpp, voutVpp);
+  const phaseDeg = typeof edit?.phaseDeg === 'number' && Number.isFinite(edit.phaseDeg) ? wrapPhase(edit.phaseDeg) : null;
+  // A finite gain on an unreadable capture always comes from a manual measurement.
+  const accepted = options.inputChannel !== options.outputChannel && positive(frequencyHz) && Number.isFinite(gainDb) && !edit?.excluded;
+  const rejectionReasons = accepted ? [] : [baseReason];
+  if (edit?.excluded) rejectionReasons.push('manually_excluded');
   return {
-    id, fileName: capture.fileName, frequencyHz, frequencySource: frequencyHz === null ? 'none' : 'filename',
-    vinVpp: null, voutVpp: null, gainDb: null, phaseDeg: null, cycles: 0, colsPerCycle: 0, vinPx: 0, voutPx: 0,
-    r2In: null, r2Out: null, accepted: false, rejectionReasons: [capture.rejectionReason], warnings: [], edited: false,
-    extraction: null,
+    id, fileName: capture.fileName, frequencyHz, frequencySource: useManual ? 'manual' : hint === null ? 'none' : 'filename',
+    vinVpp, voutVpp, gainDb, phaseDeg, cycles: 0, colsPerCycle: 0, vinPx: 0, voutPx: 0,
+    r2In: null, r2Out: null, accepted, rejectionReasons, warnings: accepted ? ['manual_measurement'] : [],
+    edited: Boolean(edit && Object.keys(edit).length),
+    ...(edit ? { override: { ...edit }, preferManualFrequency: live && positive(manual) } : {}),
+    baseReason, extraction: null,
   };
 }
 
@@ -232,8 +251,9 @@ export function analyzeBodeBatch(extractions: readonly (ExtractionResult | BodeR
     let suffix = 2;
     while (used.has(id)) id = `${name}#${suffix++}`;
     used.add(id);
-    return 'rejectionReason' in extraction ? rejectedPoint(extraction, id)
-      : evaluate(extraction, id, normalized, overrideFor(overrides, id), normalized.preferManualFrequency);
+    const edit = overrideFor(overrides, id);
+    return 'rejectionReason' in extraction ? rejectedPoint(extraction, id, normalized, edit, normalized.preferManualFrequency)
+      : evaluate(extraction, id, normalized, edit, normalized.preferManualFrequency);
   });
   return summarize(points, normalized, performance.now() - start);
 }
@@ -252,7 +272,6 @@ export function recomputeBodeResult(result: BodeResult, edits?: BodeOverrides | 
   const pairChanged = normalized.inputChannel !== result.inputChannel || normalized.outputChannel !== result.outputChannel;
   const liveEdits = edits && !gateOnly ? edits as BodeOverrides : undefined;
   const points = result.points.map(point => {
-    if (!point.extraction) return point;
     let edit = liveEdits ? overrideFor(liveEdits, point.id) : point.override;
     if (pairChanged && edit) {
       const { frequencyHz, excluded } = edit;
@@ -261,8 +280,10 @@ export function recomputeBodeResult(result: BodeResult, edits?: BodeOverrides | 
         ...(excluded !== undefined && { excluded }),
       };
     }
-    return evaluate(point.extraction, point.id, normalized, edit,
-      Boolean(liveEdits || normalized.preferManualFrequency || point.preferManualFrequency));
+    const live = Boolean(liveEdits || normalized.preferManualFrequency || point.preferManualFrequency);
+    if (point.extraction) return evaluate(point.extraction, point.id, normalized, edit, live);
+    const rejectionReason = point.baseReason ?? point.rejectionReasons.find(reason => reason !== 'manually_excluded') ?? 'capture_unreadable';
+    return rejectedPoint({ fileName: point.fileName, rejectionReason }, point.id, normalized, edit, live);
   });
   return summarize(points, normalized, result.elapsedMs);
 }
