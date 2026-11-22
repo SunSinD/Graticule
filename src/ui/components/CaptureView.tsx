@@ -14,6 +14,7 @@ const ZOOM_MAX = 300;
 interface Props {
   readonly tx: Dict;
   readonly locale: Locale;
+  readonly dark: boolean;
   readonly url: string;
   readonly fileName: string;
   readonly result: ExtractionResult | null;
@@ -50,7 +51,7 @@ function intOr(text: string, fallback: number): number {
 }
 
 export function CaptureView(props: Props) {
-  const { tx, locale, url, fileName, result, extracting, view, overlay, cropOpen, canCrop, overrides, onExtract } = props;
+  const { tx, locale, dark, url, fileName, result, extracting, view, overlay, cropOpen, canCrop, overrides, onExtract } = props;
   const [size, setSize] = useState<Size | null>(
     result ? { width: result.imageWidth, height: result.imageHeight } : null,
   );
@@ -77,8 +78,8 @@ export function CaptureView(props: Props) {
 
   const overlaySvg = useMemo(() => (result && overlay ? renderOverlaySvg(result) : ''), [result, overlay]);
   const cleanSvg = useMemo(
-    () => (result && view === 'clean' ? renderWaveformSvg(result, { locale, title: fileName }) : ''),
-    [result, view, locale, fileName],
+    () => (result && view === 'clean' ? renderWaveformSvg(result, { locale, title: fileName, theme: dark ? 'dark' : 'light' }) : ''),
+    [result, view, locale, fileName, dark],
   );
 
   const showClean = view === 'clean' && !cropOpen && result !== null;

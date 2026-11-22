@@ -69,6 +69,16 @@ function systemDark(): boolean {
   return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-color-scheme: dark)').matches;
 }
 
+function isMobileOrTablet(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  const uaData = (navigator as Navigator & { userAgentData?: { mobile?: boolean; platform?: string } }).userAgentData;
+  if (uaData?.mobile === true || uaData?.platform === 'Android') return true;
+  const ua = navigator.userAgent ?? '';
+  if (/Android|iPhone|iPad|iPod/i.test(ua)) return true;
+  if (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) return true;
+  return false;
+}
+
 function isTyping(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName;
@@ -145,6 +155,7 @@ export function App() {
 
   const fileInput = useRef<HTMLInputElement>(null);
   const cameraInput = useRef<HTMLInputElement>(null);
+  const replaceIdRef = useRef<string | null>(null);
   const exportsRef = useRef<HTMLElement>(null);
   const itemsRef = useRef<readonly HistoryItem[]>([]);
   const activeRef = useRef<string | null>(null);
@@ -157,6 +168,7 @@ export function App() {
   activeRef.current = activeId;
   selectedRef.current = selected;
 
+  const canUseCamera = useMemo(isMobileOrTablet, []);
   const tx = t(locale);
   const dark = theme ? theme === 'dark' : prefersDark;
 
@@ -358,6 +370,7 @@ export function App() {
     if (!item) return;
     releaseUrl(item.url);
     singleReq.current.delete(id);
+    if (replaceIdRef.current === id) replaceIdRef.current = null;
     setItems((list) => list.filter((i) => i.id !== id));
     setSelected((sel) => sel.filter((x) => x !== id));
     if (activeRef.current === id) setActiveId(null);
@@ -367,6 +380,7 @@ export function App() {
     releaseItems(itemsRef.current);
     singleReq.current.clear();
     bodeReq.current.clear();
+    replaceIdRef.current = null;
     persisted.current = new Map();
     void storeRef.current?.clear();
     setItems([]);
@@ -411,8 +425,18 @@ export function App() {
             quality: photo ? checkPhoto(loaded.bytes) : null,
           });
         }
+        const replaceId = replaceIdRef.current;
+        replaceIdRef.current = null;
+        if (replaceId) {
+          const old = itemsRef.current.find((i) => i.id === replaceId);
+          if (old) releaseUrl(old.url);
+          singleReq.current.delete(replaceId);
+        }
         const keep = new Set(added.map((i) => i.id));
-        setItems((list) => capHistory([...added, ...list].sort(compareItems), keep));
+        setItems((list) => {
+          const base = replaceId ? list.filter((i) => i.id !== replaceId) : list;
+          return capHistory([...added, ...base].sort(compareItems), keep);
+        });
         if (added.length === 1) {
           setActiveId(added[0]!.id);
           setSelected([]);
@@ -430,15 +454,19 @@ export function App() {
     [tx.unsupportedFile],
   );
 
-  const openPicker = useCallback((folder: boolean) => {
+  const openPicker = useCallback((folder: boolean, replaceId: string | null = null) => {
     const input = fileInput.current;
     if (!input) return;
+    replaceIdRef.current = replaceId;
     if (folder) input.setAttribute('webkitdirectory', '');
     else input.removeAttribute('webkitdirectory');
     input.click();
   }, []);
 
-  const openCamera = useCallback(() => cameraInput.current?.click(), []);
+  const openCamera = useCallback((replaceId: string | null = null) => {
+    replaceIdRef.current = replaceId;
+    cameraInput.current?.click();
+  }, []);
 
   const inspected = useMemo(
     () => (mode === 'bode' && bode && inspectedId ? bode.points.find((p) => p.id === inspectedId) ?? null : null),
@@ -510,6 +538,7 @@ export function App() {
       const files = Array.from(e.clipboardData?.files ?? []).filter(isImageFile);
       if (files.length === 0) return;
       e.preventDefault();
+      replaceIdRef.current = null;
       void addFiles(
         files.map((f, i) => (f.name && f.name !== 'image.png' ? f : new File([f], `pasted_${Date.now()}_${i + 1}.png`, { type: f.type }))),
         'pick',
@@ -522,6 +551,7 @@ export function App() {
   const onDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setDragging(false);
+    replaceIdRef.current = null;
     const list = await filesFromDataTransfer(e.dataTransfer);
     await addFiles(list, 'pick');
   };
@@ -602,19 +632,21 @@ export function App() {
           void addFiles(list, 'pick');
         }}
       />
-      <input
-        ref={cameraInput}
-        type="file"
-        accept="image/*"
-        capture="environment"
-        hidden
-        data-testid="camera-input"
-        onChange={(e) => {
-          const list = Array.from(e.target.files ?? []);
-          e.target.value = '';
-          void addFiles(list, 'camera');
-        }}
-      />
+      {canUseCamera && (
+        <input
+          ref={cameraInput}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          hidden
+          data-testid="camera-input"
+          onChange={(e) => {
+            const list = Array.from(e.target.files ?? []);
+            e.target.value = '';
+            void addFiles(list, 'camera');
+          }}
+        />
+      )}
 
       <FilePanel
         tx={tx}
@@ -625,7 +657,7 @@ export function App() {
         keepHistory={keepHistory}
         onAdd={() => openPicker(false)}
         onAddFolder={() => openPicker(true)}
-        onCamera={openCamera}
+        onCamera={canUseCamera ? () => openCamera() : undefined}
         onOpen={openItem}
         onToggle={toggleSelect}
         onRemove={removeItem}
@@ -634,7 +666,9 @@ export function App() {
       />
 
       <main className={`zone center${showCapture ? ' fit' : ''}`}>
-        {mode === 'empty' && !adding && <EmptyState tx={tx} onAdd={() => openPicker(false)} onCamera={openCamera} />}
+        {mode === 'empty' && !adding && (
+          <EmptyState tx={tx} onAdd={() => openPicker(false)} onCamera={canUseCamera ? () => openCamera() : undefined} />
+        )}
         {mode === 'empty' && adding && <p className="muted center-msg">{tx.working}</p>}
 
         {quality && activeItem && (
@@ -650,11 +684,11 @@ export function App() {
                 type="button"
                 className="btn primary"
                 onClick={() => {
-                  removeItem(activeItem.id);
-                  openCamera();
+                  if (canUseCamera) openCamera(activeItem.id);
+                  else openPicker(false, activeItem.id);
                 }}
               >
-                {tx.photoRetake}
+                {canUseCamera ? tx.photoRetake : tx.photoChooseAnother}
               </button>
               <button type="button" className="btn" onClick={() => patchItem(activeItem.id, { quality: null })}>
                 {tx.photoUseAnyway}
@@ -677,6 +711,7 @@ export function App() {
             key={captureItem.id}
             tx={tx}
             locale={locale}
+            dark={dark}
             url={captureItem.url}
             fileName={captureName}
             result={capture}
@@ -721,6 +756,7 @@ export function App() {
           <BodeView
             tx={tx}
             locale={locale}
+            dark={dark}
             result={bode}
             overrides={session.points}
             inspectedId={inspectedId}

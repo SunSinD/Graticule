@@ -17,6 +17,11 @@ function stripAllowedSegments(line) {
   s = s.replace(/`[^`]*`/g, ' ');
   // Remove markdown links [label](url) -> keep label only so URLs/paths are preserved
   s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1');
+  // Strip HTML tags while preserving alt attribute prose
+  s = s.replace(/<[^>]+>/g, (tag) => {
+    const alt = tag.match(/\balt="([^"]*)"/i);
+    return alt ? ` ${alt[1]} ` : ' ';
+  });
   // Remove bare URLs
   s = s.replace(/https?:\/\/\S+/g, ' ');
   // Remove leading markdown bullet marker "- "

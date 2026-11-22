@@ -13,6 +13,7 @@ type EditKey = 'frequencyHz' | 'vinVpp' | 'voutVpp' | 'gainDb' | 'phaseDeg';
 interface Props {
   readonly tx: Dict;
   readonly locale: Locale;
+  readonly dark: boolean;
   readonly result: BodeResult;
   readonly overrides: Readonly<Record<string, BodePointOverride>>;
   readonly inspectedId: string | null;
@@ -75,8 +76,8 @@ function plainNumber(text: string): string {
   return text.replace(/\s*(dB|°)$/, '');
 }
 
-export function BodeView({ tx, locale, result, overrides, inspectedId, onEdit, onExclude, onInspect, onReset }: Props) {
-  const svg = useMemo(() => renderBodeSvg(result, { locale, title: 'Bode' }), [result, locale]);
+export function BodeView({ tx, locale, dark, result, overrides, inspectedId, onEdit, onExclude, onInspect, onReset }: Props) {
+  const svg = useMemo(() => renderBodeSvg(result, { locale, title: 'Bode', theme: dark ? 'dark' : 'light' }), [result, locale, dark]);
   const hasEdits = Object.keys(overrides).length > 0;
   const [zoom, setZoom] = useState(100);
   const viewport = useRef<HTMLDivElement>(null);

@@ -11,7 +11,7 @@ interface Props {
   readonly keepHistory: boolean;
   readonly onAdd: () => void;
   readonly onAddFolder: () => void;
-  readonly onCamera: () => void;
+  readonly onCamera?: () => void;
   readonly onOpen: (id: string) => void;
   readonly onToggle: (id: string) => void;
   readonly onRemove: (id: string) => void;
@@ -45,9 +45,11 @@ export function FilePanel(props: Props) {
           <button type="button" className="btn icon" onClick={props.onAddFolder} aria-label={tx.addFolder} title={tx.addFolder}>
             <FolderPlus size={16} aria-hidden="true" />
           </button>
-          <button type="button" className="btn icon" onClick={props.onCamera} aria-label={tx.takePhoto} title={tx.takePhoto}>
-            <Camera size={16} aria-hidden="true" />
-          </button>
+          {props.onCamera && (
+            <button type="button" className="btn icon" onClick={props.onCamera} aria-label={tx.takePhoto} title={tx.takePhoto}>
+              <Camera size={16} aria-hidden="true" />
+            </button>
+          )}
         </div>
         <div className="section-head">
           <h2>{tx.history}</h2>

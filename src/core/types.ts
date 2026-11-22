@@ -232,6 +232,8 @@ export interface BodeResult {
 
 export type Locale = 'en' | 'fr';
 
+export type PlotTheme = 'light' | 'dark';
+
 export interface SvgExportOptions {
   readonly title?: string;
   readonly locale?: Locale;
@@ -239,4 +241,5 @@ export interface SvgExportOptions {
   readonly height?: number;
   readonly showGrid?: boolean;
   readonly showLegend?: boolean;
+  readonly theme?: PlotTheme;
 }

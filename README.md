@@ -1,14 +1,41 @@
-# Graticule
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/media/graticule-logo-dark.svg" />
+    <img src="docs/media/graticule-logo.svg" alt="Graticule logo" width="88" />
+  </picture>
+</p>
 
-Graticule turns oscilloscope screenshots into clean plots and real data.
+<h1 align="center">Graticule</h1>
 
-Try it live at [sunsind.github.io/Graticule](https://sunsind.github.io/Graticule/).
+<p align="center">Graticule turns oscilloscope screenshots into clean plots and real data.</p>
 
-![Original screenshot next to the clean plot](docs/preview-before-after.png)
+<p align="center">
+  <a href="https://sunsind.github.io/Graticule/"><strong>Open Graticule</strong></a><br />
+  Runs in your browser. Nothing to install.
+</p>
 
-Drop a screenshot from your scope or take a photo of the screen, click Extract, and you get a print ready plot, a CSV of every trace, and a measurement table you can paste into Word. Everything runs in your browser, so your files never leave your computer.
+<p align="center">
+  <picture><img src="docs/preview-before-after.png" alt="Original scope screenshot next to the clean plot in dark mode" width="100%" /></picture>
+</p>
 
-![The Graticule app](docs/preview-app.png)
+<p align="center">
+  <picture><img src="docs/preview-app.png" alt="The Graticule app in dark mode" width="100%" /></picture>
+</p>
+
+<details>
+<summary>Light mode screenshots</summary>
+
+<p align="center">
+  <picture><img src="docs/preview-before-after-light.png" alt="Original scope screenshot next to the print ready clean plot" width="100%" /></picture>
+</p>
+
+<p align="center">
+  <picture><img src="docs/preview-app-light.png" alt="The Graticule app in light mode" width="100%" /></picture>
+</p>
+
+</details>
+
+Drop a screenshot from your scope or take a photo of the screen on your phone, click Extract, and you get a print ready plot, a CSV of every trace, and a measurement table you can paste into Word. Everything runs in your browser, so your files never leave your computer.
 
 ## What it does
 
@@ -39,7 +66,7 @@ Turn off Keep history at the bottom of the left panel to stop saving. Your saved
 
 ## Phone photos
 
-Tap the camera button to take a photo of the scope screen. Big photos are scaled down to 1920 px and turned the right way up. Graticule then checks the photo, and if it is blurry, tilted, too dark, too small or has glare, it tells you what to fix. You can retake the photo or use it anyway.
+On phones and tablets, tap the camera button to take a photo of the scope screen. Big photos are scaled down to 1920 px and turned the right way up. Graticule then checks the photo, and if it is blurry, tilted, too dark, too small or has glare, it tells you what to fix. You can retake the photo or use it anyway.
 
 A real screenshot from the scope always gives better results than a photo.
 

@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
 
@@ -45,7 +46,8 @@ test('cold load completes quickly with no errors, no external requests and no ex
   await expect(page.getByText('Drop an oscilloscope screenshot, paste one, or add images.')).toBeVisible();
   const main = page.getByRole('main');
   await expect(main.getByRole('button', { name: 'Add images' })).toBeVisible();
-  await expect(main.getByRole('button', { name: 'Take photo' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Take photo' })).toHaveCount(0);
+  await expect(page.locator('[data-testid="camera-input"]')).toHaveCount(0);
   await expect(page.getByText(/sample|example/i)).toHaveCount(0);
   await expect(page.getByRole('button', { name: /^Open$/ })).toHaveCount(0);
   expect(pageErrors).toEqual([]);
@@ -216,4 +218,45 @@ test('extracted capture fits the desktop viewport and the French sidebar does no
 
   await page.getByRole('button', { name: /Vider/i }).click();
   await expect(page.getByText(/Déposez une capture/i)).toBeVisible();
+});
+
+test('camera button shows on mobile and stays hidden on touchscreen desktop', async ({ browser }) => {
+  const touchDesktop = await browser.newContext({
+    hasTouch: true,
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+  });
+  const desktopPage = await touchDesktop.newPage();
+  await desktopPage.goto('/');
+  await expect(desktopPage.getByRole('button', { name: 'Take photo' })).toHaveCount(0);
+  await touchDesktop.close();
+
+  const mobile = await browser.newContext({
+    hasTouch: true,
+    isMobile: true,
+    viewport: { width: 390, height: 844 },
+    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
+  });
+  const mobilePage = await mobile.newPage();
+  await mobilePage.goto('/');
+  await expect(mobilePage.getByRole('main').getByRole('button', { name: 'Take photo' })).toBeVisible();
+  await expect(mobilePage.locator('aside').getByRole('button', { name: 'Take photo' })).toBeVisible();
+  await mobile.close();
+});
+
+test('dark mode renders dark plot on screen while SVG download stays print ready white', async ({ browser }) => {
+  const darkCtx = await browser.newContext({ colorScheme: 'dark', viewport: { width: 1440, height: 900 } });
+  const page = await darkCtx.newPage();
+  await page.goto('/');
+  await extractSine(page);
+  const onScreenFill = await page.locator('.paper svg > rect').first().getAttribute('fill');
+  expect(onScreenFill).toBe('#0a0a0a');
+
+  const svgDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'SVG', exact: true }).click();
+  const download = await svgDownload;
+  const filePath = await download.path();
+  expect(filePath).not.toBeNull();
+  const svgText = await fs.readFile(filePath!, 'utf8');
+  expect(svgText).toContain('fill="#ffffff"');
+  await darkCtx.close();
 });

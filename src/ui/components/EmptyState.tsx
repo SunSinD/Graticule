@@ -4,7 +4,7 @@ import type { Dict } from '../i18n';
 interface Props {
   readonly tx: Dict;
   readonly onAdd: () => void;
-  readonly onCamera: () => void;
+  readonly onCamera?: () => void;
 }
 
 export function EmptyState({ tx, onAdd, onCamera }: Props) {
@@ -16,10 +16,12 @@ export function EmptyState({ tx, onAdd, onCamera }: Props) {
           <Plus size={16} aria-hidden="true" />
           <span>{tx.addImages}</span>
         </button>
-        <button type="button" className="btn" onClick={onCamera}>
-          <Camera size={16} aria-hidden="true" />
-          <span>{tx.takePhoto}</span>
-        </button>
+        {onCamera && (
+          <button type="button" className="btn" onClick={onCamera}>
+            <Camera size={16} aria-hidden="true" />
+            <span>{tx.takePhoto}</span>
+          </button>
+        )}
       </div>
       <p className="muted small">{tx.emptyPrivacy}</p>
     </div>

@@ -6,6 +6,7 @@ import type {
   ExtractionResult,
   GapStatus,
   Locale,
+  PlotTheme,
   SvgExportOptions,
 } from '../types.js';
 import { GRATICULE_VERSION, formatEng, localizeDecimal, trimTrailingZeros } from './format.js';
@@ -13,12 +14,34 @@ import { GAP_LABELS, SVG_TEXT } from './labels.js';
 import { splitTrace } from './trace-geometry.js';
 import type { TraceGap } from './trace-geometry.js';
 
-const INK = '#000000';
-const PAPER = '#ffffff';
-const GRID = '#d4d4d4';
-const GRID_MINOR = '#e5e5e5';
-const MUTED = '#737373';
-const SOFT = '#a3a3a3';
+interface PlotPalette {
+  readonly ink: string;
+  readonly paper: string;
+  readonly grid: string;
+  readonly gridMinor: string;
+  readonly muted: string;
+  readonly soft: string;
+}
+
+const PALETTES: Readonly<Record<PlotTheme, PlotPalette>> = {
+  light: {
+    ink: '#000000',
+    paper: '#ffffff',
+    grid: '#d4d4d4',
+    gridMinor: '#e5e5e5',
+    muted: '#737373',
+    soft: '#a3a3a3',
+  },
+  dark: {
+    ink: '#fafafa',
+    paper: '#0a0a0a',
+    grid: '#404040',
+    gridMinor: '#262626',
+    muted: '#a3a3a3',
+    soft: '#737373',
+  },
+};
+
 const SANS = "system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif";
 const MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace";
 const MINUS = '−';
@@ -53,10 +76,10 @@ function svgMinus(text: string): string {
   return text.replace(/^-/, MINUS);
 }
 
-function strokeAttrs(channel: ChannelId): string {
+function strokeAttrs(channel: ChannelId, ink: string): string {
   const s = CHANNEL_LINE_STYLES[channel];
   const dash = s.dash ? ` stroke-dasharray="${s.dash}"` : '';
-  return `stroke="${INK}" stroke-width="${s.width}"${dash} stroke-linecap="butt" stroke-linejoin="round" fill="none"`;
+  return `stroke="${ink}" stroke-width="${s.width}"${dash} stroke-linecap="butt" stroke-linejoin="round" fill="none"`;
 }
 
 function text(
@@ -64,11 +87,12 @@ function text(
   y: number,
   content: string,
   opts: { anchor?: 'start' | 'middle' | 'end'; size?: number; mono?: boolean; fill?: string; weight?: number } = {},
+  defaultFill = '#000000',
 ): string {
   const anchor = opts.anchor ?? 'start';
   const size = opts.size ?? 11;
   const family = opts.mono ? MONO : SANS;
-  const fill = opts.fill ?? INK;
+  const fill = opts.fill ?? defaultFill;
   const weight = opts.weight ? ` font-weight="${opts.weight}"` : '';
   const nums = opts.mono ? ' style="font-variant-numeric: tabular-nums"' : '';
   return `<text x="${n(x)}" y="${n(y)}" text-anchor="${anchor}" font-family="${family}" font-size="${size}" fill="${fill}"${weight}${nums}>${escapeXml(content)}</text>`;
@@ -79,11 +103,11 @@ function line(x1: number, y1: number, x2: number, y2: number, stroke: string, wi
   return `<line x1="${n(x1)}" y1="${n(y1)}" x2="${n(x2)}" y2="${n(y2)}" stroke="${stroke}" stroke-width="${width}"${d}/>`;
 }
 
-function svgOpen(width: number, height: number, label: string): string {
+function svgOpen(width: number, height: number, label: string, paper: string): string {
   return [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeXml(label)}">`,
     `<title>${escapeXml(label)}</title>`,
-    `<rect x="0" y="0" width="${width}" height="${height}" fill="${PAPER}"/>`,
+    `<rect x="0" y="0" width="${width}" height="${height}" fill="${paper}"/>`,
   ].join('');
 }
 
@@ -119,6 +143,7 @@ const GAP_ORDER: readonly Exclude<GapStatus, 'ok'>[] = [
 ];
 
 export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOptions = {}): string {
+  const pal = PALETTES[options.theme ?? 'light'];
   const locale: Locale = options.locale ?? 'en';
   const t = SVG_TEXT[locale];
   const showGrid = options.showGrid ?? true;
@@ -152,46 +177,46 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
   const mapY = (py: number): number => y0 + ((py - grid.top) / gh) * plotH;
 
   const title = options.title ?? result.fileName;
-  const out: string[] = [svgOpen(width, height, title)];
-  out.push(text(x0, 24, title, { size: 14, weight: 600 }));
+  const out: string[] = [svgOpen(width, height, title, pal.paper)];
+  out.push(text(x0, 24, title, { size: 14, weight: 600 }, pal.ink));
   out.push(
-    text(x1, 24, `${result.detection.profileName}`, { anchor: 'end', size: 11, fill: MUTED }),
+    text(x1, 24, `${result.detection.profileName}`, { anchor: 'end', size: 11, fill: pal.muted }, pal.ink),
   );
   out.push(
-    text(x0, 42, `${t.timePerDiv} ${niceDiv(result.timebase.secPerDiv, locale, 's')}`, { size: 11, mono: true }),
+    text(x0, 42, `${t.timePerDiv} ${niceDiv(result.timebase.secPerDiv, locale, 's')}`, { size: 11, mono: true }, pal.ink),
   );
 
   if (showGrid) {
     const g: string[] = [];
-    for (let i = 1; i < hDivs; i++) g.push(line(x0 + i * divPx, y0, x0 + i * divPx, y1, GRID, 1));
-    for (let j = 1; j < vDivs; j++) g.push(line(x0, y0 + j * divPx, x1, y0 + j * divPx, GRID, 1));
+    for (let i = 1; i < hDivs; i++) g.push(line(x0 + i * divPx, y0, x0 + i * divPx, y1, pal.grid, 1));
+    for (let j = 1; j < vDivs; j++) g.push(line(x0, y0 + j * divPx, x1, y0 + j * divPx, pal.grid, 1));
     const cx = x0 + (hDivs / 2) * divPx;
     const cy = y0 + (vDivs / 2) * divPx;
     const sub = divPx / 5;
     for (let k = 1; k < hDivs * 5; k++) {
       if (k % 5 === 0) continue;
       const xx = x0 + k * sub;
-      g.push(line(xx, cy - 3, xx, cy + 3, SOFT, 1));
+      g.push(line(xx, cy - 3, xx, cy + 3, pal.soft, 1));
     }
     for (let k = 1; k < vDivs * 5; k++) {
       if (k % 5 === 0) continue;
       const yy = y0 + k * sub;
-      g.push(line(cx - 3, yy, cx + 3, yy, SOFT, 1));
+      g.push(line(cx - 3, yy, cx + 3, yy, pal.soft, 1));
     }
     out.push(`<g aria-hidden="true">${g.join('')}</g>`);
   }
-  out.push(`<rect x="${n(x0)}" y="${n(y0)}" width="${n(plotW)}" height="${n(plotH)}" fill="none" stroke="${INK}" stroke-width="1"/>`);
+  out.push(`<rect x="${n(x0)}" y="${n(y0)}" width="${n(plotW)}" height="${n(plotH)}" fill="none" stroke="${pal.ink}" stroke-width="1"/>`);
 
   const tf = timeFit(result);
   const ticks: string[] = [];
   for (let i = 0; i <= hDivs; i++) {
     const xx = x0 + i * divPx;
-    ticks.push(line(xx, y1, xx, y1 + 4, INK, 1));
+    ticks.push(line(xx, y1, xx, y1 + 4, pal.ink, 1));
     const px = grid.left + (i / hDivs) * grid.width;
     const tv = tf.a + tf.b * px;
     const label = svgMinus(formatEng(Math.abs(tv) < Math.abs(result.timebase.secPerDiv) * 1e-6 ? 0 : tv, 's', locale, { sig: 3, trim: true }));
     if (i % 2 === 0 || hDivs <= 10) {
-      ticks.push(text(xx, y1 + lanesH + 14, label, { anchor: 'middle', size: 10, mono: true }));
+      ticks.push(text(xx, y1 + lanesH + 14, label, { anchor: 'middle', size: 10, mono: true }, pal.ink));
     }
   }
   const axisTraces = traces.slice(0, 2);
@@ -204,13 +229,13 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
       const py = grid.top + (j / vDivs) * grid.height;
       const v = vf.a + vf.b * py;
       const clean = Math.abs(v) < tr.settings.voltsPerDiv * 1e-6 ? 0 : v;
-      ticks.push(line(ax, yy, left ? ax - 4 : ax + 4, yy, INK, 1));
+      ticks.push(line(ax, yy, left ? ax - 4 : ax + 4, yy, pal.ink, 1));
       ticks.push(
         text(left ? ax - 7 : ax + 7, yy + 3.5, svgMinus(formatEng(clean, 'V', locale, { sig: 4, trim: true })), {
           anchor: left ? 'end' : 'start',
           size: 10,
           mono: true,
-        }),
+        }, pal.ink),
       );
     }
     if (Math.abs(tr.settings.offsetVolts) > tr.settings.voltsPerDiv * 1e-4 && tr.settings.zeroY >= grid.top && tr.settings.zeroY <= grid.bottom) {
@@ -218,9 +243,9 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
       const pts = left
         ? `${n(ax)},${n(zy)} ${n(ax - 5)},${n(zy - 3.5)} ${n(ax - 5)},${n(zy + 3.5)}`
         : `${n(ax)},${n(zy)} ${n(ax + 5)},${n(zy - 3.5)} ${n(ax + 5)},${n(zy + 3.5)}`;
-      ticks.push(`<polygon points="${pts}" fill="${INK}"/>`);
+      ticks.push(`<polygon points="${pts}" fill="${pal.ink}"/>`);
     }
-    ticks.push(text(left ? ax - 7 : ax + 7, y0 - 8, tr.channel, { anchor: left ? 'end' : 'start', size: 10, weight: 600 }));
+    ticks.push(text(left ? ax - 7 : ax + 7, y0 - 8, tr.channel, { anchor: left ? 'end' : 'start', size: 10, weight: 600 }, pal.ink));
   });
   out.push(`<g aria-label="axes">${ticks.join('')}</g>`);
 
@@ -241,16 +266,16 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
       })
       .join('');
     out.push(`<g aria-label="${tr.channel} trace" clip-path="url(#plot-clip)">`);
-    if (d) out.push(`<path d="${d}" ${strokeAttrs(tr.channel)}/>`);
-    out.push(clipEdgeMarks(split.gaps, mapX, y0, y1, split.step, plotW / gw));
+    if (d) out.push(`<path d="${d}" ${strokeAttrs(tr.channel, pal.ink)}/>`);
+    out.push(clipEdgeMarks(split.gaps, mapX, y0, y1, split.step, plotW / gw, pal.muted));
     out.push('</g>');
     const laneY = y1 + 6 + idx * laneGap;
-    out.push(gapLane(split.gaps, mapX, laneY, split.step, plotW / gw, tr.channel, x0, x1));
+    out.push(gapLane(split.gaps, mapX, laneY, split.step, plotW / gw, tr.channel, x0, x1, pal.muted));
     gapCounts[tr.channel] = split.gaps.length;
   });
 
   if (traces.length === 0) {
-    out.push(text((x0 + x1) / 2, (y0 + y1) / 2, t.noChannels, { anchor: 'middle', size: 13, fill: MUTED }));
+    out.push(text((x0 + x1) / 2, (y0 + y1) / 2, t.noChannels, { anchor: 'middle', size: 13, fill: pal.muted }, pal.ink));
   }
 
   if (showLegend) {
@@ -258,7 +283,7 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
     const lg: string[] = [];
     for (const tr of traces) {
       const s = tr.settings;
-      lg.push(`<line x1="${n(x0)}" y1="${n(ly - 4)}" x2="${n(x0 + 36)}" y2="${n(ly - 4)}" ${strokeAttrs(tr.channel)}/>`);
+      lg.push(`<line x1="${n(x0)}" y1="${n(ly - 4)}" x2="${n(x0 + 36)}" y2="${n(ly - 4)}" ${strokeAttrs(tr.channel, pal.ink)}/>`);
       const parts = [
         `${niceDiv(s.voltsPerDiv, locale, 'V')}/div`,
         `${t.offset} ${svgMinus(formatEng(s.offsetVolts, 'V', locale, { sig: 3, trim: true }))}`,
@@ -266,21 +291,21 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
       ];
       if (s.coupling !== 'UNKNOWN') parts.push(s.coupling);
       const gaps = gapCounts[tr.channel] ?? 0;
-      lg.push(text(x0 + 46, ly, tr.channel, { size: 11, weight: 600 }));
-      lg.push(text(x0 + 74, ly, parts.join('   '), { size: 11, mono: true }));
-      if (gaps > 0) lg.push(text(x1, ly, gapSummary(tr, locale), { anchor: 'end', size: 10, fill: MUTED }));
+      lg.push(text(x0 + 46, ly, tr.channel, { size: 11, weight: 600 }, pal.ink));
+      lg.push(text(x0 + 74, ly, parts.join('   '), { size: 11, mono: true }, pal.ink));
+      if (gaps > 0) lg.push(text(x1, ly, gapSummary(tr, locale), { anchor: 'end', size: 10, fill: pal.muted }, pal.ink));
       ly += legendRowH;
     }
     lg.push(
       text(x0, ly, `${t.timePerDiv} ${niceDiv(result.timebase.secPerDiv, locale, 's')}   ${t.trigger} ${svgMinus(formatEng(result.timebase.triggerOffsetSec, 's', locale, { sig: 3, trim: true }))}`, {
         size: 11,
         mono: true,
-      }),
+      }, pal.ink),
     );
     ly += legendRowH;
-    lg.push(text(x0, ly, t.gapNote, { size: 10, fill: MUTED }));
+    lg.push(text(x0, ly, t.gapNote, { size: 10, fill: pal.muted }, pal.ink));
     ly += legendRowH;
-    lg.push(text(x0, ly, `Graticule v${GRATICULE_VERSION}`, { size: 9, fill: SOFT }));
+    lg.push(text(x0, ly, `Graticule v${GRATICULE_VERSION}`, { size: 9, fill: pal.soft }, pal.ink));
     out.push(`<g aria-label="legend">${lg.join('')}</g>`);
   }
 
@@ -312,13 +337,14 @@ function clipEdgeMarks(
   y1: number,
   step: number,
   scale: number,
+  muted: string,
 ): string {
   const out: string[] = [];
   for (const g of gaps) {
     if (g.kind !== 'clipped_high' && g.kind !== 'clipped_low') continue;
     const { a, b } = gapSpan(g, mapX, step, scale);
     const y = g.kind === 'clipped_high' ? y0 + 2 : y1 - 2;
-    out.push(line(a, y, b, y, MUTED, 2, '1 2'));
+    out.push(line(a, y, b, y, muted, 2, '1 2'));
   }
   return out.join('');
 }
@@ -332,6 +358,7 @@ function gapLane(
   channel: ChannelId,
   xMin: number,
   xMax: number,
+  muted: string,
 ): string {
   if (gaps.length === 0) return '';
   const out: string[] = [`<g aria-label="${channel} gaps">`];
@@ -340,9 +367,9 @@ function gapLane(
     const a = Math.max(xMin, span.a);
     const b = Math.min(xMax, span.b);
     if (b < a) continue;
-    out.push(line(a, y, Math.max(b, a + 1), y, MUTED, 1.5, '1 1.5'));
-    out.push(line(a, y - 1.5, a, y + 1.5, MUTED, 0.75));
-    out.push(line(b, y - 1.5, b, y + 1.5, MUTED, 0.75));
+    out.push(line(a, y, Math.max(b, a + 1), y, muted, 1.5, '1 1.5'));
+    out.push(line(a, y - 1.5, a, y + 1.5, muted, 0.75));
+    out.push(line(b, y - 1.5, b, y + 1.5, muted, 0.75));
   }
   out.push('</g>');
   return out.join('');
@@ -377,6 +404,7 @@ function finiteNum(v: number | null): v is number {
 }
 
 export function renderBodeSvg(result: BodeResult, options: SvgExportOptions = {}): string {
+  const pal = PALETTES[options.theme ?? 'light'];
   const locale: Locale = options.locale ?? 'en';
   const t = SVG_TEXT[locale];
   const width = Math.round(options.width ?? 960);
@@ -414,26 +442,26 @@ export function renderBodeSvg(result: BodeResult, options: SvgExportOptions = {}
   const mapP = (v: number): number => pBot - ((v - pR.min) / Math.max(1e-9, pR.max - pR.min)) * panelH;
 
   const title = options.title ?? 'Bode';
-  const out: string[] = [svgOpen(width, height, title)];
-  out.push(text(x0, 26, title, { size: 14, weight: 600 }));
+  const out: string[] = [svgOpen(width, height, title, pal.paper)];
+  out.push(text(x0, 26, title, { size: 14, weight: 600 }, pal.ink));
   out.push(
     text(x1, 26, `${t.input} ${result.inputChannel}   ${t.output} ${result.outputChannel}   ${t.accepted} ${result.acceptedCount}   ${t.rejected} ${result.rejectedCount}`, {
       anchor: 'end',
       size: 11,
       mono: true,
-      fill: MUTED,
-    }),
+      fill: pal.muted,
+    }, pal.ink),
   );
 
   const decadeGrid = (top: number, bot: number): string => {
     const g: string[] = [];
     for (let d = dMin; d <= dMax; d++) {
       const xx = mapF(10 ** d);
-      if (d > dMin && d < dMax) g.push(line(xx, top, xx, bot, GRID, 1));
+      if (d > dMin && d < dMax) g.push(line(xx, top, xx, bot, pal.grid, 1));
       if (d < dMax) {
         for (let m = 2; m <= 9; m++) {
           const xm = mapF(m * 10 ** d);
-          g.push(line(xm, top, xm, bot, GRID_MINOR, 1));
+          g.push(line(xm, top, xm, bot, pal.gridMinor, 1));
         }
       }
     }
@@ -450,31 +478,31 @@ export function renderBodeSvg(result: BodeResult, options: SvgExportOptions = {}
     pick: (p: BodePoint) => number | null,
   ): string => {
     const g: string[] = [`<g aria-label="${escapeXml(label)}">`];
-    g.push(`<rect x="${n(x0)}" y="${n(top)}" width="${n(plotW)}" height="${n(bot - top)}" fill="${PAPER}"/>`);
+    g.push(`<rect x="${n(x0)}" y="${n(top)}" width="${n(plotW)}" height="${n(bot - top)}" fill="${pal.paper}"/>`);
     g.push(decadeGrid(top, bot));
     for (let v = range.min; v <= range.max + range.step * 1e-6; v += range.step) {
       const yy = map(v);
-      if (v > range.min && v < range.max) g.push(line(x0, yy, x1, yy, GRID, 1));
-      g.push(line(x0 - 4, yy, x0, yy, INK, 1));
+      if (v > range.min && v < range.max) g.push(line(x0, yy, x1, yy, pal.grid, 1));
+      g.push(line(x0 - 4, yy, x0, yy, pal.ink, 1));
       const lbl = `${svgMinus(localizeDecimal(trimTrailingZeros(v.toFixed(2)), locale))}`;
-      g.push(text(x0 - 7, yy + 3.5, lbl, { anchor: 'end', size: 10, mono: true }));
+      g.push(text(x0 - 7, yy + 3.5, lbl, { anchor: 'end', size: 10, mono: true }, pal.ink));
     }
-    g.push(`<rect x="${n(x0)}" y="${n(top)}" width="${n(plotW)}" height="${n(bot - top)}" fill="none" stroke="${INK}" stroke-width="1"/>`);
+    g.push(`<rect x="${n(x0)}" y="${n(top)}" width="${n(plotW)}" height="${n(bot - top)}" fill="none" stroke="${pal.ink}" stroke-width="1"/>`);
     g.push(
-      `<text x="${n(x0 - 54)}" y="${n((top + bot) / 2)}" text-anchor="middle" font-family="${SANS}" font-size="11" fill="${INK}" transform="rotate(-90 ${n(x0 - 54)} ${n((top + bot) / 2)})">${escapeXml(axisTitle)}</text>`,
+      `<text x="${n(x0 - 54)}" y="${n((top + bot) / 2)}" text-anchor="middle" font-family="${SANS}" font-size="11" fill="${pal.ink}" transform="rotate(-90 ${n(x0 - 54)} ${n((top + bot) / 2)})">${escapeXml(axisTitle)}</text>`,
     );
     const accepted = pts.filter((p) => p.accepted && finiteNum(pick(p)));
     if (accepted.length > 1) {
       const d = accepted.map((p, i) => `${i === 0 ? 'M' : 'L'}${n(mapF(p.frequencyHz))} ${n(map(pick(p) as number))}`).join('');
-      g.push(`<path d="${d}" fill="none" stroke="${INK}" stroke-width="1.6" stroke-linejoin="round"/>`);
+      g.push(`<path d="${d}" fill="none" stroke="${pal.ink}" stroke-width="1.6" stroke-linejoin="round"/>`);
     }
     for (const p of pts) {
       const v = pick(p);
       if (!finiteNum(v)) continue;
       const cx = mapF(p.frequencyHz);
       const cy = Math.min(bot, Math.max(top, map(v)));
-      if (p.accepted) g.push(`<circle cx="${n(cx)}" cy="${n(cy)}" r="3" fill="${INK}"/>`);
-      else g.push(`<circle cx="${n(cx)}" cy="${n(cy)}" r="3.2" fill="${PAPER}" stroke="${MUTED}" stroke-width="1.2"/>`);
+      if (p.accepted) g.push(`<circle cx="${n(cx)}" cy="${n(cy)}" r="3" fill="${pal.ink}"/>`);
+      else g.push(`<circle cx="${n(cx)}" cy="${n(cy)}" r="3.2" fill="${pal.paper}" stroke="${pal.muted}" stroke-width="1.2"/>`);
     }
     g.push('</g>');
     return g.join('');
@@ -486,33 +514,33 @@ export function renderBodeSvg(result: BodeResult, options: SvgExportOptions = {}
   const axis: string[] = [];
   for (let d = dMin; d <= dMax; d++) {
     const xx = mapF(10 ** d);
-    axis.push(line(xx, pBot, xx, pBot + 4, INK, 1));
-    axis.push(line(xx, gBot, xx, gBot + 4, INK, 1));
+    axis.push(line(xx, pBot, xx, pBot + 4, pal.ink, 1));
+    axis.push(line(xx, gBot, xx, gBot + 4, pal.ink, 1));
     const lbl = formatEng(10 ** d, 'Hz', locale, { sig: 3, trim: true });
-    axis.push(text(xx, pBot + 16, lbl, { anchor: 'middle', size: 10, mono: true }));
-    axis.push(text(xx, gBot + 16, lbl, { anchor: 'middle', size: 10, mono: true, fill: MUTED }));
+    axis.push(text(xx, pBot + 16, lbl, { anchor: 'middle', size: 10, mono: true }, pal.ink));
+    axis.push(text(xx, gBot + 16, lbl, { anchor: 'middle', size: 10, mono: true, fill: pal.muted }, pal.ink));
   }
-  axis.push(text((x0 + x1) / 2, pBot + 30, t.frequencyAxis, { anchor: 'middle', size: 11 }));
+  axis.push(text((x0 + x1) / 2, pBot + 30, t.frequencyAxis, { anchor: 'middle', size: 11 }, pal.ink));
   out.push(`<g aria-label="frequency axis">${axis.join('')}</g>`);
 
   if (pts.length === 0) {
-    out.push(text((x0 + x1) / 2, (gTop + gBot) / 2, t.noPoints, { anchor: 'middle', size: 13, fill: MUTED }));
+    out.push(text((x0 + x1) / 2, (gTop + gBot) / 2, t.noPoints, { anchor: 'middle', size: 13, fill: pal.muted }, pal.ink));
   }
 
   if (finiteNum(result.cutoffHz) && result.cutoffHz > 0) {
     const cx = mapF(result.cutoffHz);
     const c: string[] = ['<g aria-label="cutoff">'];
-    c.push(line(cx, gTop, cx, pBot, INK, 1, '4 3'));
+    c.push(line(cx, gTop, cx, pBot, pal.ink, 1, '4 3'));
     if (finiteNum(result.cutoffTargetDb)) {
       const yy = mapG(result.cutoffTargetDb);
-      c.push(line(x0, yy, x1, yy, MUTED, 1, '1 2'));
-      c.push(text(x1 - 4, yy - 4, `${MINUS}3 dB`, { anchor: 'end', size: 10, mono: true, fill: MUTED }));
+      c.push(line(x0, yy, x1, yy, pal.muted, 1, '1 2'));
+      c.push(text(x1 - 4, yy - 4, `${MINUS}3 dB`, { anchor: 'end', size: 10, mono: true, fill: pal.muted }, pal.ink));
     }
     const label = `fc = ${formatEng(result.cutoffHz, 'Hz', locale, { sig: 4, trim: true })}`;
     const rightSide = cx < x1 - 120;
     const lx = rightSide ? cx + 6 : cx - 6;
-    c.push(`<rect x="${n(rightSide ? lx - 2 : lx - 112)}" y="${n(gTop + 6)}" width="114" height="16" fill="${PAPER}"/>`);
-    c.push(text(lx, gTop + 18, label, { anchor: rightSide ? 'start' : 'end', size: 11, mono: true, weight: 600 }));
+    c.push(`<rect x="${n(rightSide ? lx - 2 : lx - 112)}" y="${n(gTop + 6)}" width="114" height="16" fill="${pal.paper}"/>`);
+    c.push(text(lx, gTop + 18, label, { anchor: rightSide ? 'start' : 'end', size: 11, mono: true, weight: 600 }, pal.ink));
     c.push('</g>');
     out.push(c.join(''));
   }
@@ -520,18 +548,18 @@ export function renderBodeSvg(result: BodeResult, options: SvgExportOptions = {}
   if (options.showLegend !== false) {
     const ly = pBot + axisH + 22;
     const lg: string[] = ['<g aria-label="legend">'];
-    lg.push(line(x0, ly - 4, x0 + 24, ly - 4, INK, 1.6));
-    lg.push(`<circle cx="${n(x0 + 12)}" cy="${n(ly - 4)}" r="3" fill="${INK}"/>`);
-    lg.push(text(x0 + 32, ly, t.acceptedKey, { size: 11 }));
+    lg.push(line(x0, ly - 4, x0 + 24, ly - 4, pal.ink, 1.6));
+    lg.push(`<circle cx="${n(x0 + 12)}" cy="${n(ly - 4)}" r="3" fill="${pal.ink}"/>`);
+    lg.push(text(x0 + 32, ly, t.acceptedKey, { size: 11 }, pal.ink));
     const rx = x0 + 260;
-    lg.push(`<circle cx="${n(rx + 12)}" cy="${n(ly - 4)}" r="3.2" fill="${PAPER}" stroke="${MUTED}" stroke-width="1.2"/>`);
-    lg.push(text(rx + 24, ly, t.rejectedKey, { size: 11 }));
+    lg.push(`<circle cx="${n(rx + 12)}" cy="${n(ly - 4)}" r="3.2" fill="${pal.paper}" stroke="${pal.muted}" stroke-width="1.2"/>`);
+    lg.push(text(rx + 24, ly, t.rejectedKey, { size: 11 }, pal.ink));
     if (finiteNum(result.passbandGainDb)) {
       lg.push(
-        text(x1, ly, `${t.passband} ${svgMinus(formatEng(result.passbandGainDb, 'dB', locale))}`, { anchor: 'end', size: 11, mono: true }),
+        text(x1, ly, `${t.passband} ${svgMinus(formatEng(result.passbandGainDb, 'dB', locale))}`, { anchor: 'end', size: 11, mono: true }, pal.ink),
       );
     }
-    lg.push(text(x0, ly + 18, `Graticule v${GRATICULE_VERSION}`, { size: 9, fill: SOFT }));
+    lg.push(text(x0, ly + 18, `Graticule v${GRATICULE_VERSION}`, { size: 9, fill: pal.soft }, pal.ink));
     lg.push('</g>');
     out.push(lg.join(''));
   }

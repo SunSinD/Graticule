@@ -47,6 +47,7 @@ const en = {
   zoomHint: 'Ctrl and scroll also zoom',
   photoTitle: 'This photo may not read well',
   photoRetake: 'Retake photo',
+  photoChooseAnother: 'Choose another image',
   photoUseAnyway: 'Use anyway',
   photoIssues: {
     blurry: 'It looks blurry. Hold the phone still and tap the screen to focus.',
@@ -187,6 +188,7 @@ const fr: Dict = {
   zoomHint: 'Ctrl et la molette zooment aussi',
   photoTitle: 'Cette photo risque d’être mal lue',
   photoRetake: 'Reprendre la photo',
+  photoChooseAnother: 'Choisir une autre image',
   photoUseAnyway: 'Utiliser quand même',
   photoIssues: {
     blurry: 'La photo est floue. Tenez le téléphone immobile et touchez l’écran pour faire la mise au point.',

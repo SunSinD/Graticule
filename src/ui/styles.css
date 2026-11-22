@@ -868,7 +868,7 @@ input.tiny {
 }
 
 .paper {
-  background: #fff;
+  background: var(--bg);
   border: 1px solid var(--line);
   border-radius: 4px;
   padding: 8px;
