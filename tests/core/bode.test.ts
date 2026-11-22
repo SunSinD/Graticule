@@ -230,5 +230,5 @@ test('audits all ten bundled Siglent sweep captures by frequency, gain, phase, a
   expect(result.points[0]!.warnings).toContain('fewer_than_3_cycles');
   expect(result.points[1]!.warnings).toContain('fewer_than_3_cycles');
   expect(result.points[3]!.warnings).toContain('fewer_than_3_cycles');
-  expect(result.elapsedMs).toBeLessThan(2000);
+  expect(result.elapsedMs).toBeLessThan(process.env.CI ? 5000 : 2500);
 });

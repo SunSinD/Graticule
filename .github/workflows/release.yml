@@ -28,10 +28,12 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         env:
           GITHUB_REF_NAME: ${{ github.ref_name }}
-        run: node --input-type=module -e "import fs from 'node:fs'; const expected = 'v' + JSON.parse(fs.readFileSync('package.json', 'utf8')).version; if (process.env.GITHUB_REF_NAME !== expected) throw new Error('Release tag does not match package.json version: expected ' + expected);"
+        run: |
+          node --input-type=module -e "import fs from 'node:fs'; const expected = 'v' + JSON.parse(fs.readFileSync('package.json', 'utf8')).version; if (process.env.GITHUB_REF_NAME !== expected) throw new Error('Release tag does not match package.json version (expected ' + expected + ')');"
       - run: npm run verify:parity
       - name: Verify gzipped web bundle size
-        run: node --input-type=module -e "import fs from 'node:fs'; import zlib from 'node:zlib'; import path from 'node:path'; const dir='dist/assets'; const bytes=fs.readdirSync(dir).filter((n)=>/\.m?js$/.test(n)||n.endsWith('.css')).reduce((n,f)=>n+zlib.gzipSync(fs.readFileSync(path.join(dir,f))).length,0); console.log('Gzipped JS+CSS:',bytes,'bytes'); if(bytes>=300*1024) throw new Error('Gzipped JS+CSS bundle is 300 KB or larger');"
+        run: |
+          node --input-type=module -e "import fs from 'node:fs'; import zlib from 'node:zlib'; import path from 'node:path'; const dir='dist/assets'; const bytes=fs.readdirSync(dir).filter((n)=>/\.m?js$/.test(n)||n.endsWith('.css')).reduce((n,f)=>n+zlib.gzipSync(fs.readFileSync(path.join(dir,f))).length,0); console.log('Gzipped JS+CSS:',bytes,'bytes'); if(bytes>=300*1024) throw new Error('Gzipped JS+CSS bundle is 300 KB or larger');"
       - run: npm pack --pack-destination dist-portable
       - name: Generate SHA256SUMS
         run: |
