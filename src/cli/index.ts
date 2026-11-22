@@ -11,7 +11,7 @@ import type { TableFormat } from '../core/export/table.js';
 import { analyzeBodeBatch, analyzePngBytes } from '../core/pipeline.js';
 import { CHANNELS } from '../core/pixels.js';
 import { getNativeProfile } from '../core/profiles.js';
-import type { ExtractionOverrides, ExtractionResult, Locale, ProfileId, Quad } from '../core/types.js';
+import type { BodeRejectedCapture, ExtractionOverrides, ExtractionResult, Locale, ProfileId, Quad } from '../core/types.js';
 
 const usage = `Usage
   graticule capture.png [options]
@@ -39,12 +39,13 @@ const tableExtensions: Readonly<Record<TableFormat, string>> = {
   tsv: 'tsv', markdown: 'md', html: 'html', latex: 'tex',
 };
 
-function scale(raw: string, flag: string, unit: 's' | 'V'): number {
+function scale(raw: string, flag: string, unit: 's' | 'V', divisions: number): number {
   const value = parseEngineering(raw);
   const suffix = raw.replace(/\s+/g, '').replace(/\/div$/i, '');
   if (value === null || value <= 0 || (/[vsa]$|(?:hz|db|div)$|[%°]$/i.test(suffix) && !suffix.toLowerCase().endsWith(unit.toLowerCase()))) {
     throw new Error(`Invalid ${flag} value: ${raw}`);
   }
+  if (!Number.isFinite(value * divisions)) throw new Error(`Invalid ${flag} value: ${raw} exceeds the numeric range across the grid`);
   return value;
 }
 
@@ -81,7 +82,8 @@ async function run(): Promise<void> {
     throw new Error('Use --format tsv, markdown, html or latex.');
   }
   const profileId = values.profile as ProfileId | undefined;
-  if (profileId !== undefined && profileId !== 'universal-fallback' && !getNativeProfile(profileId)) {
+  const nativeProfile = profileId === undefined ? undefined : getNativeProfile(profileId);
+  if (profileId !== undefined && profileId !== 'universal-fallback' && !nativeProfile) {
     throw new Error(`Unknown profile: ${profileId}`);
   }
   const channels: NonNullable<ExtractionOverrides['channels']> = {};
@@ -89,11 +91,12 @@ async function run(): Promise<void> {
     const match = /^\s*(C[1-4])\s*=\s*(.+)$/i.exec(entry);
     const id = CHANNELS.find(channel => channel === match?.[1]?.toUpperCase());
     if (!id) throw new Error(`Use --vdiv C1=2V, C2=2V, C3=2V or C4=2V. Got ${entry}`);
-    channels[id] = { voltsPerDiv: scale(match![2]!, '--vdiv', 'V') };
+    channels[id] = { voltsPerDiv: scale(match![2]!, '--vdiv', 'V', 8) };
   }
+  const secPerDivArg = values['sec-per-div'];
+  const secPerDiv = secPerDivArg === undefined ? undefined : scale(secPerDivArg, '--sec-per-div', 's', 10);
   const overrides: ExtractionOverrides = {
-    profileId, channels,
-    secPerDiv: values['sec-per-div'] === undefined ? undefined : scale(values['sec-per-div'], '--sec-per-div', 's'),
+    profileId, channels, secPerDiv,
     manualQuad: values.deskew === undefined ? undefined : deskew(values.deskew),
   };
   const formats: Output[] = [];
@@ -107,7 +110,7 @@ async function run(): Promise<void> {
       .filter(entry => entry.isFile() && extname(entry.name).toLowerCase() === '.png')
       .sort((a, b) => a.name.localeCompare(b.name, 'en', { numeric: true }));
     if (!entries.length) throw new Error(`No PNG files in ${folder}`);
-    const captures: ExtractionResult[] = [];
+    const captures: (ExtractionResult | BodeRejectedCapture)[] = [];
     for (const { name } of entries) {
       const file = join(folder, name);
       inputs.push(file);
@@ -116,9 +119,9 @@ async function run(): Promise<void> {
       } catch (error) {
         process.stderr.write(`graticule: ${file}: ${error instanceof Error ? error.message : String(error)}\n`);
         process.exitCode = 1;
+        captures.push({ fileName: name, rejectionReason: 'capture_unreadable' });
       }
     }
-    if (!captures.length) throw new Error(`No readable PNG files in ${folder}`);
     const result = analyzeBodeBatch(captures);
     if (values.csv) formats.push({ extension: 'csv', text: renderBodeCsv(result) });
     if (values.svg) formats.push({ extension: 'svg', text: renderBodeSvg(result, svgOptions) });

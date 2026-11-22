@@ -1,6 +1,6 @@
 import type { Locale } from '../types.js';
 
-export const GRATICULE_VERSION = '1.1.1';
+export const GRATICULE_VERSION = '1.1.2';
 export const EMPTY_CELL = '\u2014';
 
 export function spreadsheetText(text: string): string {
@@ -162,13 +162,12 @@ const MULTIPLIERS: Readonly<Record<string, number>> = {
 const UNIT_SUFFIXES: readonly string[] = ['hz', 'db', 'div', 'v', 's', '\u00b0', '%', 'a'];
 
 export function parseEngineering(input: string): number | null {
-  const text = input.trim().replace(/\s+/g, '').replace(/\/div$/i, '').replace(/,/g, '.').replace(/\u2212/g, '-');
-  if (!text) return null;
-  const match = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/i.exec(text);
+  const text = input.trim().replace(/,/g, '.').replace(/\u2212/g, '-');
+  const match = /^([+-]?)\s*((?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)/i.exec(text);
   if (!match) return null;
-  const base = Number(match[0]);
+  const base = Number(match[1]! + match[2]!);
   if (!Number.isFinite(base)) return null;
-  let rest = text.slice(match[0].length);
+  let rest = text.slice(match[0].length).replace(/\s+/g, '').replace(/\/div$/i, '');
   const lower = rest.toLowerCase();
   for (const unit of UNIT_SUFFIXES) {
     if (lower.endsWith(unit)) {
@@ -178,6 +177,6 @@ export function parseEngineering(input: string): number | null {
   }
   const mult = MULTIPLIERS[rest];
   if (mult === undefined) return null;
-  const value = base * mult;
-  return Number.isFinite(value) ? cleanFloat(value) : null;
+  const value = cleanFloat(base * mult);
+  return Number.isFinite(value) ? value : null;
 }

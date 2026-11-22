@@ -462,7 +462,7 @@ input.tiny {
   color: var(--muted);
 }
 
-.exports:focus {
+.exports:focus:not(:focus-visible) {
   outline: none;
 }
 
@@ -764,6 +764,11 @@ input.tiny {
   padding: 8px;
 }
 
+.crop-bar > .crop-hint {
+  flex: 1 1 200px;
+  min-width: min(200px, 100%);
+}
+
 .capture {
   display: flex;
   flex-direction: column;
@@ -864,12 +869,15 @@ input.tiny {
   position: absolute;
   inset: 0;
   overflow: visible;
+  /* Empty spots fall through to the plot so a swipe scrolls the page. Chromium takes touch-action from this svg, not its lines. */
+  pointer-events: none;
   touch-action: none;
 }
 
 .cursor {
   cursor: ew-resize;
   outline: none;
+  pointer-events: auto;
   touch-action: none;
 }
 

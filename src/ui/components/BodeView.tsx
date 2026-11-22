@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import type { BodePoint, BodePointOverride, BodeResult, Locale } from '../../core/types';
 import { renderBodeSvg } from '../../core/export/svg';
@@ -17,6 +17,8 @@ interface Props {
   readonly result: BodeResult;
   readonly overrides: Readonly<Record<string, BodePointOverride>>;
   readonly inspectedId: string | null;
+  readonly focusId?: string | null;
+  readonly onFocused?: () => void;
   readonly onEdit: (id: string, key: EditKey, value: number | null) => void;
   readonly onExclude: (id: string, excluded: boolean) => void;
   readonly onInspect: (id: string) => void;
@@ -80,12 +82,26 @@ function plainNumber(text: string): string {
   return text.replace(/\s*(dB|°)$/, '');
 }
 
-export function BodeView({ tx, locale, dark, result, overrides, inspectedId, onEdit, onExclude, onInspect, onReset }: Props) {
+export function BodeView(props: Props) {
+  const { tx, locale, dark, result, overrides, inspectedId, focusId, onFocused, onEdit, onExclude, onInspect, onReset } = props;
   const svg = useMemo(() => renderBodeSvg(result, { locale, title: 'Bode', theme: dark ? 'dark' : 'light' }), [result, locale, dark]);
   const hasEdits = Object.keys(overrides).length > 0;
   const [zoom, setZoom] = useState(100);
   const viewport = useRef<HTMLDivElement>(null);
   useCtrlWheelZoom(viewport, zoom, ZOOM_MAX, setZoom);
+  const table = useRef<HTMLTableSectionElement>(null);
+
+  useEffect(() => {
+    if (!focusId) return;
+    const buttons = table.current?.querySelectorAll<HTMLButtonElement>('td.file .linklike') ?? [];
+    for (const b of buttons) {
+      if (b.dataset.point === focusId) {
+        b.focus();
+        break;
+      }
+    }
+    onFocused?.();
+  }, [focusId, onFocused]);
 
   const row = (p: BodePoint) => {
     const excluded = overrides[p.id]?.excluded === true;
@@ -119,7 +135,7 @@ export function BodeView({ tx, locale, dark, result, overrides, inspectedId, onE
           />
         </td>
         <td className="file">
-          <button type="button" className="linklike" onClick={() => onInspect(p.id)} title={tx.inspect}>
+          <button type="button" className="linklike" data-point={p.id} onClick={() => onInspect(p.id)} title={tx.inspect}>
             {p.fileName}
           </button>
           {p.edited && <span className="tag">{tx.edited}</span>}
@@ -174,7 +190,7 @@ export function BodeView({ tx, locale, dark, result, overrides, inspectedId, onE
               <th>{tx.colStatus}</th>
             </tr>
           </thead>
-          <tbody>{result.points.map(row)}</tbody>
+          <tbody ref={table}>{result.points.map(row)}</tbody>
         </table>
       </div>
     </div>

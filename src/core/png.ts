@@ -20,6 +20,22 @@ function crc32(bytes: Uint8Array, start: number, end: number): number {
   return (~crc) >>> 0;
 }
 
+function adler32(bytes: Uint8Array): number {
+  const modulus = 65521;
+  let a = 1;
+  let b = 0;
+  for (let start = 0; start < bytes.length; start += 5552) {
+    const end = Math.min(bytes.length, start + 5552);
+    for (let i = start; i < end; i++) {
+      a += bytes[i]!;
+      b += a;
+    }
+    a %= modulus;
+    b %= modulus;
+  }
+  return ((b << 16) | a) >>> 0;
+}
+
 export function hasPngSignature(bytes: Uint8Array): boolean {
   return PNG_SIGNATURE.every((byte, index) => bytes[index] === byte);
 }
@@ -154,6 +170,9 @@ export function decodePng(bytes: Uint8Array): RgbaImage {
     throw new Error('Invalid PNG: unable to decompress scanlines', { cause: error });
   }
   if (inflated.length !== scanlineBytes) throw new Error('Invalid PNG: decompressed scanline byte length mismatch');
+  if (adler32(inflated) !== readU32BE(compressed, compressed.length - 4)) {
+    throw new Error('Invalid PNG: zlib Adler-32 checksum mismatch');
+  }
 
   const out = new Uint8ClampedArray(rgbaBytes);
   let prev = new Uint8Array(stride);

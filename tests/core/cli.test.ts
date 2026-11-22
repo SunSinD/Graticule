@@ -56,6 +56,9 @@ describe('command line', () => {
   test.each([
     ['--theme', 'blue', /--theme/], ['--format', 'pdf', /--format/], ['--profile', 'unlisted', /Unknown profile/],
     ['--vdiv', 'C5=1V', /--vdiv/], ['--sec-per-div', '2mV', /--sec-per-div/],
+    ['--sec-per-div', '1e308s', /Invalid --sec-per-div.*exceeds the numeric range/],
+    ['--vdiv', 'C1=1e308V', /Invalid --vdiv.*exceeds the numeric range/],
+    ['--sec-per-div', '1 2 ms', /Invalid --sec-per-div/], ['--vdiv', 'C1=1 2 V', /Invalid --vdiv/],
     ['--deskew', '0,0,100,100,100,0,0,100', /deskew corners/],
   ] as const)('rejects invalid %s input', (flag, value, message) => {
     const result = cli(input, flag, value);
@@ -111,17 +114,32 @@ describe('command line', () => {
     expect(stderr).toBe('');
   });
 
-  test('keeps good Bode captures and identifies an unreadable file on stderr', () => {
+  test('keeps unreadable captures in the Bode sweep and prevents a cutoff through them', () => {
     const dir = join(root, 'batch');
     mkdirSync(dir);
-    writeFileSync(join(dir, 'good.png'), sample('sweep_04.png'));
+    writeFileSync(join(dir, 'passband.png'), sample('sweep_02.png'));
+    writeFileSync(join(dir, 'stopband.png'), sample('sweep_05.png'));
+    const baseline = cli('--bode', dir, '--json');
+    expect(baseline.status, baseline.stderr).toBe(0);
+    const clean: unknown = JSON.parse(baseline.stdout);
+    expect(clean).toMatchObject({ acceptedCount: 2, cutoffHz: expect.any(Number) });
+
     const corrupt = Uint8Array.from(sample('sweep_04.png'));
     corrupt[corrupt.length - 1] = corrupt[corrupt.length - 1]! ^ 1;
-    writeFileSync(join(dir, 'bad.png'), corrupt);
-    const result = cli('--bode', dir, '--csv');
+    writeFileSync(join(dir, 'bad 1000 Hz.png'), corrupt);
+    writeFileSync(join(dir, 'bad unknown.png'), corrupt);
+    const result = cli('--bode', dir, '--json');
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain('good.png');
-    expect(result.stdout).not.toContain('bad.png');
-    expect(result.stderr).toMatch(/bad\.png: Invalid PNG: CRC mismatch in IEND/);
-  });
+    expect(result.stderr).toMatch(/bad 1000 Hz\.png: Invalid PNG: CRC mismatch in IEND/);
+    expect(result.stderr).toMatch(/bad unknown\.png: Invalid PNG: CRC mismatch in IEND/);
+    const sweep: unknown = JSON.parse(result.stdout);
+    expect(sweep).toMatchObject({ acceptedCount: 2, rejectedCount: 2, cutoffHz: null, points: [
+      { fileName: 'passband.png', accepted: true },
+      { fileName: 'bad 1000 Hz.png', accepted: false, frequencyHz: 1000, frequencySource: 'filename',
+        rejectionReasons: ['capture_unreadable'], extraction: null },
+      { fileName: 'stopband.png', accepted: true },
+      { fileName: 'bad unknown.png', accepted: false, frequencyHz: null, frequencySource: 'none',
+        rejectionReasons: ['capture_unreadable'], extraction: null },
+    ] });
+  }, 15_000);
 });

@@ -176,7 +176,7 @@ const CHS: readonly ChannelId[] = ['C1', 'C2', 'C3', 'C4'];
 export function BodeSummary({ tx, locale, result, gate, onGate }: BodeProps) {
   const input = gate.inputChannel ?? result?.inputChannel ?? 'C1';
   const output = gate.outputChannel ?? result?.outputChannel ?? 'C2';
-  const bandPass = result?.cutoffLowHz != null && result.cutoffHighHz != null;
+  const sided = result != null && (result.cutoffLowHz != null || result.cutoffHighHz != null);
   return (
     <section>
       <h2>{tx.bodeSummary}</h2>
@@ -203,16 +203,20 @@ export function BodeSummary({ tx, locale, result, gate, onGate }: BodeProps) {
           <dt>{tx.passband}</dt>
           <dd className="num">{formatEng(result?.passbandGainDb ?? null, 'dB', locale)}</dd>
         </div>
-        {bandPass && result ? (
+        {sided && result ? (
           <>
-            <div>
-              <dt>{tx.cutoffLow}</dt>
-              <dd className="num">{formatEng(result.cutoffLowHz, 'Hz', locale, { sig: 4 })}</dd>
-            </div>
-            <div>
-              <dt>{tx.cutoffHigh}</dt>
-              <dd className="num">{formatEng(result.cutoffHighHz, 'Hz', locale, { sig: 4 })}</dd>
-            </div>
+            {result.cutoffLowHz != null && (
+              <div>
+                <dt>{tx.cutoffLow}</dt>
+                <dd className="num">{formatEng(result.cutoffLowHz, 'Hz', locale, { sig: 4 })}</dd>
+              </div>
+            )}
+            {result.cutoffHighHz != null && (
+              <div>
+                <dt>{tx.cutoffHigh}</dt>
+                <dd className="num">{formatEng(result.cutoffHighHz, 'Hz', locale, { sig: 4 })}</dd>
+              </div>
+            )}
           </>
         ) : (
           <div>

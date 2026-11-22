@@ -10,6 +10,7 @@ import type {
   PlotTheme,
   SvgExportOptions,
 } from '../types.js';
+import { aggregateBodeFrequencies } from '../bode.js';
 import { projectRectToQuad } from '../deskew.js';
 import { GRATICULE_VERSION, formatEng, localizeDecimal, trimTrailingZeros } from './format.js';
 import { EXPORT_TEXT, GAP_LABELS, SVG_TEXT } from './labels.js';
@@ -497,6 +498,7 @@ export function renderBodeSvg(result: BodeResult, options: SvgExportOptions = {}
   const pBot = pTop + panelH;
 
   const pts = result.points.filter(validFreq).slice().sort((a, b) => a.frequencyHz - b.frequencyHz);
+  const curve = aggregateBodeFrequencies(pts);
   const freqs = pts.map((p) => p.frequencyHz);
   const cutoffEntries = result.cutoffLowHz != null || result.cutoffHighHz != null
     ? [{ frequency: result.cutoffLowHz, side: 'low' }, { frequency: result.cutoffHighHz, side: 'high' }] as const
@@ -556,7 +558,7 @@ export function renderBodeSvg(result: BodeResult, options: SvgExportOptions = {}
     bot: number,
     range: Range,
     map: (v: number) => number,
-    pick: (p: BodePoint) => number | null,
+    metric: 'gainDb' | 'phaseDeg',
     wrapPhase = false,
   ): string => {
     const g: string[] = [`<g aria-label="${escapeXml(label)}">`];
@@ -577,9 +579,9 @@ export function renderBodeSvg(result: BodeResult, options: SvgExportOptions = {}
     );
     let previous: number | null = null;
     let d = '';
-    for (const point of pts) {
-      const value = pick(point);
-      if (!point.accepted || !finiteNum(value)) {
+    for (const point of curve) {
+      const value = point[metric];
+      if (!finiteNum(value)) {
         previous = null;
         continue;
       }
@@ -591,7 +593,7 @@ export function renderBodeSvg(result: BodeResult, options: SvgExportOptions = {}
       g.push(`<path d="${d}" fill="none" stroke="${pal.ink}" stroke-width="1.6" stroke-linejoin="round"/>`);
     }
     for (const p of pts) {
-      const v = pick(p);
+      const v = p[metric];
       if (!finiteNum(v)) continue;
       const cx = mapF(p.frequencyHz);
       const cy = Math.min(bot, Math.max(top, map(v)));
@@ -602,8 +604,8 @@ export function renderBodeSvg(result: BodeResult, options: SvgExportOptions = {}
     return g.join('');
   };
 
-  out.push(panel('Gain plot', t.gainAxis, gTop, gBot, gR, mapG, (p) => p.gainDb));
-  out.push(panel('Phase plot', t.phaseAxis, pTop, pBot, pR, mapP, (p) => p.phaseDeg, true));
+  out.push(panel('Gain plot', t.gainAxis, gTop, gBot, gR, mapG, 'gainDb'));
+  out.push(panel('Phase plot', t.phaseAxis, pTop, pBot, pR, mapP, 'phaseDeg', true));
 
   const axis: string[] = [];
   for (const d of decades) {

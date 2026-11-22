@@ -6,8 +6,8 @@ import { buildOverlayMask } from './mask.js';
 import { compareScope, measureChannel, measurePhase, scopeFrequency } from './measurements.js';
 import { readScopeMetadata } from './ocr.js';
 import { decodePng } from './png.js';
-import { detectProfile } from './profiles.js';
-import type { BodeGateOptions, BodeResult, ExtractionOverrides, ExtractionResult, RgbaImage } from './types.js';
+import { detectProfile, getNativeProfile } from './profiles.js';
+import type { BodeGateOptions, BodeRejectedCapture, BodeResult, ExtractionOverrides, ExtractionResult, RgbaImage } from './types.js';
 
 export { recomputeBodeResult } from './bode.js';
 export type { BodeOverrides } from './bode.js';
@@ -16,12 +16,14 @@ export function analyzeCapture(source: RgbaImage, fileName: string, overrides: E
   const start = performance.now();
   const quad = overrides.manualQuad;
   const image = quad ? rectifyGrid(source, quad) : source;
+  const nativeGrid = quad && overrides.profileId ? getNativeProfile(overrides.profileId)?.graticule : undefined;
   const detection = detectProfile(image, quad ? {
     ...overrides, profileId: 'universal-fallback',
+    hDivs: overrides.hDivs ?? nativeGrid?.hDivs, vDivs: overrides.vDivs ?? nativeGrid?.vDivs,
     manualCrop: { x: 0, y: 0, width: image.width - 1, height: image.height - 1 },
   } : overrides);
   const metadata = readScopeMetadata(image, detection);
-  const timebase = makeTimebase(metadata, overrides);
+  const timebase = makeTimebase(metadata, overrides, detection.grid.hDivs);
   const { scopeReadings, topFrequencyHz, topFrequencyRaw } = metadata;
   const mask = buildOverlayMask(image, detection.grid, detection.profileId);
   const { traces, warnings } = extractTraces(image, detection, metadata, mask, timebase, overrides);
@@ -51,7 +53,7 @@ export interface BodeCaptureInput {
   readonly overrides?: ExtractionOverrides;
 }
 
-export function analyzeBodeBatch(captures: readonly (BodeCaptureInput | ExtractionResult)[], options?: BodeGateOptions,
+export function analyzeBodeBatch(captures: readonly (BodeCaptureInput | ExtractionResult | BodeRejectedCapture)[], options?: BodeGateOptions,
   overrides?: BodeOverrides): BodeResult {
   const start = performance.now();
   const extractions = captures.map(capture => 'bytes' in capture ? analyzePngBytes(capture.bytes, capture.fileName, capture.overrides) : capture);

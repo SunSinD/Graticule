@@ -41,8 +41,8 @@ self.addEventListener('fetch', (event) => {
         })
         .catch(async () => {
           const cache = await caches.open(CACHE_NAME);
-          return (await cache.match('./index.html', { ignoreSearch: true }))
-            || (await cache.match('./', { ignoreSearch: true }))
+          return (await cache.match('./index.html', { ignoreSearch: true, ignoreVary: true }))
+            || (await cache.match('./', { ignoreSearch: true, ignoreVary: true }))
             || new Response('Offline', { status: 503, headers: { 'Content-Type': 'text/plain' } });
         }),
     );
@@ -55,35 +55,34 @@ self.addEventListener('fetch', (event) => {
     const isStaticAsset = /^(?:manifest\.webmanifest|favicon\.svg|icon-[^/]+\.png)$/.test(relativePath);
 
     if (isStaticAsset) {
+      const refresh = fetch(request)
+        .then(async (response) => {
+          if (response.ok) {
+            const cache = await caches.open(CACHE_NAME);
+            await cache.put(request, response.clone());
+          }
+          return response;
+        })
+        .catch(() => undefined);
+      event.waitUntil(refresh);
       event.respondWith(
-        caches.match(request).then((cached) => {
-          const refresh = fetch(request).then((response) => {
-            if (response.ok) {
-              const copy = response.clone();
-              return caches.open(CACHE_NAME).then((cache) => cache.put(request, copy)).then(() => response);
-            }
-            return response;
-          });
-          if (cached) event.waitUntil(refresh.catch(() => undefined));
-          return cached || refresh;
-        }),
+        caches.open(CACHE_NAME).then(async (cache) =>
+          (await cache.match(request, { ignoreVary: true }))
+          || (await refresh)
+          || new Response('Offline', { status: 503 }),
+        ),
       );
       return;
     }
 
     if (isHashedAsset) {
       event.respondWith(
-        caches.match(request).then((cached) => {
+        caches.open(CACHE_NAME).then(async (cache) => {
+          const cached = await cache.match(request, { ignoreVary: true });
           if (cached) return cached;
-          const refresh = fetch(request).then((response) => {
-            if (response.ok) {
-              const copy = response.clone();
-              return caches.open(CACHE_NAME).then((cache) => cache.put(request, copy)).then(() => response);
-            }
-            return response;
-          });
-          event.waitUntil(refresh.catch(() => undefined));
-          return refresh;
+          const res = await fetch(request);
+          if (res.ok) await cache.put(request, res.clone());
+          return res;
         }),
       );
     }

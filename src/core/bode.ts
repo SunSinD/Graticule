@@ -1,12 +1,13 @@
 import { fitShared, wrapPhase } from './dsp.js';
 import { parseEngineering } from './export/format.js';
 import { scopeFrequency } from './measurements.js';
-import type { BodeGateOptions, BodePoint, BodePointOverride, BodeResult, ExtractionResult } from './types.js';
+import type { BodeGateOptions, BodePoint, BodePointOverride, BodeRejectedCapture, BodeResult, ExtractionResult } from './types.js';
 
 export type BodeOverrides = Readonly<Record<string, BodePointOverride | undefined>> | ReadonlyMap<string, BodePointOverride>;
 
 const defaults: Required<BodeGateOptions> = {
   inputChannel: 'C1', outputChannel: 'C2', minCycles: 1.5, minColsPerCycle: 12, minPeakToPeakPx: 12, minR2: 0.96,
+  preferManualFrequency: false,
 };
 
 function positive(n: number | null | undefined): n is number {
@@ -22,6 +23,7 @@ function gates(options: BodeGateOptions): Required<BodeGateOptions> {
     minColsPerCycle: positive(options.minColsPerCycle) ? options.minColsPerCycle : defaults.minColsPerCycle,
     minPeakToPeakPx: positive(options.minPeakToPeakPx) ? options.minPeakToPeakPx : defaults.minPeakToPeakPx,
     minR2: minR2 >= 0 && minR2 <= 1 ? minR2 : defaults.minR2,
+    preferManualFrequency: options.preferManualFrequency ?? defaults.preferManualFrequency,
   };
 }
 
@@ -106,24 +108,88 @@ function evaluate(extraction: ExtractionResult, id: string, options: Required<Bo
   };
 }
 
-function summarize(points: BodePoint[], options: Required<BodeGateOptions>, elapsedMs: number): BodeResult {
-  points.sort((a, b) => (a.frequencyHz ?? Infinity) - (b.frequencyHz ?? Infinity));
-  const usable = (point: BodePoint): point is BodePoint & { frequencyHz: number; gainDb: number } =>
-    point.accepted && positive(point.frequencyHz) && typeof point.gainDb === 'number' && Number.isFinite(point.gainDb);
-  const acceptedCount = points.filter(usable).length;
-  const groups = new Map<number, number[]>();
+function rejectedPoint(capture: BodeRejectedCapture, id: string): BodePoint {
+  const frequencyHz = frequencyFromFileName(capture.fileName);
+  return {
+    id, fileName: capture.fileName, frequencyHz, frequencySource: frequencyHz === null ? 'none' : 'filename',
+    vinVpp: null, voutVpp: null, gainDb: null, phaseDeg: null, cycles: 0, colsPerCycle: 0, vinPx: 0, voutPx: 0,
+    r2In: null, r2Out: null, accepted: false, rejectionReasons: [capture.rejectionReason], warnings: [], edited: false,
+    extraction: null,
+  };
+}
+
+function usable(point: BodePoint): point is BodePoint & { frequencyHz: number; gainDb: number } {
+  return point.accepted && positive(point.frequencyHz) && point.gainDb !== null && Number.isFinite(point.gainDb);
+}
+
+interface BodeFrequency {
+  readonly frequencyHz: number;
+  readonly gainDb: number | null;
+  readonly phaseDeg: number | null;
+}
+
+function meanPhase(phases: number[]): number | null {
+  if (phases.length <= 1) return phases[0] ?? null;
+  let x = 0;
+  let y = 0;
+  for (const phase of phases.sort((a, b) => a - b)) {
+    const angle = phase * (Math.PI / 180);
+    x += Math.cos(angle);
+    y += Math.sin(angle);
+  }
+  return Math.hypot(x, y) > phases.length * 1e-12 ? wrapPhase(Math.atan2(y, x) * 180 / Math.PI) : null;
+}
+
+export function aggregateBodeFrequencies(points: readonly BodePoint[]): BodeFrequency[] {
+  const groups = new Map<number, { gains: number[]; phases: number[] }>();
   for (const point of points) {
     if (!positive(point.frequencyHz)) continue;
-    const gains = groups.get(point.frequencyHz) ?? [];
-    if (usable(point)) gains.push(point.gainDb);
-    groups.set(point.frequencyHz, gains);
+    const group = groups.get(point.frequencyHz) ?? { gains: [], phases: [] };
+    if (usable(point)) {
+      group.gains.push(point.gainDb);
+      if (point.phaseDeg !== null && Number.isFinite(point.phaseDeg)) group.phases.push(point.phaseDeg);
+    }
+    groups.set(point.frequencyHz, group);
   }
-  const frequencies = [...groups].map(([frequencyHz, gains]) => ({
+  return [...groups].sort(([a], [b]) => a - b).map(([frequencyHz, { gains, phases }]) => ({
     frequencyHz,
     gainDb: gains.length ? gains.sort((a, b) => a - b).reduce((sum, gain) => sum + gain / gains.length, 0) : null,
+    phaseDeg: meanPhase(phases),
   }));
-  type Frequency = (typeof frequencies)[number];
-  const accepted = frequencies.filter((point): point is Frequency & { gainDb: number } => point.gainDb !== null);
+}
+
+function interpolateCutoff(inside: BodeFrequency, outside: BodeFrequency, target: number): number | null {
+  if (inside.gainDb === null || outside.gainDb === null || inside.gainDb < target
+      || outside.gainDb > target || inside.gainDb === outside.gainDb) return null;
+  if (inside.gainDb === target) return inside.frequencyHz;
+  if (outside.gainDb === target) return outside.frequencyHz;
+  const fraction = (target / 2 - inside.gainDb / 2) / (outside.gainDb / 2 - inside.gainDb / 2);
+  return Math.exp(Math.log(inside.frequencyHz) + fraction * (Math.log(outside.frequencyHz) - Math.log(inside.frequencyHz)));
+}
+
+function findNotch(frequencies: readonly BodeFrequency[], target: number): { low: number; high: number } | null {
+  let low: number | null = null;
+  for (let i = 1; i < frequencies.length; i++) {
+    const previous = frequencies[i - 1]!;
+    const current = frequencies[i]!;
+    if (previous.gainDb === null || current.gainDb === null) {
+      low = null;
+    } else if (current.gainDb < target) {
+      low ??= interpolateCutoff(previous, current, target);
+    } else if (low !== null) {
+      const high = interpolateCutoff(current, previous, target);
+      if (high !== null) return { low, high };
+      low = null;
+    }
+  }
+  return null;
+}
+
+function summarize(points: BodePoint[], options: Required<BodeGateOptions>, elapsedMs: number): BodeResult {
+  points.sort((a, b) => (a.frequencyHz ?? Infinity) - (b.frequencyHz ?? Infinity));
+  const acceptedCount = points.filter(usable).length;
+  const frequencies = aggregateBodeFrequencies(points);
+  const accepted = frequencies.filter((point): point is BodeFrequency & { gainDb: number } => point.gainDb !== null);
   let peak = 0;
   for (let i = 1; i < accepted.length; i++) if (accepted[i]!.gainDb > accepted[peak]!.gainDb) peak = i;
   const plateauFloor = (accepted[peak]?.gainDb ?? 0) - 0.2;
@@ -134,34 +200,20 @@ function summarize(points: BodePoint[], options: Required<BodeGateOptions>, elap
   const plateau = accepted.slice(left, right + 1);
   const passbandGainDb = plateau.length ? plateau.reduce((sum, point) => sum + point.gainDb / plateau.length, 0) : null;
   const cutoffTargetDb = passbandGainDb === null ? null : passbandGainDb - 3;
-  function cutoff(start: Frequency | undefined, step: -1 | 1): number | null {
+  function cutoff(start: BodeFrequency | undefined, step: -1 | 1): number | null {
     if (!start || cutoffTargetDb === null) return null;
     for (let i = frequencies.indexOf(start); i + step >= 0 && i + step < frequencies.length; i += step) {
-      const inside = frequencies[i]!;
-      const outside = frequencies[i + step]!;
-      if (inside.gainDb === null || outside.gainDb === null || inside.gainDb < cutoffTargetDb
-          || outside.gainDb > cutoffTargetDb || inside.gainDb === outside.gainDb) continue;
-      if (inside.gainDb === cutoffTargetDb) return inside.frequencyHz;
-      if (outside.gainDb === cutoffTargetDb) return outside.frequencyHz;
-      const fraction = (cutoffTargetDb - inside.gainDb) / (outside.gainDb - inside.gainDb);
-      return Math.exp(Math.log(inside.frequencyHz) + fraction * (Math.log(outside.frequencyHz) - Math.log(inside.frequencyHz)));
+      const crossing = interpolateCutoff(frequencies[i]!, frequencies[i + step]!, cutoffTargetDb);
+      if (crossing !== null) return crossing;
     }
     return null;
   }
-  let cutoffLowHz = cutoff(plateau[0], -1);
-  let cutoffHighHz = cutoff(plateau.at(-1), 1);
   const first = accepted[0];
   const last = accepted.at(-1);
-  if (cutoffTargetDb !== null && first && last && first.gainDb > cutoffTargetDb && last.gainDb > cutoffTargetDb) {
-    const falling = cutoff(first, 1);
-    const rising = cutoff(last, -1);
-    const target = cutoffTargetDb;
-    if (falling !== null && rising !== null && falling < rising && accepted.some(point =>
-      point.frequencyHz > falling && point.frequencyHz < rising && point.gainDb < target)) {
-      cutoffLowHz = falling;
-      cutoffHighHz = rising;
-    }
-  }
+  const notch = cutoffTargetDb !== null && first && last && first.gainDb > cutoffTargetDb && last.gainDb > cutoffTargetDb
+    ? findNotch(frequencies, cutoffTargetDb) : null;
+  const cutoffLowHz = notch?.low ?? cutoff(plateau[0], -1);
+  const cutoffHighHz = notch?.high ?? cutoff(plateau.at(-1), 1);
   return {
     inputChannel: options.inputChannel, outputChannel: options.outputChannel, points, passbandGainDb,
     cutoffHz: cutoffLowHz ?? cutoffHighHz, cutoffTargetDb, cutoffLowHz, cutoffHighHz,
@@ -169,7 +221,7 @@ function summarize(points: BodePoint[], options: Required<BodeGateOptions>, elap
   };
 }
 
-export function analyzeBodeBatch(extractions: readonly ExtractionResult[], options: BodeGateOptions = {},
+export function analyzeBodeBatch(extractions: readonly (ExtractionResult | BodeRejectedCapture)[], options: BodeGateOptions = {},
   overrides: BodeOverrides = {}): BodeResult {
   const start = performance.now();
   const normalized = gates(options);
@@ -180,25 +232,37 @@ export function analyzeBodeBatch(extractions: readonly ExtractionResult[], optio
     let suffix = 2;
     while (used.has(id)) id = `${name}#${suffix++}`;
     used.add(id);
-    return evaluate(extraction, id, normalized, overrideFor(overrides, id), false);
+    return 'rejectionReason' in extraction ? rejectedPoint(extraction, id)
+      : evaluate(extraction, id, normalized, overrideFor(overrides, id), normalized.preferManualFrequency);
   });
   return summarize(points, normalized, performance.now() - start);
 }
 
 function isGateOptions(options: BodeGateOptions | BodeOverrides): options is BodeGateOptions {
-  return !(options instanceof Map) && Object.values(options).some(value => typeof value === 'number' || typeof value === 'string');
+  return !(options instanceof Map) && Object.values(options).some(value =>
+    typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean');
 }
 
 export function recomputeBodeResult(result: BodeResult, options?: BodeGateOptions): BodeResult;
 export function recomputeBodeResult(result: BodeResult, overrides: BodeOverrides | undefined, options?: BodeGateOptions): BodeResult;
 export function recomputeBodeResult(result: BodeResult, edits?: BodeOverrides | BodeGateOptions, options?: BodeGateOptions): BodeResult {
-  const start = performance.now();
   const gateOnly = options === undefined && edits !== undefined && isGateOptions(edits);
   const normalized = gates({ inputChannel: result.inputChannel, outputChannel: result.outputChannel, ...result.gateOptions,
     ...(gateOnly ? edits : options) });
+  const pairChanged = normalized.inputChannel !== result.inputChannel || normalized.outputChannel !== result.outputChannel;
+  const liveEdits = edits && !gateOnly ? edits as BodeOverrides : undefined;
   const points = result.points.map(point => {
-    if (!edits || gateOnly) return evaluate(point.extraction, point.id, normalized, point.override, point.preferManualFrequency ?? false);
-    return evaluate(point.extraction, point.id, normalized, overrideFor(edits as BodeOverrides, point.id), true);
+    if (!point.extraction) return point;
+    let edit = liveEdits ? overrideFor(liveEdits, point.id) : point.override;
+    if (pairChanged && edit) {
+      const { frequencyHz, excluded } = edit;
+      edit = frequencyHz === undefined && excluded === undefined ? undefined : {
+        ...(frequencyHz !== undefined && { frequencyHz }),
+        ...(excluded !== undefined && { excluded }),
+      };
+    }
+    return evaluate(point.extraction, point.id, normalized, edit,
+      Boolean(liveEdits || normalized.preferManualFrequency || point.preferManualFrequency));
   });
-  return summarize(points, normalized, performance.now() - start);
+  return summarize(points, normalized, result.elapsedMs);
 }

@@ -92,6 +92,23 @@ describe('step edge measurements', () => {
     expect(result.fallTimeSec).toBeNull();
   });
 
+  test('uses the settled voltage after flat overshoot and undershoot lobes', () => {
+    const result = measure([
+      ...Array<number>(30).fill(-12), ...Array<number>(6).fill(-5.6),
+      ...Array<number>(4).fill(-9.4), ...Array<number>(40).fill(-8),
+    ]);
+    expect(result.overshootPct).toBeCloseTo(60, 10);
+    expect(result.riseTimeSec).toBeCloseTo(2 * dt, 12);
+    expect(result.fallTimeSec).toBeNull();
+  });
+
+  test.each([10, 20, 30, 151])('withholds edges for a five-pixel quantized cosine at %i columns per cycle', period => {
+    const wave = Array.from({ length: period * 4 }, (_, i) => Math.round(2.5 * (1 + Math.cos(2 * Math.PI * i / period))) / 50);
+    const result = measure(wave);
+    expect(result.frequencyHz).toBeCloseTo(1 / (dt * period), 0);
+    expect(result).toMatchObject({ riseTimeSec: null, fallTimeSec: null, overshootPct: null });
+  });
+
   test.each([12, 80, 240])('rejects smooth cosine and triangle steps at %i columns per cycle', period => {
     const values = Array.from({ length: period * 4 }, (_, i) => i / period);
     for (const wave of [values.map(cycle => Math.cos(2 * Math.PI * cycle)),

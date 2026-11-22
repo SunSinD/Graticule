@@ -187,6 +187,7 @@ export function App() {
   const storeRef = useRef<HistoryStore | null>(null);
   const persisted = useRef<Map<string, HistoryItem>>(new Map());
   const cursorSaves = useRef<Map<string, number>>(new Map());
+  const saveSeq = useRef<Map<string, number>>(new Map());
   const liveUrls = useRef<Set<string>>(new Set());
   const singleReq = useRef<Map<string, number>>(new Map());
   const bodeReq = useRef<Map<string, number>>(new Map());
@@ -194,6 +195,9 @@ export function App() {
   const sessionsRef = useRef<Readonly<Record<string, BodeSession>>>({});
   const keepRef = useRef(keepHistory);
   const feedbackTimer = useRef<number | undefined>(undefined);
+  const backRef = useRef<HTMLButtonElement>(null);
+  const dismissCropRef = useRef<(resetProfile: boolean) => void>(() => undefined);
+  const [returnFocusId, setReturnFocusId] = useState<string | null>(null);
   itemsRef.current = items;
   activeRef.current = activeId;
   selectedRef.current = selected;
@@ -282,16 +286,31 @@ export function App() {
       cursorSaves.current.delete(id);
     };
     const save = (item: HistoryItem): void => {
+      const id = item.id;
+      const seq = (saveSeq.current.get(id) ?? 0) + 1;
+      saveSeq.current.set(id, seq);
       void store.put(item).then((ok) => {
         if (!ok || storeRef.current !== store) return;
-        // Removed while the write was running, so the removal effect never saw it as saved.
-        if (!itemsRef.current.some((i) => i.id === item.id)) void store.remove(item.id);
-        else if (keepRef.current) persisted.current.set(item.id, item);
+        const latest = itemsRef.current.find((i) => i.id === id);
+        // Removed, or history turned off, while the write was running.
+        if (!latest || !keepRef.current) {
+          void store.remove(id);
+          return;
+        }
+        // A newer write for this item is still running and will finish the job.
+        if (saveSeq.current.get(id) !== seq) return;
+        persisted.current.set(id, item);
+        // The item changed while this write ran, and nothing newer was saved for it.
+        if (latest !== item && latest.state !== 'extracting' && storedChange(item, latest) !== 'none') {
+          cancelCursorSave(id);
+          save(latest);
+        }
       });
     };
     for (const item of items) {
       const was = prev.get(item.id);
       if (was && item.state === 'extracting') {
+        cancelCursorSave(item.id);
         next.set(item.id, was);
         continue;
       }
@@ -309,7 +328,8 @@ export function App() {
           window.setTimeout(() => {
             cursorSaves.current.delete(id);
             const latest = itemsRef.current.find((i) => i.id === id);
-            if (latest && storeRef.current === store && persisted.current.has(id)) save(latest);
+            if (!latest || latest.state === 'extracting' || !keepRef.current) return;
+            if (storeRef.current === store && persisted.current.has(id)) save(latest);
           }, CURSOR_SAVE_DELAY),
         );
       } else {
@@ -410,7 +430,12 @@ export function App() {
       setSession(key, { gate, points });
       recomputeBode(current, gate, points).then(
         (r) => {
-          if (recomputeReq.current.get(key) === req) setSession(key, { result: r, error: null });
+          if (recomputeReq.current.get(key) !== req) return;
+          const cleaned: Record<string, BodePointOverride> = {};
+          for (const p of r.points) {
+            if (p.override && Object.keys(p.override).length > 0) cleaned[p.id] = p.override;
+          }
+          setSession(key, { result: r, points: cleaned, error: null });
         },
         (e: unknown) => {
           if (recomputeReq.current.get(key) === req) setSession(key, { error: message(e) });
@@ -436,11 +461,14 @@ export function App() {
           recomputeReq.current.set(key, (recomputeReq.current.get(key) ?? 0) + 1);
           const latest = sessionsRef.current[key] ?? STAGED_SESSION;
           setSession(key, { state: 'extracted', result: r, error: null, pointItems });
-          if (latest.gate !== gate || latest.points !== points) recompute(key, r, latest.gate, latest.points);
+          // Analysis does not prefer manual frequencies, so any point edits are applied again on top.
+          if (latest.gate !== gate || latest.points !== points || Object.keys(latest.points).length > 0) {
+            recompute(key, r, latest.gate, latest.points);
+          }
           const cache = new Map<string, ExtractionResult>();
           for (const p of r.points) {
             const itemId = pointItems[p.id];
-            if (itemId) cache.set(itemId, p.extraction);
+            if (itemId && p.extraction) cache.set(itemId, p.extraction);
           }
           setItems((all) =>
             all.map((i) => {
@@ -648,6 +676,13 @@ export function App() {
     }
   };
 
+  dismissCropRef.current = dismissCrop;
+
+  const shownPointId = inspected?.id ?? null;
+  useEffect(() => {
+    if (shownPointId !== null) backRef.current?.focus();
+  }, [shownPointId]);
+
   const toggleOverlay = useCallback(() => {
     setOverlay((o) => {
       if (!o) setView('original');
@@ -724,6 +759,11 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && help) {
         setHelp(false);
+        return;
+      }
+      if (e.key === 'Escape' && cropVisible && !e.defaultPrevented && !isTyping(e.target)) {
+        e.preventDefault();
+        dismissCropRef.current(true);
         return;
       }
       if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'c') {
@@ -942,7 +982,15 @@ export function App() {
 
         {mode === 'bode' && inspected && (
           <div className="toolbar">
-            <button type="button" className="btn" onClick={() => setInspectedId(null)}>
+            <button
+              ref={backRef}
+              type="button"
+              className="btn"
+              onClick={() => {
+                setReturnFocusId(inspectedId);
+                setInspectedId(null);
+              }}
+            >
               {tx.backToBode}
             </button>
             <span className="muted small">{captureName}</span>
@@ -1027,6 +1075,8 @@ export function App() {
             result={bode}
             overrides={session.points}
             inspectedId={inspectedId}
+            focusId={returnFocusId}
+            onFocused={() => setReturnFocusId(null)}
             onEdit={(id, key, value) => {
               const prev: Record<string, number | boolean | undefined> = { ...session.points[id] };
               if (value === null) delete prev[key];
@@ -1046,6 +1096,7 @@ export function App() {
               recompute(bodeKey, bode, session.gate, next);
             }}
             onInspect={(id) => {
+              setReturnFocusId(null);
               setInspectedId(id);
               setView('clean');
               setOverlay(false);

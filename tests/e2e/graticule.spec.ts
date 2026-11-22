@@ -639,3 +639,104 @@ test('unticking or removing Bode captures opens the one left, never the capture 
   await expect(page.getByRole('button', { name: 'Extract', exact: true })).toBeVisible();
   await expect(page.locator('.file-row[aria-current="true"]')).toContainText('sweep_02.png');
 });
+
+const SMALL_PHONE = { ...PHONE, viewport: { width: 360, height: 640 } };
+
+async function centerOf(page: Page, selector: string): Promise<{ x: number; y: number }> {
+  const box = await page.locator(selector).boundingBox();
+  expect(box).toBeTruthy();
+  return { x: box!.x + box!.width / 2, y: box!.y + box!.height / 2 };
+}
+
+test('with cursors on a small phone, swiping empty plot scrolls the page and dragging X1 moves it', async ({ browser }) => {
+  const ctx = await browser.newContext(SMALL_PHONE);
+  const page = await ctx.newPage();
+  await page.goto('/');
+  await extractSine(page);
+  await page.getByRole('button', { name: 'Cursors' }).click();
+  const x1 = page.getByRole('slider', { name: 'X1' });
+  await expect(x1).toHaveAttribute('aria-valuenow', '25');
+
+  await page.evaluate(() => {
+    const layer = document.querySelector('[data-testid="cursor-layer"]')!.getBoundingClientRect();
+    window.scrollTo(0, window.scrollY + layer.top - 60);
+    const w = window as unknown as { cancels: number };
+    w.cancels = 0;
+    document.querySelector('[data-testid="cursor-layer"]')!.addEventListener('pointercancel', () => w.cancels++, true);
+  });
+  const cdp = await ctx.newCDPSession(page);
+  const touch = (type: 'touchStart' | 'touchMove' | 'touchEnd', x: number, y: number) =>
+    cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1 }] });
+
+  const vx1 = await centerOf(page, '[aria-label="X1"] .cursor-hit');
+  const vx2 = await centerOf(page, '[aria-label="X2"] .cursor-hit');
+  const hy1 = await centerOf(page, '[aria-label="Y1"] .cursor-hit');
+  const hy2 = await centerOf(page, '[aria-label="Y2"] .cursor-hit');
+  const empty = { x: (vx1.x + vx2.x) / 2, y: (hy1.y + hy2.y) / 2 };
+  const hit = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.closest('.cursor') === null, empty);
+  expect(hit).toBe(true);
+
+  const before = await page.evaluate(() => window.scrollY);
+  await touch('touchStart', empty.x, empty.y);
+  for (let i = 1; i <= 10; i++) await touch('touchMove', empty.x, empty.y - 15 * i);
+  await touch('touchEnd', empty.x, empty.y);
+  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(before + 40);
+  await expect(x1).toHaveAttribute('aria-valuenow', '25');
+
+  await page.evaluate(() => {
+    const layer = document.querySelector('[data-testid="cursor-layer"]')!.getBoundingClientRect();
+    window.scrollTo(0, window.scrollY + layer.top - 60);
+  });
+  const line = await centerOf(page, '[aria-label="X1"] .cursor-hit');
+  const layer = await page.locator('[data-testid="cursor-layer"]').boundingBox();
+  await touch('touchStart', line.x, line.y);
+  for (let i = 1; i <= 8; i++) await touch('touchMove', line.x + (layer!.width * 0.2 * i) / 8, line.y);
+  await touch('touchEnd', line.x, line.y);
+  expect(Number(await x1.getAttribute('aria-valuenow'))).toBeGreaterThan(35);
+  expect(await page.evaluate(() => (window as unknown as { cancels: number }).cancels)).toBe(0);
+  await ctx.close();
+});
+
+test('the 4 corners warning gets a wide row in French on phones and narrow screens', async ({ browser }) => {
+  const ctx = await browser.newContext(SMALL_PHONE);
+  const page = await ctx.newPage();
+  await page.goto('/');
+  await page.getByRole('button', { name: 'FR', exact: true }).click();
+  await addFiles(page, SINE);
+  await page.getByRole('button', { name: 'Recadrer', exact: true }).click();
+  await page.getByRole('button', { name: '4 coins' }).click();
+  const corner = page.getByRole('button', { name: 'Coin haut gauche' });
+  await corner.focus();
+  const alert = page.locator('.crop-bar [role="alert"]');
+  for (let i = 0; i < 150 && (await alert.count()) === 0; i++) await page.keyboard.press('Shift+ArrowDown');
+  await expect(alert).toContainText('convexe');
+  for (const size of [{ width: 360, height: 640 }, { width: 390, height: 844 }, { width: 1001, height: 768 }]) {
+    await page.setViewportSize(size);
+    const width = await alert.evaluate((el) => el.getBoundingClientRect().width);
+    expect(width, `${size.width}x${size.height}`).toBeGreaterThanOrEqual(200);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+  }
+  await ctx.close();
+});
+
+test('Escape closes the crop box while the Crop button still has focus', async ({ page }) => {
+  await extractSine(page);
+  const crop = page.getByRole('button', { name: 'Crop', exact: true });
+  await crop.click();
+  await expect(page.locator('[data-testid="crop-box"]')).toBeVisible();
+  await expect(crop).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('[data-testid="crop-box"]')).toHaveCount(0);
+  await expect(crop).toHaveAttribute('aria-pressed', 'false');
+});
+
+test('inspecting a Bode point focuses Back, and going back focuses that point again', async ({ page }) => {
+  await extractSweep(page);
+  const point = page.locator('.bode-table td.file .linklike').nth(2);
+  const name = (await point.textContent()) ?? '';
+  await point.click();
+  const back = page.getByRole('button', { name: 'Back to Bode' });
+  await expect(back).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.bode-table td.file .linklike', { hasText: name })).toBeFocused();
+});

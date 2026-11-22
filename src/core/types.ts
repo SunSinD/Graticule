@@ -203,6 +203,12 @@ export interface BodeGateOptions {
   readonly minColsPerCycle?: number;
   readonly minPeakToPeakPx?: number;
   readonly minR2?: number;
+  readonly preferManualFrequency?: boolean;
+}
+
+export interface BodeRejectedCapture {
+  readonly fileName: string;
+  readonly rejectionReason: string;
 }
 
 export interface BodePointOverride {
@@ -235,7 +241,7 @@ export interface BodePoint {
   readonly edited: boolean;
   readonly override?: BodePointOverride;
   readonly preferManualFrequency?: boolean;
-  readonly extraction: ExtractionResult;
+  readonly extraction: ExtractionResult | null;
 }
 
 export interface BodeResult {

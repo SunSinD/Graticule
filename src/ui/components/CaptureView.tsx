@@ -263,7 +263,7 @@ export function CaptureView(props: Props) {
               }}
             />
           </label>
-          <span className="muted small grow" role={cropMode === 'quad' && !quadValid ? 'alert' : undefined}>
+          <span className="muted small grow crop-hint" role={cropMode === 'quad' && !quadValid ? 'alert' : undefined}>
             {cropMode === 'quad' ? (quadValid ? tx.cropQuadHint : tx.quadInvalid) : tx.cropHint}
           </span>
           <button type="button" className="btn" onClick={cancel}>

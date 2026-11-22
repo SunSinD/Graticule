@@ -182,8 +182,8 @@ function measureEdges(samples: readonly TraceSample[], pixelVoltage: number, spa
       // settled dwell while the signal remains on the same side of the starting level.
       for (let k = i + 1; k < levels.length; k++) {
         const candidate = levels[k]!;
-        if ((candidate.voltage - start) / initialChange < 0.4
-            || Math.abs(candidate.voltage - levels[i]!.voltage) > span * 0.55
+        const fraction = (candidate.voltage - start) / initialChange;
+        if (fraction < 0.4 || (fraction - 1) * Math.abs(initialChange) > span * 0.55
             || segment.slice(levels[k - 1]!.end + 1, candidate.start)
               .some(sample => (sample.voltage - start) / initialChange < 0.3)) break;
         if (candidate.duration > after.duration * 1.5) after = candidate;
@@ -206,7 +206,8 @@ function measureEdges(samples: readonly TraceSample[], pixelVoltage: number, spa
       }
       if (t10 === null || t90 === null) continue;
       const duration = t90 - t10;
-      if (duration <= 0 || Math.min(before.duration, after.duration) < duration * 0.75) continue;
+      // Quantized slopes can form short plateaus. A step spends longer at each level than in transition.
+      if (duration <= 0 || Math.min(before.duration, after.duration) < duration) continue;
       const overshoot = 100 * Math.max(0, extreme - 1);
       (change > 0 ? rises : falls).push({ duration, overshoot: change > 0 ? overshoot : null });
       i = levels.indexOf(after, i);

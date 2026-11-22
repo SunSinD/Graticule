@@ -298,6 +298,7 @@ export const GAP_LABELS: Readonly<Record<Locale, Readonly<Record<GapStatus, stri
 
 export const REASON_LABELS: Readonly<Record<Locale, Readonly<Record<string, string>>>> = {
   en: {
+    capture_unreadable: 'capture could not be read or analyzed',
     missing_channels: 'input or output channel is missing',
     frequency_unconfirmed: 'frequency could not be confirmed',
     uncalibrated_timebase: 'time scale was not read from the screen',
@@ -314,6 +315,7 @@ export const REASON_LABELS: Readonly<Record<Locale, Readonly<Record<string, stri
     fewer_than_3_cycles: 'fewer than 3 cycles, less precise',
   },
   fr: {
+    capture_unreadable: 'capture impossible à lire ou à analyser',
     missing_channels: 'canal d’entrée ou de sortie manquant',
     frequency_unconfirmed: 'fréquence non confirmée',
     uncalibrated_timebase: 'base de temps non lue sur l’écran',

@@ -27,7 +27,10 @@ let html = readFileSync(indexPath, 'utf8');
 html = html.replace(/<meta[^>]+name=["']theme-color["'][^>]*>/gi, '<meta name="theme-color" content="#0a0a0a" />');
 html = html.replace(/<link[^>]+rel=["']manifest["'][^>]*>/gi, '');
 html = html.replace(/<link[^>]+rel=["'](?:modulepreload|preload)["'][^>]*>/gi, '');
-html = html.replace(/<link[^>]+rel=["']icon["'][^>]*>/gi, '');
+const faviconSvg = readFileSync(resolve(root, 'public/favicon.svg'), 'utf8');
+const faviconDataUri = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(faviconSvg).replaceAll('\'', '%27')}`;
+html = html.replace(/<link[^>]+rel=["']icon["'][^>]*>/gi, () =>
+  `<link rel="icon" type="image/svg+xml" href="${faviconDataUri}" />`);
 
 for (const match of [...html.matchAll(/<link[^>]+href=["']([^"']+\.css)["'][^>]*>/gi)]) {
   const href = match[1];

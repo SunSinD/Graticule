@@ -101,4 +101,28 @@ describe('four-corner deskew', () => {
     const rounded = (value: number) => Math.round(value * 100) / 100;
     expect(overlay).toContain('M' + rounded(point.x + 0.5) + ' ' + rounded(point.y + 0.5));
   });
+
+  test('inherits each omitted deskew division count from the explicit native profile', () => {
+    const image = bitmap(200, 160);
+    const { detection } = analyzeCapture(image, 'tilted.png', { manualQuad: quad, profileId: 'rohde-schwarz-rtb2004' });
+    expect(detection.grid).toMatchObject({ hDivs: 12, vDivs: 10 });
+    expect(detection.grid.pxPerHDiv).toBe(detection.grid.width / 12);
+    expect(detection.grid.pxPerVDiv).toBe(detection.grid.height / 10);
+    expect(analyzeCapture(image, 'tilted.png', { manualQuad: quad, profileId: 'rohde-schwarz-rtb2004', hDivs: 8 })
+      .detection.grid).toMatchObject({ hDivs: 8, vDivs: 10 });
+    expect(analyzeCapture(image, 'tilted.png', { manualQuad: quad, profileId: 'rohde-schwarz-rtb2004', vDivs: 6 })
+      .detection.grid).toMatchObject({ hDivs: 12, vDivs: 6 });
+    expect(analyzeCapture(image, 'tilted.png', { manualQuad: quad }).detection.grid).toMatchObject({ hDivs: 10, vDivs: 8 });
+  });
+
+  test('rejects scales that overflow across the detected grid', () => {
+    const image = bitmap(200, 160);
+    expect(() => analyzeCapture(image, 'tilted.png', { manualQuad: quad, secPerDiv: 1.5e307, hDivs: 12 }))
+      .toThrow(/Invalid time scale.*12 divisions/);
+    expect(analyzeCapture(image, 'tilted.png', { manualQuad: quad, secPerDiv: 1.5e307, hDivs: 10 }).timebase)
+      .toMatchObject({ secPerDiv: 1.5e307, source: 'manual' });
+    expect(() => analyzeCapture(image, 'tilted.png', {
+      manualQuad: quad, channels: { C1: { enabled: true, voltsPerDiv: 1e308 } },
+    })).toThrow(/Invalid voltage scale for C1/);
+  });
 });

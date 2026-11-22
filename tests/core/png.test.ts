@@ -10,9 +10,10 @@ interface PngSpec {
   readonly height?: number;
   readonly transparency?: readonly number[];
   readonly palette?: readonly number[];
+  readonly corruptAdler?: boolean;
 }
 
-function png({ depth, color, scanlines, width = 2, height = 1, transparency, palette }: PngSpec): Uint8Array {
+function png({ depth, color, scanlines, width = 2, height = 1, transparency, palette, corruptAdler }: PngSpec): Uint8Array {
   function chunk(type: string, data: Uint8Array): Uint8Array {
     const bytes = new Uint8Array(data.length + 12);
     const view = new DataView(bytes.buffer);
@@ -32,11 +33,13 @@ function png({ depth, color, scanlines, width = 2, height = 1, transparency, pal
   view.setUint32(0, width);
   view.setUint32(4, height);
   header.set([depth, color], 8);
+  const compressed = zlibSync(Uint8Array.from(scanlines));
+  if (corruptAdler) compressed[compressed.length - 1] = compressed[compressed.length - 1]! ^ 1;
   const chunks = [
     Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10), chunk('IHDR', header),
     ...(palette ? [chunk('PLTE', Uint8Array.from(palette))] : []),
     ...(transparency ? [chunk('tRNS', Uint8Array.from(transparency))] : []),
-    chunk('IDAT', zlibSync(Uint8Array.from(scanlines))), chunk('IEND', new Uint8Array()),
+    chunk('IDAT', compressed.subarray(0, -2)), chunk('IDAT', compressed.subarray(-2)), chunk('IEND', new Uint8Array()),
   ];
   const bytes = new Uint8Array(chunks.reduce((len, part) => len + part.length, 0));
   let offset = 0;
@@ -48,6 +51,11 @@ function png({ depth, color, scanlines, width = 2, height = 1, transparency, pal
 }
 
 describe('PNG decode', () => {
+  test('checks the zlib Adler-32 trailer across IDAT chunks with valid PNG CRCs', () => {
+    const spec = { depth: 8, color: 0, scanlines: [0, 12, 19] };
+    expect([...decodePng(png(spec)).data]).toEqual([12, 12, 12, 255, 19, 19, 19, 255]);
+    expect(() => decodePng(png({ ...spec, corruptAdler: true }))).toThrow(/zlib Adler-32 checksum mismatch/);
+  });
   test.each(['IHDR', 'PLTE', 'IDAT', 'IEND'])('rejects a bad CRC on a structurally valid %s chunk', chunk => {
     const bytes = png({ depth: 1, color: 3, scanlines: [0, 0b01000000], palette: [10, 20, 30, 40, 50, 60] });
     const view = new DataView(bytes.buffer);

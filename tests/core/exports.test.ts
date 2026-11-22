@@ -12,12 +12,17 @@ const result = analyzePngBytes(sample('sine_schmitt.png'), 'Capture_A&B%#_1.png'
 
 describe('waveform exports', () => {
   test('formats engineering scales with optional units per division and rejects overflow', () => {
-    expect(GRATICULE_VERSION).toBe('1.1.1');
+    expect(GRATICULE_VERSION).toBe('1.1.2');
     expect(parseEngineering('5 mV/div')).toBe(0.005);
     expect(parseEngineering('2,5 ms / div')).toBe(0.0025);
     expect(parseEngineering('2/div')).toBe(2);
     expect(parseEngineering('1e308G')).toBeNull();
     expect(parseEngineering('1e309')).toBeNull();
+    expect(parseEngineering('1.7976931348623e308')).toBe(1.79769313486e308);
+    expect(parseEngineering('1 2 V')).toBeNull();
+    expect(parseEngineering('1. 2 V')).toBeNull();
+    expect(parseEngineering('1e1 2 V')).toBeNull();
+    expect(parseEngineering('1.2e2 V')).toBe(120);
     expect(parseEngineering('3 GigaVolts')).toBeNull();
   });
 

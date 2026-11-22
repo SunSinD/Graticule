@@ -1,51 +1,45 @@
-# Graticule 1.1.1
+# Graticule 1.1.2
 
 Try it live at [sunsind.github.io/Graticule](https://sunsind.github.io/Graticule/).
 
-A fix release that cleans up the app on phones and fixes small bugs found after 1.1.0.
+A fix release for offline mode, phones, Bode plots and the history.
+
+## Offline
+
+- Offline mode now serves the app from its own cache every time, so a reload with no connection opens Graticule instead of an error page
+- The icons and the app manifest still work offline and update quietly in the background when you are online
+- `graticule-portable.html` now shows its icon when opened from a local server too
 
 ## Phones
 
-- The empty screen on a phone now only shows the Add images and Take photo buttons, centered, with no empty panels below
-- The history only shows up on a phone once it has something in it
-- The top bar stays on one row. The shortcuts button is gone on phones and tablets, and the Add and camera buttons in the top bar only show up once a capture is open
-- The empty screen says Add an oscilloscope screenshot or take a photo on phones, since there is nothing to drop or paste
-- The plot buttons fill clean full rows on a narrow screen, with no sideways scrolling
-- Dragging a cursor with your finger moves the cursor instead of scrolling the page
+- With cursors on, swiping an empty part of the plot scrolls the page again. Dragging a cursor line still moves the cursor
+- The 4 corners message in the crop bar gets its own full row on a narrow screen instead of being squeezed into a thin column
 
-## Fixes
+## Keyboard
 
-- Escape now really cancels what you typed in the title, a channel label or a scale field
-- The phase between cursors stays between 0 and 360°
-- Pressing C while the crop box is open no longer throws away the corners you moved
-- The 4 corners message now says the corners must make a convex box, placed clockwise from the top left
-- When a crop box is open and the extraction finishes, the box moves to the screen it found, unless you already moved it
-- Unticking or removing captures in Bode mode opens the one left, not a capture you had open before
-- Changing the scope or the gate while a Bode plot is still working no longer gets stuck on Working or loses your change
-- A capture opened from the Bode table keeps its title and channel labels in the exports
-- Copying the plot works in more browsers
+- Escape closes the crop box, even when the Crop button still has focus
+- Opening a point from the Bode table moves focus to Back to Bode, and going back puts focus on that point again
+- Pressing E when the export buttons are not ready yet now shows a visible focus ring on the Export panel
 
-## Exports
+## Bode and measurements
 
-- The title you type now names the downloaded SVG, PNG and CSV files and shows up on the copied tables
-- File names are made safe for Windows, macOS and Linux
-- Safer escaping in CSV, TSV, Markdown, LaTeX and SVG when titles or channel labels have special characters
+- Changing the scope profile on a Bode plot keeps your manual frequency edits
+- Changing the input or output channel on a Bode plot clears old voltage, gain and phase edits from the previous channel pair
+- When only one cutoff is found, the summary says if it is the lower or the upper cutoff, like the plot and the exported tables
+- Bode points from a capture that could not be read are shown as rejected instead of stopping the whole plot
+- Time scales too large to work with now give a clear error instead of wrong numbers
+- Edge measurements like rise time, fall time and overshoot are more accurate
+- CLI deskew with a scope profile now uses that scope's grid divisions
 
-## Measurements, Bode and offline
+## Files
 
-- Fixed ringing overshoot math so damped steps measure the settled level, and smooth sine or triangle waves no longer get fake step times
-- Bode plots handle duplicate frequencies, band stop crossings and manual edits kept across gate changes
-- Checksum checks reject corrupt PNG files, and 4 corner deskew checks that the corners start at the top left
-- Improved channel reading on Keysight DSOX1000 and trigger masking on Siglent SDS800X HD
-- Offline mode precaches the whole app on your first visit, including the extraction worker, so extractions work offline right away
-- `graticule-portable.html` runs cleanly whether opened as a local file or from a local server
-- Hardened command line output checks so bad paths never leave partial files
+- PNG files are now checked with the zlib checksum too, so a damaged image is rejected instead of giving a broken plot
 
 ## History
 
-- The history remembers which captures you opened last, even after a reload, so the oldest ones go first when it is full
-- When the browser storage is full, Graticule makes room by removing the oldest saved captures, then saves again
-- A capture is only marked as saved once the browser storage really has it
+- Moving a cursor right as a new extraction starts can no longer save the capture without its result
+- Undoing an edit while the save is still running now saves the right version
+- Turning off Keep history while a capture is being saved no longer leaves it in the browser storage
 
 ## Credits
 

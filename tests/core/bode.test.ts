@@ -138,6 +138,24 @@ describe('Bode sine fit', () => {
     expect(result).toMatchObject({ passbandGainDb: 0, cutoffLowHz: 200, cutoffHighHz: 400 });
   });
 
+  test('pairs the two crossings of the first complete notch in a multi-notch sweep', () => {
+    const rows = [[100, 0], [200, -6], [400, 0], [800, -6], [1600, 0]] as const;
+    const result = analyzeBodeBatch(rows.map(([f]) => pair(f, 1, 0)), {},
+      Object.fromEntries(rows.map(([f, gainDb]) => [`${f} Hz.png`, { gainDb }])));
+    expect(result.cutoffLowHz).toBeCloseTo(100 * Math.SQRT2, 9);
+    expect(result.cutoffHighHz).toBeCloseTo(200 * Math.SQRT2, 9);
+  });
+
+  test('keeps a cutoff whose two bracketing frequencies are both observed after an unreadable capture', () => {
+    const result = analyzeBodeBatch([
+      pair(100, 1, 0), { fileName: '200 Hz.png', rejectionReason: 'capture_unreadable' }, pair(400, 1, 0), pair(800, 1, 0),
+    ], {}, { '400 Hz.png': { gainDb: -1 }, '800 Hz.png': { gainDb: -5 } });
+    expect(result.cutoffHighHz).toBeCloseTo(400 * Math.SQRT2, 9);
+    expect(recomputeBodeResult(result).points[1]).toMatchObject({
+      frequencyHz: 200, accepted: false, rejectionReasons: ['capture_unreadable'], extraction: null,
+    });
+  });
+
   test('averages accepted gains at duplicate frequencies before interpolation', () => {
     const points = [[100, 0], [200, 0], [200, -8], [200, 12], [400, -10]] as const;
     const rows = points.map(([frequencyHz, gainDb], index) => ({
@@ -150,6 +168,24 @@ describe('Bode sine fit', () => {
       expect(result).toMatchObject({ acceptedCount: 4, rejectedCount: 1, cutoffLowHz: null });
       expect(result.cutoffHighHz).toBeCloseTo(100 * 2 ** 0.75, 9);
     }
+  });
+
+  test('connects aggregate gain and phase at duplicate frequencies despite an excluded row', () => {
+    const rows = [[100, 0, -175], [200, 0, 170], [200, 12, 0], [200, -8, -170], [400, -10, -170]] as const;
+    const captures = rows.map(([f], index) => pair(f, 1, 0, { fileName: `${f} Hz sample ${index}.png` }));
+    const edits = Object.fromEntries(rows.map(([, gainDb, phaseDeg], i) =>
+      [captures[i]!.fileName, { gainDb, phaseDeg, excluded: i === 2 }]));
+    const result = analyzeBodeBatch(captures, {}, edits);
+    const duplicate = result.points[1]!;
+    const reference = { ...result, points: [
+      ...result.points.map(point => point.frequencyHz === 200 ? { ...point, accepted: false } : point),
+      { ...duplicate, gainDb: -4, phaseDeg: -180 },
+    ] };
+    const paths = (sweep: typeof result) => [...renderBodeSvg(sweep).matchAll(/<path d="([^"]+)"/g)].map(m => m[1]);
+    expect(paths(result)).toEqual(paths(reference));
+    expect(paths(result)).toHaveLength(2);
+    for (const path of paths(result)) expect(path).toMatch(/^M[^ML]+L[^ML]+L[^ML]+$/);
+    expect(paths({ ...result, points: [...result.points].reverse() })).toEqual(paths(result));
   });
 
   test('keeps live point edits through repeated gate-only recalculations', () => {
@@ -165,6 +201,45 @@ describe('Bode sine fit', () => {
     expect(changed.gateOptions?.minR2).toBe(0.97);
     expect(recomputeBodeResult(changed, new Map()).points.every(point => !point.edited)).toBe(true);
     expect(recomputeBodeResult(changed, {}).points.every(point => !point.edited)).toBe(true);
+  });
+
+  test.each([false, true])('clears old channel-pair measurements when the pair changes (explicit edits %s)', explicit => {
+    const base = analyzeBodeBatch([pair(100, 1, 30), pair(200, 1, 30)]);
+    const edits = { '100 Hz.png': { frequencyHz: 101, vinVpp: 2, voutVpp: 4, gainDb: 5, phaseDeg: -15 },
+      '200 Hz.png': { gainDb: 5, excluded: true } };
+    const edited = recomputeBodeResult(base, edits);
+    const gate = { inputChannel: 'C3', outputChannel: 'C4' } as const;
+    const updated = explicit ? recomputeBodeResult(edited, edits, gate) : recomputeBodeResult(edited, gate);
+    expect(updated).toMatchObject({ inputChannel: 'C3', outputChannel: 'C4', acceptedCount: 0, rejectedCount: 2 });
+    expect(updated.points[0]).toMatchObject({
+      frequencyHz: 101, frequencySource: 'manual', accepted: false, rejectionReasons: ['missing_channels'],
+      vinVpp: null, voutVpp: null, gainDb: null, phaseDeg: null,
+    });
+    expect(updated.points[0]!.override).toEqual({ frequencyHz: 101 });
+    expect(updated.points[1]!.override).toEqual({ excluded: true });
+    expect(updated.points[1]!.rejectionReasons).toContain('manually_excluded');
+    expect(edited.points[0]!.override).toEqual(edits['100 Hz.png']);
+  });
+
+  test('keeps the original batch duration during all recomputation calls', () => {
+    const base = { ...analyzeBodeBatch([pair(100, 1, 0)]), elapsedMs: 321.25 };
+    expect(recomputeBodeResult(base).elapsedMs).toBe(321.25);
+    expect(recomputeBodeResult(base, { minR2: 0.9 }).elapsedMs).toBe(321.25);
+    expect(recomputeBodeResult(base, { '100 Hz.png': { gainDb: 5 } }).elapsedMs).toBe(321.25);
+  });
+
+  test('keeps a live manual frequency when extracts are rebuilt for another profile', () => {
+    const capture = { bytes: sample('sweep_04.png'), fileName: '1000 Hz.png' };
+    const edits = { [capture.fileName]: { frequencyHz: 990 } };
+    const initial = analyzeBodeBatch([capture], {}, edits);
+    expect(initial.points[0]!.frequencySource).toBe('scope');
+    const live = recomputeBodeResult(initial, { preferManualFrequency: true });
+    expect(live.points[0]).toMatchObject({ frequencyHz: 990, frequencySource: 'manual' });
+    const refreshed = analyzeBodeBatch([{ ...capture, overrides: { profileId: 'universal-fallback' } }],
+      { preferManualFrequency: true }, { [capture.fileName]: live.points[0]!.override });
+    expect(refreshed.points[0]).toMatchObject({ frequencyHz: 990, frequencySource: 'manual' });
+    expect(refreshed.points[0]!.extraction?.detection.profileId).toBe('universal-fallback');
+    expect(recomputeBodeResult(refreshed, { minR2: 0.95 }).points[0]!.frequencyHz).toBe(990);
   });
 
   test('accepts a clean 12-column sine even when floating point rounds the density slightly lower', () => {

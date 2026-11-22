@@ -82,7 +82,7 @@ Copy table gives you the measurements for Word, Markdown, LaTeX or TSV.
 
 Every capture you add stays in the history on the left, with its scales, its title, its labels, its cursors and its result. Click one to open it again. The history is saved in your browser, so it is still there after a refresh. It keeps your last 50 captures.
 
-Clear asks you to confirm before it deletes anything. Turn off Keep history at the bottom of the left panel to stop saving. Your saved captures are deleted right away, and the ones from this visit stay open until you close the tab.
+Clear asks you to confirm before it deletes anything. Turn off Keep history at the bottom of the history panel to stop saving. On a phone the history panel sits at the bottom of the page and only shows up once you add a capture, so add one first to reach Keep history. Your saved captures are deleted right away, and the ones from this visit stay open until you close the tab.
 
 ## Phone photos
 

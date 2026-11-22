@@ -22,12 +22,18 @@ function classifyPixel(r: number, g: number, b: number, colors: readonly Channel
   return inverted ? channelColor(255 - r, 255 - g, 255 - b, colors) : channelColor(r, g, b, colors);
 }
 
-export function makeTimebase(metadata: ScopeMetadata, overrides: ExtractionOverrides): TimebaseSettings {
+export function makeTimebase(metadata: ScopeMetadata, overrides: ExtractionOverrides, hDivs = 10): TimebaseSettings {
   const manualScale = positive(overrides.secPerDiv) ? overrides.secPerDiv : null;
   const manualOffset = finite(overrides.triggerOffsetSec) ? overrides.triggerOffsetSec : null;
+  const secPerDiv = manualScale ?? metadata.secPerDiv ?? 1e-3;
+  const triggerOffsetSec = manualOffset ?? metadata.triggerOffsetSec ?? 0;
+  const span = secPerDiv * hDivs;
+  if (!Number.isFinite(span) || !Number.isFinite(Math.abs(triggerOffsetSec) + span / 2)) {
+    throw new Error(`Invalid time scale: ${secPerDiv} s/div over ${hDivs} divisions exceeds the numeric range`);
+  }
   return {
-    secPerDiv: manualScale ?? metadata.secPerDiv ?? 1e-3,
-    triggerOffsetSec: manualOffset ?? metadata.triggerOffsetSec ?? 0,
+    secPerDiv,
+    triggerOffsetSec,
     source: manualScale ? 'manual' : metadata.secPerDiv ? 'ocr' : 'default',
     rawText: metadata.rawTimebase,
   };
@@ -116,6 +122,9 @@ function pickSettings(channel: ChannelId, index: number, metadata: ScopeMetadata
   if (!enabled) return null;
 
   const voltsPerDiv = positive(manual?.voltsPerDiv) ? manual.voltsPerDiv : card?.voltsPerDiv ?? 1;
+  if (!Number.isFinite(voltsPerDiv * detection.grid.vDivs)) {
+    throw new Error(`Invalid voltage scale for ${channel}: ${voltsPerDiv} V/div exceeds the numeric range across the grid`);
+  }
   const scaleSource = positive(manual?.voltsPerDiv) ? 'manual' : card?.voltsPerDiv ? 'ocr' : 'default';
   const { centerY, pxPerVDiv } = detection.grid;
   const manualOffset = finite(manual?.offsetVolts) ? manual.offsetVolts : null;
