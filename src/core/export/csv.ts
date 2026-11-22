@@ -1,14 +1,15 @@
 import type { BodePoint, BodeResult, ChannelId, ChannelTrace, ExtractionResult, TraceSample } from '../types.js';
-import { GRATICULE_VERSION, csvNumber } from './format.js';
+import { GRATICULE_VERSION, csvNumber, spreadsheetText } from './format.js';
 
 const EOL = '\n';
 
 function comment(text: string): string {
-  return text.replace(/[\r\n]+/g, ' ').trim();
+  return spreadsheetText(text).replace(/[\r\n]+/g, ' ').trim();
 }
 
 export function csvField(text: string): string {
-  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  const safe = spreadsheetText(text);
+  return /^#|[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 
 function channelComment(trace: ChannelTrace): string {
@@ -43,8 +44,8 @@ export function renderWaveformCsv(result: ExtractionResult, channelLabels?: Part
   if (result.topFrequencyHz !== null) lines.push(`# scope_frequency_hz: ${csvNumber(result.topFrequencyHz)}`);
   for (const t of traces) {
     lines.push(channelComment(t));
-    const label = channelLabels?.[t.channel]?.trim();
-    if (label) lines.push(`# ${t.channel} label: ${comment(label)}`);
+    const label = channelLabels?.[t.channel];
+    if (label?.trim()) lines.push(`# ${t.channel} label: ${comment(label)}`);
     const m = result.measurements.find(measurement => measurement.channel === t.channel);
     if (m) lines.push([
       `# ${t.channel} edge measurements:`,
@@ -59,7 +60,8 @@ export function renderWaveformCsv(result: ExtractionResult, channelLabels?: Part
 
   const header = ['time_s'];
   for (const t of traces) {
-    const id = channelLabels?.[t.channel]?.trim() || t.channel.toLowerCase();
+    const label = channelLabels?.[t.channel];
+    const id = label?.trim() ? (spreadsheetText(label) === label ? label.trim() : label.trimEnd()) : t.channel.toLowerCase();
     header.push(csvField(`${id}_v`), csvField(`${id}_status`));
   }
   lines.push(header.join(','));
@@ -120,10 +122,8 @@ export function renderBodeCsv(result: BodeResult): string {
     `# passband_gain_db: ${csvNumber(result.passbandGainDb, 6)}`,
     `# cutoff_target_db: ${csvNumber(result.cutoffTargetDb, 6)}`,
     `# cutoff_hz_minus_3db: ${csvNumber(result.cutoffHz, 6)}`,
-    ...(result.cutoffLowHz != null && result.cutoffHighHz != null ? [
-      `# cutoff_low_hz_minus_3db: ${csvNumber(result.cutoffLowHz, 6)}`,
-      `# cutoff_high_hz_minus_3db: ${csvNumber(result.cutoffHighHz, 6)}`,
-    ] : []),
+    ...(result.cutoffLowHz == null ? [] : [`# cutoff_low_hz_minus_3db: ${csvNumber(result.cutoffLowHz, 6)}`]),
+    ...(result.cutoffHighHz == null ? [] : [`# cutoff_high_hz_minus_3db: ${csvNumber(result.cutoffHighHz, 6)}`]),
     `# accepted: ${result.acceptedCount}`,
     `# rejected: ${result.rejectedCount}`,
     'file,frequency_hz,vin_vpp,vout_vpp,gain_db,phase_deg,cycles,r2_in,r2_out,accepted,reasons',

@@ -104,19 +104,21 @@ function readRasterMetadata(image: RgbaImage, profile: NonNullable<ReturnType<ty
 function readNewRasterMetadata(image: RgbaImage, profile: NonNullable<ReturnType<typeof getNativeProfile>>,
   id: 'siglent-sds800x-hd' | 'keysight-dsox1000'): ScopeMetadata {
   const sds800 = id === 'siglent-sds800x-hd';
-  const read = (roi: Rect) => matchBitmap(readBitmap(image, roi, (r, g, b) => Math.min(r, g, b) > 170), rasterFonts[id].glyphs) || null;
+  const read = (roi: Rect) => {
+    const text = matchBitmap(readBitmap(image, roi, (r, g, b) => Math.min(r, g, b) > 170), rasterFonts[id].glyphs);
+    return text && !text.includes('?') ? text : null;
+  };
   const cards = new Map<ChannelId, CardReading>();
   for (const [channel, slot] of findNativeCards(image, profile, false).analog) {
     const rawScaleText = read(sds800 ? box(slot.x + 42, 557, 74, 16) : box(slot.x + 21, slot.y, 51, slot.height));
     const voltsPerDiv = parseScale(rawScaleText, 'V');
-    if (!sds800 && voltsPerDiv === null) continue;
     const rawOffsetText = sds800 ? read(box(slot.x + 42, 575, 74, 16)) : null;
     const probeText = sds800 ? read(box(slot.x, 557, 40, 16)) : null;
-    const attenuation = /^([\d.]+)X$/.exec(probeText ?? '')?.[1];
+    const attenuation = Number(/^(\d+(?:\.\d+)?)X$/.exec(probeText ?? '')?.[1]);
     const offset = parseQuantity(rawOffsetText ?? '');
     cards.set(channel, {
       voltsPerDiv, offsetVolts: offset?.unit.endsWith('V') ? offset.value : null, rawScaleText, rawOffsetText,
-      probeAttenuation: attenuation ? Number(attenuation) : 1, coupling: 'UNKNOWN',
+      probeAttenuation: Number.isFinite(attenuation) && attenuation > 0 ? attenuation : 1, coupling: 'UNKNOWN',
     });
   }
   const rawTimebase = read(profile.timebaseCard.scaleRoi);

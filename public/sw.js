@@ -1,9 +1,14 @@
-const CACHE_NAME = 'graticule-v1.1.0';
+const CACHE_NAME = '__GRATICULE_CACHE__';
 const CACHE_PREFIX = 'graticule-';
+const PRECACHE_ASSETS = [/*__GRATICULE_PRECACHE__*/];
 const STATIC_ASSETS = ['./', './index.html', './manifest.webmanifest', './favicon.svg', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS)).then(() => self.skipWaiting()));
+  event.waitUntil(
+    caches.open(CACHE_NAME)
+      .then((cache) => cache.addAll([...STATIC_ASSETS, ...PRECACHE_ASSETS]))
+      .then(() => self.skipWaiting()),
+  );
 });
 
 self.addEventListener('activate', (event) => {
@@ -36,8 +41,8 @@ self.addEventListener('fetch', (event) => {
         })
         .catch(async () => {
           const cache = await caches.open(CACHE_NAME);
-          return (await cache.match('./index.html'))
-            || (await cache.match('./'))
+          return (await cache.match('./index.html', { ignoreSearch: true }))
+            || (await cache.match('./', { ignoreSearch: true }))
             || new Response('Offline', { status: 503, headers: { 'Content-Type': 'text/plain' } });
         }),
     );
@@ -55,11 +60,11 @@ self.addEventListener('fetch', (event) => {
           const refresh = fetch(request).then((response) => {
             if (response.ok) {
               const copy = response.clone();
-              void caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+              return caches.open(CACHE_NAME).then((cache) => cache.put(request, copy)).then(() => response);
             }
             return response;
           });
-          if (cached) void refresh.catch(() => undefined);
+          if (cached) event.waitUntil(refresh.catch(() => undefined));
           return cached || refresh;
         }),
       );
@@ -68,13 +73,18 @@ self.addEventListener('fetch', (event) => {
 
     if (isHashedAsset) {
       event.respondWith(
-        caches.match(request).then((cached) => cached || fetch(request).then((response) => {
-          if (response.ok) {
-            const copy = response.clone();
-            void caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-          }
-          return response;
-        })),
+        caches.match(request).then((cached) => {
+          if (cached) return cached;
+          const refresh = fetch(request).then((response) => {
+            if (response.ok) {
+              const copy = response.clone();
+              return caches.open(CACHE_NAME).then((cache) => cache.put(request, copy)).then(() => response);
+            }
+            return response;
+          });
+          event.waitUntil(refresh.catch(() => undefined));
+          return refresh;
+        }),
       );
     }
   }

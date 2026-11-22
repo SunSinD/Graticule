@@ -53,7 +53,7 @@ for (const match of scripts) {
 }
 
 if (inlineScripts.length > 0) {
-  const portableBootstrap = '<script>if (location.protocol === \'file:\') globalThis.Worker = undefined;</script>';
+  const portableBootstrap = '<script>globalThis.__GRATICULE_PORTABLE__ = true; globalThis.Worker = undefined;</script>';
   html = html.replace('</body>', () => `${portableBootstrap}<script type="module">${inlineScripts.join('\n')}</script></body>`);
 }
 

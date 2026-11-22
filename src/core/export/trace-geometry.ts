@@ -31,8 +31,8 @@ function medianStep(sorted: readonly TraceSample[]): number {
     const a = sorted[i - 1];
     const b = sorted[i];
     if (!a || !b) continue;
-    const d = b.xPx - a.xPx;
-    if (d > 0) steps.push(d);
+    const d = (b.xPx - a.xPx) / (b.col - a.col);
+    if (Number.isFinite(d) && d > 0) steps.push(d);
   }
   if (steps.length === 0) return 1;
   steps.sort((p, q) => p - q);
@@ -52,7 +52,7 @@ export function splitTrace(samples: readonly TraceSample[]): SplitTrace {
   const gaps: TraceGap[] = [];
   let seg: TracePoint[] = [];
   let open: { x0: number; x1: number; kind: Exclude<GapStatus, 'ok'> } | null = null;
-  let prevX: number | null = null;
+  let previous: TraceSample | null = null;
 
   const flushSeg = (): void => {
     if (seg.length > 0) segments.push(seg);
@@ -64,13 +64,16 @@ export function splitTrace(samples: readonly TraceSample[]): SplitTrace {
   };
 
   for (const s of sorted) {
-    if (prevX !== null && s.xPx - prevX > maxStep) {
+    if (previous && (s.col > previous.col + 1 || s.xPx - previous.xPx > maxStep)) {
       flushSeg();
+      const columnStep = s.col > previous.col + 1 ? (s.xPx - previous.xPx) / (s.col - previous.col) : step;
+      const start = previous.xPx + columnStep;
+      const end = Math.max(start, s.xPx - columnStep);
       if (open && open.kind === 'unresolved') {
-        open.x1 = s.xPx;
+        open.x1 = end;
       } else {
         closeGap();
-        open = { x0: prevX, x1: s.xPx, kind: 'unresolved' };
+        open = { x0: start, x1: end, kind: 'unresolved' };
       }
     }
     if (isGood(s) && s.yPx !== null) {
@@ -86,7 +89,7 @@ export function splitTrace(samples: readonly TraceSample[]): SplitTrace {
         open = { x0: s.xPx, x1: s.xPx, kind };
       }
     }
-    prevX = s.xPx;
+    previous = s;
   }
   flushSeg();
   closeGap();

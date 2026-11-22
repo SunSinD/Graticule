@@ -233,6 +233,8 @@ export interface BodePoint {
   readonly rejectionReasons: readonly string[];
   readonly warnings: readonly string[];
   readonly edited: boolean;
+  readonly override?: BodePointOverride;
+  readonly preferManualFrequency?: boolean;
   readonly extraction: ExtractionResult;
 }
 

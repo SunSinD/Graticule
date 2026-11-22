@@ -1,7 +1,11 @@
 import type { Locale } from '../types.js';
 
-export const GRATICULE_VERSION = '1.1.0';
+export const GRATICULE_VERSION = '1.1.1';
 export const EMPTY_CELL = '\u2014';
+
+export function spreadsheetText(text: string): string {
+  return /^ *[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+}
 
 interface SiPrefix {
   readonly exp: number;

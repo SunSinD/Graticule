@@ -54,7 +54,7 @@ function sourceSize(result: ExtractionResult): Size {
 
 function initialRect(result: ExtractionResult | null, overrides: ExtractionOverrides, size: Size): Rect {
   if (overrides.manualCrop) return overrides.manualCrop;
-  const quad = result?.sourceQuad;
+  const quad = result?.sourceQuad ?? overrides.manualQuad;
   if (quad) {
     const xs = quad.map((p) => p.x);
     const ys = quad.map((p) => p.y);
@@ -107,6 +107,7 @@ export function CaptureView(props: Props) {
   const [vText, setVText] = useState('8');
   const [zoom, setZoom] = useState(100);
   const viewport = useRef<HTMLDivElement>(null);
+  const edited = useRef(false);
   useCtrlWheelZoom(viewport, zoom, ZOOM_MAX, setZoom);
 
   useEffect(() => {
@@ -114,6 +115,7 @@ export function CaptureView(props: Props) {
   }, [result]);
 
   useEffect(() => {
+    edited.current = false;
     if (!cropOpen || !size) {
       setRect(null);
       setQuad(null);
@@ -127,6 +129,24 @@ export function CaptureView(props: Props) {
     setHText(String(overrides.hDivs ?? result?.detection.grid.hDivs ?? 10));
     setVText(String(overrides.vDivs ?? result?.detection.grid.vDivs ?? 8));
   }, [cropOpen, url, size?.width, size?.height, props.forceQuad]);
+
+  useEffect(() => {
+    if (!cropOpen || !result || edited.current) return;
+    const s = sourceSize(result);
+    setRect(initialRect(result, overrides, s));
+    setQuad(initialQuad(result, overrides, s));
+    setHText(String(overrides.hDivs ?? result.detection.grid.hDivs ?? 10));
+    setVText(String(overrides.vDivs ?? result.detection.grid.vDivs ?? 8));
+  }, [result]);
+
+  const editRect = (r: Rect): void => {
+    edited.current = true;
+    setRect(r);
+  };
+  const editQuad = (q: Quad): void => {
+    edited.current = true;
+    setQuad(q);
+  };
 
   const overlaySvg = useMemo(() => (result && overlay ? renderOverlaySvg(result) : ''), [result, overlay]);
   const cleanSvg = useMemo(
@@ -196,7 +216,7 @@ export function CaptureView(props: Props) {
             className="btn"
             aria-pressed={cursorsVisible}
             aria-keyshortcuts="C"
-            disabled={!result}
+            disabled={!result || cropOpen}
             onClick={props.onCursors}
             title={tx.cursorsTitle}
           >
@@ -219,11 +239,29 @@ export function CaptureView(props: Props) {
           </div>
           <label className="inline">
             <span>{tx.hDivs}</span>
-            <input type="text" inputMode="numeric" className="num tiny" value={hText} onChange={(e) => setHText(e.target.value)} />
+            <input
+              type="text"
+              inputMode="numeric"
+              className="num tiny"
+              value={hText}
+              onChange={(e) => {
+                edited.current = true;
+                setHText(e.target.value);
+              }}
+            />
           </label>
           <label className="inline">
             <span>{tx.vDivs}</span>
-            <input type="text" inputMode="numeric" className="num tiny" value={vText} onChange={(e) => setVText(e.target.value)} />
+            <input
+              type="text"
+              inputMode="numeric"
+              className="num tiny"
+              value={vText}
+              onChange={(e) => {
+                edited.current = true;
+                setVText(e.target.value);
+              }}
+            />
           </label>
           <span className="muted small grow" role={cropMode === 'quad' && !quadValid ? 'alert' : undefined}>
             {cropMode === 'quad' ? (quadValid ? tx.cropQuadHint : tx.quadInvalid) : tx.cropHint}
@@ -277,7 +315,7 @@ export function CaptureView(props: Props) {
                 imageHeight={size.height}
                 hDivs={hDivs}
                 vDivs={vDivs}
-                onChange={setRect}
+                onChange={editRect}
                 onApply={apply}
                 onCancel={cancel}
               />
@@ -291,7 +329,7 @@ export function CaptureView(props: Props) {
                 imageHeight={size.height}
                 hDivs={hDivs}
                 vDivs={vDivs}
-                onChange={setQuad}
+                onChange={editQuad}
                 onApply={apply}
                 onCancel={cancel}
               />

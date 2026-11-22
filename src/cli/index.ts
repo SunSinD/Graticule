@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, lstat, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { renderBodeCsv, renderWaveformCsv } from '../core/export/csv.js';
@@ -65,6 +66,7 @@ async function run(): Promise<void> {
       'sec-per-div': { type: 'string' }, vdiv: { type: 'string', multiple: true }, deskew: { type: 'string' },
     },
   });
+  if (values.out === '') throw new Error('--out requires a non-empty path.');
   if (values.help) {
     process.stdout.write(usage + '\n');
     return;
@@ -135,34 +137,62 @@ async function run(): Promise<void> {
   await writeOutputs(formats, stem, values.out, locale, inputs);
 }
 
-function statExisting(path: string) {
-  return stat(path, { bigint: true }).catch((error: unknown) => {
+function statExisting(path: string, readStat: typeof stat = stat) {
+  return readStat(path, { bigint: true }).catch((error: unknown) => {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     return null;
   });
 }
 
+function pathKey(path: string): string {
+  const absolute = resolve(path);
+  return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+}
+
 async function writeOutputs(outputs: readonly Output[], stem: string, out: string | undefined, locale: Locale,
   inputs: readonly string[]): Promise<void> {
-  if (!out) {
+  if (out === undefined) {
     if (outputs.length !== 1) throw new Error(locale === 'fr' ? 'Utilisez --out pour plusieurs formats.' : 'Use --out for multiple formats.');
     const { text } = outputs[0]!;
     process.stdout.write(text.endsWith('\n') ? text : text + '\n');
     return;
   }
-  const directory = outputs.length > 1 || (await statExisting(out))?.isDirectory();
+  const outStat = await statExisting(out);
+  const directory = outputs.length > 1 || outStat?.isDirectory();
+  if (directory && outStat && !outStat.isDirectory()) throw new Error(`Output location is not a directory: ${out}`);
   const writes = outputs.map(({ extension, text }) => ({ text, path: directory ? join(out, `${stem}.${extension}`) : out }));
-  const inputStats = await Promise.all(inputs.map(statExisting));
-  const inputPaths = new Set(inputs.map(input => resolve(input)));
+  const inputStats = await Promise.all(inputs.map(path => statExisting(path)));
+  const inputPaths = new Set(inputs.map(pathKey));
+  const paths = new Set<string>();
+  const files = new Set<string>();
+  const existingPaths: string[] = [];
   for (const { path } of writes) {
     const output = await statExisting(path);
-    if (inputPaths.has(resolve(path)) || (output && inputStats.some(input => input && input.ino === output.ino && input.dev === output.dev))) {
+    const key = pathKey(path);
+    if (inputPaths.has(key) || (output && inputStats.some(input => input && input.ino === output.ino && input.dev === output.dev))) {
       throw new Error(`Output would overwrite an input file: ${path}`);
     }
+    if (output ? !output.isFile() : (await statExisting(path, lstat))?.isSymbolicLink()) {
+      throw new Error(`Output is not a regular file: ${path}`);
+    }
+    const file = output && `${output.dev}:${output.ino}`;
+    if (paths.has(key) || (file !== null && files.has(file))) throw new Error(`Duplicate output destination: ${path}`);
+    paths.add(key);
+    if (file !== null) {
+      files.add(file);
+      existingPaths.push(path);
+    }
   }
-  await mkdir(directory ? out : dirname(out), { recursive: true });
+  await Promise.all(existingPaths.map(path => access(path, constants.W_OK)));
+  const parent = directory ? out : dirname(out);
+  await mkdir(parent, { recursive: true });
+  if (existingPaths.length < writes.length) await access(parent, constants.W_OK);
   await Promise.all(writes.map(({ path, text }) => writeFile(path, text)));
 }
+
+process.stdout.on('error', (error: NodeJS.ErrnoException) => {
+  if (error.code !== 'EPIPE') throw error;
+});
 
 void run().catch((error: unknown) => {
   process.stderr.write(`graticule: ${error instanceof Error ? error.message : String(error)}\n`);

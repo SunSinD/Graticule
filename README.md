@@ -64,7 +64,7 @@ Add several files or a whole folder, or tick two or more captures in the history
 
 ## Cursors
 
-Click Cursors or press C on a clean plot. Two dashed lines measure time and two dotted lines measure voltage. Drag them with the mouse, or click one and move it with the arrow keys. Hold Shift to move faster.
+Click Cursors or press C on a clean plot. Two dashed lines measure time and two dotted lines measure voltage. Drag them with the mouse or your finger, or click one and move it with the arrow keys. Hold Shift to move faster.
 
 The bar above the plot shows X1, X2, Δt, 1/Δt, Y1, Y2 and ΔV. When the channel has a period, it also shows the phase between X1 and X2. Pick the channel from the menu on the left of the bar when more than one trace is on.
 
@@ -72,7 +72,7 @@ While the cursors are on, they are also drawn in the SVG, the PNG and the copied
 
 ## Report ready figures
 
-Type a title in the Export panel to replace the file name on the plot. Give each channel a label like Vin or Vout under Channels. The title and the labels show up in the SVG, the PNG, the CSV and the copied tables.
+Type a title in the Export panel to replace the file name on the plot. Give each channel a label like Vin or Vout under Channels. The title and the labels show up in the SVG, the PNG, the CSV and the copied tables, and the title also names the files you download.
 
 Click Copy or press Ctrl+C to copy a white 2x PNG of the plot. Paste it right into Word, Google Docs or PowerPoint.
 
@@ -132,7 +132,7 @@ Graticule never guesses what it cannot see. When a trace is clipped, hidden by a
 | Ctrl and wheel | Zoom the plot |
 | Arrows | Move a crop corner or a cursor |
 | Enter | Apply the crop |
-| Escape | Cancel the crop |
+| Escape | Cancel the crop or what you are typing |
 | ? | Show or hide the shortcuts |
 
 ## Offline

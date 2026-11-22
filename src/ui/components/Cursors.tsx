@@ -148,7 +148,7 @@ export function CursorReadout({ tx, locale, result, frame, cursors, labels, onCh
   const v2 = frame.voltAt(cursors.channel, clamp01(cursors.y2));
   const dv = v1 === null || v2 === null ? null : Math.abs(v2 - v1);
   const period = result.measurements.find((m) => m.channel === cursors.channel)?.periodSec ?? null;
-  const phase = period && period > 0 && Number.isFinite(period) ? (dt / period) * 360 : null;
+  const phase = period && period > 0 && Number.isFinite(period) ? ((((dt / period) * 360) % 360) + 360) % 360 : null;
   const channels = enabledChannels(result);
   const items: readonly (readonly [string, string])[] = [
     ['X1', fmt(t1, 's')],

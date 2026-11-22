@@ -65,7 +65,17 @@ export async function copyImage(png: Promise<Blob>): Promise<void> {
     await png.catch(() => undefined);
     throw new Error('Copying images is not supported in this browser');
   }
-  await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+  let item: ClipboardItem;
+  try {
+    item = new ClipboardItem({ 'image/png': png });
+  } catch (e) {
+    if (!(e instanceof TypeError)) {
+      await png.catch(() => undefined);
+      throw e;
+    }
+    item = new ClipboardItem({ 'image/png': await png });
+  }
+  await navigator.clipboard.write([item]);
 }
 
 export async function copyPlain(text: string): Promise<void> {
@@ -85,6 +95,15 @@ export async function copyPlain(text: string): Promise<void> {
   if (!ok) throw new Error('Copy failed');
 }
 
+const IMAGE_EXT = /\.(png|jpe?g|webp|bmp|gif|heic)$/i;
+const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+
 export function baseName(fileName: string): string {
-  return fileName.replace(/\.[^.]+$/, '') || 'graticule';
+  const name = fileName
+    .trim()
+    .replace(IMAGE_EXT, '')
+    .replace(/[\\/:*?"<>|\x00-\x1f]/g, '_')
+    .replace(/[. ]+$/, '');
+  if (!name) return 'graticule';
+  return RESERVED.test(name) ? `_${name}` : name;
 }

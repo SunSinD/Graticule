@@ -41,10 +41,17 @@ interface StoredItem {
   readonly cursors?: PlotCursors | null;
 }
 
+export interface MetaUpdate {
+  readonly lastUsed: number;
+}
+
 export interface HistoryStore {
   readonly persistent: boolean;
   loadAll(): Promise<HistoryItem[]>;
-  put(item: HistoryItem): Promise<void>;
+  /** Resolves true once the write is committed. */
+  put(item: HistoryItem): Promise<boolean>;
+  /** Updates small fields without the caller rebuilding the whole record. */
+  updateMeta(id: string, patch: MetaUpdate): Promise<boolean>;
   remove(id: string): Promise<void>;
   clear(): Promise<void>;
 }
@@ -76,8 +83,9 @@ export function capHistory(items: readonly HistoryItem[], keep: ReadonlySet<stri
   return items.filter((i) => !drop.has(i.id));
 }
 
+/** An extracting item may hold a result from before its new overrides, so it is never saved with them. */
 function storedResult(item: HistoryItem): ExtractionResult | null {
-  return item.state === 'error' ? null : item.result;
+  return item.state === 'error' || item.state === 'extracting' ? null : item.result;
 }
 
 /**
@@ -206,6 +214,13 @@ function memoryStore(): HistoryStore {
     loadAll: async () => loadValid([...map.values()]),
     put: async (item) => {
       map.set(item.id, toStored(item));
+      return true;
+    },
+    updateMeta: async (id, patch) => {
+      const prev = map.get(id);
+      if (!prev) return false;
+      map.set(id, { ...prev, ...patch });
+      return true;
     },
     remove: async (id) => {
       map.delete(id);
@@ -235,6 +250,27 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
+function isQuota(e: unknown): boolean {
+  if (!isRecord(e)) return false;
+  return e.name === 'QuotaExceededError' || e.code === 22 || e.name === 'NS_ERROR_DOM_QUOTA_REACHED';
+}
+
+/** Runs the work in one transaction and resolves only after it commits. */
+function commit(db: IDBDatabase, mode: IDBTransactionMode, work: (store: IDBObjectStore) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let t: IDBTransaction;
+    try {
+      t = db.transaction(STORE, mode);
+      work(t.objectStore(STORE));
+    } catch (e) {
+      reject(e);
+      return;
+    }
+    t.oncomplete = () => resolve();
+    t.onabort = () => reject(t.error ?? new Error('IndexedDB transaction aborted'));
+  });
+}
+
 function idbStore(db: IDBDatabase): HistoryStore {
   const tx = (mode: IDBTransactionMode) => db.transaction(STORE, mode).objectStore(STORE);
   const safe = async (run: () => Promise<unknown>): Promise<void> => {
@@ -242,6 +278,34 @@ function idbStore(db: IDBDatabase): HistoryStore {
       await run();
     } catch {
       /* quota or private mode, the session keeps working in memory */
+    }
+  };
+  /** Frees room by deleting the least recently used records, never the one being written. */
+  const evictOldest = async (keepId: string): Promise<boolean> => {
+    const all = (await request(tx('readonly').getAll() as IDBRequest<unknown[]>)).filter(validStored);
+    const victims = all
+      .filter((r) => r.id !== keepId)
+      .sort((a, b) => a.lastUsed - b.lastUsed)
+      .slice(0, Math.max(1, Math.ceil(all.length / 4)));
+    if (victims.length === 0) return false;
+    await commit(db, 'readwrite', (store) => {
+      for (const v of victims) store.delete(v.id);
+    });
+    return true;
+  };
+  const write = async (id: string, work: (store: IDBObjectStore) => void): Promise<boolean> => {
+    try {
+      await commit(db, 'readwrite', work);
+      return true;
+    } catch (e) {
+      if (!isQuota(e)) return false;
+    }
+    try {
+      if (!(await evictOldest(id))) return false;
+      await commit(db, 'readwrite', work);
+      return true;
+    } catch {
+      return false;
     }
   };
   return {
@@ -258,7 +322,17 @@ function idbStore(db: IDBDatabase): HistoryStore {
       }
       return loadValid(valid);
     },
-    put: (item) => safe(() => request(tx('readwrite').put(toStored(item)))),
+    put: (item) => {
+      const record = toStored(item);
+      return write(item.id, (store) => store.put(record));
+    },
+    updateMeta: (id, patch) =>
+      write(id, (store) => {
+        const req = store.get(id);
+        req.onsuccess = () => {
+          if (validStored(req.result)) store.put({ ...req.result, ...patch });
+        };
+      }),
     remove: (id) => safe(() => request(tx('readwrite').delete(id))),
     clear: () => safe(() => request(tx('readwrite').clear())),
   };

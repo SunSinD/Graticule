@@ -5,6 +5,12 @@ import { test, expect, type Page } from '@playwright/test';
 const FIXTURES = path.resolve('tests/fixtures/samples');
 const SINE = path.join(FIXTURES, 'sine_schmitt.png');
 const SWEEP = Array.from({ length: 10 }, (_, i) => path.join(FIXTURES, `sweep_${String(i + 1).padStart(2, '0')}.png`));
+const PHONE = {
+  hasTouch: true,
+  isMobile: true,
+  viewport: { width: 390, height: 844 },
+  userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
+};
 
 interface FilePayload {
   readonly name: string;
@@ -247,15 +253,12 @@ test('camera button shows on mobile and stays hidden on touchscreen desktop', as
   await expect(desktopPage.getByRole('button', { name: 'Take photo' })).toHaveCount(0);
   await touchDesktop.close();
 
-  const mobile = await browser.newContext({
-    hasTouch: true,
-    isMobile: true,
-    viewport: { width: 390, height: 844 },
-    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
-  });
+  const mobile = await browser.newContext(PHONE);
   const mobilePage = await mobile.newPage();
   await mobilePage.goto('/');
   await expect(mobilePage.getByRole('main').getByRole('button', { name: 'Take photo' })).toBeVisible();
+  await expect(mobilePage.locator('header').getByRole('button', { name: 'Take photo' })).toHaveCount(0);
+  await addFiles(mobilePage, SINE);
   await expect(mobilePage.locator('aside').getByRole('button', { name: 'Take photo' })).toBeVisible();
   await expect(mobilePage.locator('header').getByRole('button', { name: 'Add', exact: true })).toBeVisible();
   await expect(mobilePage.locator('header').getByRole('button', { name: 'Take photo' })).toBeVisible();
@@ -508,4 +511,131 @@ test('shortcuts dialog keeps keyboard focus inside while open', async ({ page })
   expect(await inDialog(page)).toBe(true);
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
+});
+
+/** Spread between the vertical centers of the visible top bar items, so 0 means one clean row. */
+async function headerSpread(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const centers = Array.from(document.querySelectorAll('header > *'))
+      .map((el) => el.getBoundingClientRect())
+      .filter((r) => r.width > 0 && r.height > 0)
+      .map((r) => r.top + r.height / 2);
+    return Math.max(...centers) - Math.min(...centers);
+  });
+}
+
+test('phone empty state hides dead panels, centers French buttons and keeps one top bar row', async ({ browser }) => {
+  const ctx = await browser.newContext(PHONE);
+  const page = await ctx.newPage();
+  await page.goto('/');
+  await page.getByRole('button', { name: 'FR', exact: true }).click();
+
+  await expect(page.getByText('Ajoutez une capture d’oscilloscope ou prenez une photo.')).toBeVisible();
+  await expect(page.locator('.zone.right')).toBeHidden();
+  await expect(page.locator('.zone.left')).toBeHidden();
+  await expect(page.getByRole('button', { name: 'Raccourcis clavier' })).toHaveCount(0);
+  await expect(page.locator('.mode')).toHaveCount(0);
+  expect(await headerSpread(page)).toBeLessThanOrEqual(2);
+
+  const offsets = await page.evaluate(() => {
+    const card = document.querySelector('.empty')!.getBoundingClientRect();
+    const mid = card.left + card.width / 2;
+    return Array.from(document.querySelectorAll('.empty .btn-row .btn')).map((b) => {
+      const r = b.getBoundingClientRect();
+      return Math.abs(r.left + r.width / 2 - mid);
+    });
+  });
+  expect(offsets).toHaveLength(2);
+  for (const off of offsets) expect(off).toBeLessThanOrEqual(2);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+
+  await addFiles(page, SINE);
+  await expect(page.getByRole('button', { name: 'Extraire', exact: true })).toBeVisible();
+  await expect(page.locator('.zone.right')).toBeVisible();
+  await expect(page.locator('.zone.left')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Raccourcis clavier' })).toHaveCount(0);
+  expect(await headerSpread(page)).toBeLessThanOrEqual(2);
+  await ctx.close();
+});
+
+test('touch drag moves X1 on a phone without a pointercancel', async ({ browser }) => {
+  const ctx = await browser.newContext(PHONE);
+  const page = await ctx.newPage();
+  await page.goto('/');
+  await extractSine(page);
+  await page.getByRole('button', { name: 'Cursors' }).click();
+  const x1 = page.getByRole('slider', { name: 'X1' });
+  await expect(x1).toHaveAttribute('aria-valuenow', '25');
+  await x1.scrollIntoViewIfNeeded();
+  await page.evaluate(() => {
+    const w = window as unknown as { cancels: number };
+    w.cancels = 0;
+    document.querySelector('[data-testid="cursor-layer"]')!.addEventListener('pointercancel', () => w.cancels++, true);
+  });
+
+  const line = await x1.locator('.cursor-hit').boundingBox();
+  const layer = await page.locator('[data-testid="cursor-layer"]').boundingBox();
+  expect(line && layer).toBeTruthy();
+  const x = line!.x + line!.width / 2;
+  const y = line!.y + line!.height / 2;
+  const cdp = await ctx.newCDPSession(page);
+  const touch = (type: 'touchStart' | 'touchMove' | 'touchEnd', px: number) =>
+    cdp.send('Input.dispatchTouchEvent', { type, touchPoints: type === 'touchEnd' ? [] : [{ x: px, y, id: 1 }] });
+  await touch('touchStart', x);
+  for (let i = 1; i <= 8; i++) await touch('touchMove', x + (layer!.width * 0.2 * i) / 8);
+  await touch('touchEnd', x);
+
+  const now = Number(await x1.getAttribute('aria-valuenow'));
+  expect(now).toBeGreaterThan(35);
+  expect(await page.evaluate(() => (window as unknown as { cancels: number }).cancels)).toBe(0);
+  await ctx.close();
+});
+
+test('Escape in the title field cancels the draft without saving it', async ({ page }) => {
+  await extractSine(page);
+  const title = page.getByRole('textbox', { name: 'Title' });
+  await title.fill('Draft that should vanish');
+  await title.press('Escape');
+  await expect(title).toHaveValue('');
+  await expect(title).not.toBeFocused();
+  await title.focus();
+  await page.locator('h2', { hasText: 'Profile' }).click();
+  await expect(title).toHaveValue('');
+  await expect(page.locator('.paper svg').first()).not.toContainText('Draft that should vanish');
+
+  const svgDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'SVG', exact: true }).click();
+  const download = await svgDownload;
+  expect(download.suggestedFilename()).toBe('sine_schmitt.svg');
+  const svgText = await fs.readFile((await download.path())!, 'utf8');
+  expect(svgText).not.toContain('Draft that should vanish');
+
+  await title.fill('Lab 3: Schmitt?');
+  await title.press('Enter');
+  const named = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'CSV', exact: true }).click();
+  expect((await named).suggestedFilename()).toBe('Lab 3_ Schmitt_.csv');
+});
+
+test('unticking or removing Bode captures opens the one left, never the capture opened before', async ({ page }) => {
+  await addFiles(page, SWEEP.slice(0, 3));
+  await expect(page.getByRole('button', { name: 'Extract Bode (3)' })).toBeVisible();
+  await page.locator('.file-row', { hasText: 'sweep_01.png' }).click();
+  await expect(page.locator('.file-row[aria-current="true"]')).toContainText('sweep_01.png');
+
+  const tick = (name: string) => page.getByRole('checkbox', { name: `Select for Bode ${name}` });
+  await tick('sweep_02.png').check();
+  await tick('sweep_03.png').check();
+  await expect(page.getByRole('button', { name: 'Extract Bode (2)' })).toBeVisible();
+  await tick('sweep_03.png').uncheck();
+  await expect(page.getByRole('button', { name: 'Extract', exact: true })).toBeVisible();
+  await expect(page.locator('.file-row[aria-current="true"]')).toContainText('sweep_02.png');
+
+  await page.locator('.file-row', { hasText: 'sweep_01.png' }).click();
+  await tick('sweep_02.png').check();
+  await tick('sweep_03.png').check();
+  await expect(page.getByRole('button', { name: 'Extract Bode (2)' })).toBeVisible();
+  await page.getByRole('button', { name: 'Remove sweep_03.png' }).click();
+  await expect(page.getByRole('button', { name: 'Extract', exact: true })).toBeVisible();
+  await expect(page.locator('.file-row[aria-current="true"]')).toContainText('sweep_02.png');
 });

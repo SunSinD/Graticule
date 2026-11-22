@@ -8,6 +8,17 @@ const CHANNELS: Readonly<Record<number, number>> = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 
 const DEPTHS: Readonly<Record<number, readonly number[]>> = {
   0: [1, 2, 4, 8, 16], 2: [8, 16], 3: [1, 2, 4, 8], 4: [8, 16], 6: [8, 16],
 };
+const CRC_TABLE = Uint32Array.from({ length: 256 }, (_, byte) => {
+  let crc = byte;
+  for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  return crc;
+});
+
+function crc32(bytes: Uint8Array, start: number, end: number): number {
+  let crc = 0xffffffff;
+  for (let i = start; i < end; i++) crc = (crc >>> 8) ^ CRC_TABLE[(crc ^ bytes[i]!) & 255]!;
+  return (~crc) >>> 0;
+}
 
 export function hasPngSignature(bytes: Uint8Array): boolean {
   return PNG_SIGNATURE.every((byte, index) => bytes[index] === byte);
@@ -72,6 +83,9 @@ export function decodePng(bytes: Uint8Array): RgbaImage {
     const dataEnd = dataStart + length;
     if (dataEnd + 4 > bytes.length) {
       throw new Error(`Invalid PNG: truncated ${type} chunk`);
+    }
+    if (crc32(bytes, pos + 4, dataEnd) !== readU32BE(bytes, dataEnd)) {
+      throw new Error(`Invalid PNG: CRC mismatch in ${type} chunk`);
     }
     const chunk = bytes.subarray(dataStart, dataEnd);
 

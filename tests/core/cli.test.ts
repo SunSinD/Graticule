@@ -1,5 +1,6 @@
-import { spawnSync } from 'node:child_process';
-import { linkSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
+import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -74,15 +75,53 @@ describe('command line', () => {
     expect(readFileSync(input)).toEqual(sample('sine_schmitt.png'));
   });
 
+  test('rejects an explicitly empty output path', () => {
+    const result = cli(input, '--csv', '--out=');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('--out requires a non-empty path');
+    expect(result.stdout).toBe('');
+  });
+
+  test('checks every destination before writing and protects already linked output files', () => {
+    const directory = join(root, 'preflight');
+    const csv = join(directory, 'capture.csv');
+    const svg = join(directory, 'capture.svg');
+    mkdirSync(svg, { recursive: true });
+    const blocked = cli(input, '--csv', '--svg', '--out', directory);
+    expect(blocked.status).toBe(1);
+    expect(blocked.stderr).toMatch(/Output is not a regular file.*capture\.svg/);
+    expect(existsSync(csv)).toBe(false);
+    rmdirSync(svg);
+    writeFileSync(csv, 'saved output');
+    linkSync(csv, svg);
+    const duplicate = cli(input, '--csv', '--svg', '--out', directory);
+    expect(duplicate.status).toBe(1);
+    expect(duplicate.stderr).toMatch(/Duplicate output destination/);
+    expect(readFileSync(csv, 'utf8')).toBe('saved output');
+    expect(readFileSync(svg, 'utf8')).toBe('saved output');
+  }, 15_000);
+
+  test('exits quietly after the stdout reader closes the pipe', async () => {
+    const child = spawn(process.execPath, ['--import', 'tsx', cliPath, input, '--json'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    child.stdout.destroy();
+    let stderr = '';
+    child.stderr.setEncoding('utf8').on('data', (chunk: string) => { stderr += chunk; });
+    const [status] = await once(child, 'close');
+    expect(status, stderr).toBe(0);
+    expect(stderr).toBe('');
+  });
+
   test('keeps good Bode captures and identifies an unreadable file on stderr', () => {
     const dir = join(root, 'batch');
     mkdirSync(dir);
     writeFileSync(join(dir, 'good.png'), sample('sweep_04.png'));
-    writeFileSync(join(dir, 'bad.png'), 'corrupt or unreadable');
+    const corrupt = Uint8Array.from(sample('sweep_04.png'));
+    corrupt[corrupt.length - 1] = corrupt[corrupt.length - 1]! ^ 1;
+    writeFileSync(join(dir, 'bad.png'), corrupt);
     const result = cli('--bode', dir, '--csv');
     expect(result.status).toBe(1);
     expect(result.stdout).toContain('good.png');
     expect(result.stdout).not.toContain('bad.png');
-    expect(result.stderr).toMatch(/bad\.png: Invalid PNG/);
+    expect(result.stderr).toMatch(/bad\.png: Invalid PNG: CRC mismatch in IEND/);
   });
 });

@@ -48,6 +48,16 @@ function png({ depth, color, scanlines, width = 2, height = 1, transparency, pal
 }
 
 describe('PNG decode', () => {
+  test.each(['IHDR', 'PLTE', 'IDAT', 'IEND'])('rejects a bad CRC on a structurally valid %s chunk', chunk => {
+    const bytes = png({ depth: 1, color: 3, scanlines: [0, 0b01000000], palette: [10, 20, 30, 40, 50, 60] });
+    const view = new DataView(bytes.buffer);
+    for (let pos = 8; pos < bytes.length;) {
+      const end = pos + 8 + view.getUint32(pos);
+      if (String.fromCharCode(...bytes.subarray(pos + 4, pos + 8)) === chunk) bytes[end] = bytes[end]! ^ 1;
+      pos = end + 4;
+    }
+    expect(() => decodePng(bytes)).toThrow(`CRC mismatch in ${chunk} chunk`);
+  });
   test.each([
     [1, 0b01000000, [0, 255, 0]],
     [2, 0b01101100, [85, 170, 255]],

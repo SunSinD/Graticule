@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Minus, Plus } from 'lucide-react';
 import type { Locale } from '../../core/types';
 import { formatEng, parseNumber, stepScale125 } from '../i18n';
@@ -21,9 +21,15 @@ interface Props {
 export function ScaleInput(props: Props) {
   const { id, label, value, unit, locale, disabled, stepper, allowZero, decLabel, incLabel, hint, onChange } = props;
   const [draft, setDraft] = useState<string | null>(null);
+  const skip = useRef(false);
   const shown = value === null ? '' : formatEng(value, unit, locale, { sig: 4, trim: true, empty: '' });
 
   const commit = (): void => {
+    if (skip.current) {
+      skip.current = false;
+      setDraft(null);
+      return;
+    }
     if (draft === null) return;
     const v = parseNumber(draft);
     setDraft(null);
@@ -57,8 +63,15 @@ export function ScaleInput(props: Props) {
           onChange={(e) => setDraft(e.target.value)}
           onBlur={commit}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') commit();
-            if (e.key === 'Escape') setDraft(null);
+            if (e.key === 'Enter') {
+              commit();
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              e.stopPropagation();
+              skip.current = true;
+              setDraft(null);
+              e.currentTarget.blur();
+            }
           }}
         />
         {stepper && (

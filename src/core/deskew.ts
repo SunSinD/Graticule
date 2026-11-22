@@ -26,6 +26,13 @@ export function validateQuad(quad: Quad, width: number, height: number): boolean
         || p.x < 0 || p.x > width || p.y < 0 || p.y > height || distance(p, next) < 1
         || cross(p, next, after) < 1) return false;
   }
+  const [tl, tr, br, bl] = quad;
+  // Average the opposite edges so a tilted or perspective-skewed top edge can still start at TL.
+  const acrossX = tr.x - tl.x + br.x - bl.x;
+  const acrossY = tr.y - tl.y + br.y - bl.y;
+  const downX = bl.x - tl.x + br.x - tr.x;
+  const downY = bl.y - tl.y + br.y - tr.y;
+  if (acrossX <= Math.abs(acrossY) || downY <= Math.abs(downX)) return false;
   const { minWeight } = transform(quad);
   return minWeight > 1e-9;
 }

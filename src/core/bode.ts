@@ -79,7 +79,7 @@ function evaluate(extraction: ExtractionResult, id: string, options: Required<Bo
   if ((input?.clippedCount ?? 0) > 5 || (output?.clippedCount ?? 0) > 5) rejectionReasons.push('clipped_channel');
   if (fit) {
     if (fit.contiguousCycles + 1e-9 < minCycles) rejectionReasons.push('insufficient_cycles');
-    if (colsPerCycle < options.minColsPerCycle) rejectionReasons.push('insufficient_cols_per_cycle');
+    if (colsPerCycle < options.minColsPerCycle * (1 - 1e-9)) rejectionReasons.push('insufficient_cols_per_cycle');
     if (cycles > 0 && !fit.nyquist) rejectionReasons.push('nyquist_limit');
     if (!fit.sufficientCoverage && cycles >= 1) rejectionReasons.push('insufficient_shared_coverage');
     if (vinPx < options.minPeakToPeakPx || voutPx < options.minPeakToPeakPx) rejectionReasons.push('insufficient_peak_to_peak_px');
@@ -101,7 +101,8 @@ function evaluate(extraction: ExtractionResult, id: string, options: Required<Bo
   return {
     id, fileName: extraction.fileName, frequencyHz, frequencySource, vinVpp, voutVpp, gainDb, phaseDeg, cycles, colsPerCycle, vinPx, voutPx,
     r2In, r2Out, accepted: rejectionReasons.length === 0 && Number.isFinite(gainDb), rejectionReasons, warnings,
-    edited: Boolean(edit && Object.keys(edit).length), extraction,
+    edited: Boolean(edit && Object.keys(edit).length),
+    ...(edit ? { override: { ...edit }, preferManualFrequency: live && positive(manual) } : {}), extraction,
   };
 }
 
@@ -109,7 +110,20 @@ function summarize(points: BodePoint[], options: Required<BodeGateOptions>, elap
   points.sort((a, b) => (a.frequencyHz ?? Infinity) - (b.frequencyHz ?? Infinity));
   const usable = (point: BodePoint): point is BodePoint & { frequencyHz: number; gainDb: number } =>
     point.accepted && positive(point.frequencyHz) && typeof point.gainDb === 'number' && Number.isFinite(point.gainDb);
-  const accepted = points.filter(usable);
+  const acceptedCount = points.filter(usable).length;
+  const groups = new Map<number, number[]>();
+  for (const point of points) {
+    if (!positive(point.frequencyHz)) continue;
+    const gains = groups.get(point.frequencyHz) ?? [];
+    if (usable(point)) gains.push(point.gainDb);
+    groups.set(point.frequencyHz, gains);
+  }
+  const frequencies = [...groups].map(([frequencyHz, gains]) => ({
+    frequencyHz,
+    gainDb: gains.length ? gains.sort((a, b) => a - b).reduce((sum, gain) => sum + gain / gains.length, 0) : null,
+  }));
+  type Frequency = (typeof frequencies)[number];
+  const accepted = frequencies.filter((point): point is Frequency & { gainDb: number } => point.gainDb !== null);
   let peak = 0;
   for (let i = 1; i < accepted.length; i++) if (accepted[i]!.gainDb > accepted[peak]!.gainDb) peak = i;
   const plateauFloor = (accepted[peak]?.gainDb ?? 0) - 0.2;
@@ -120,24 +134,38 @@ function summarize(points: BodePoint[], options: Required<BodeGateOptions>, elap
   const plateau = accepted.slice(left, right + 1);
   const passbandGainDb = plateau.length ? plateau.reduce((sum, point) => sum + point.gainDb / plateau.length, 0) : null;
   const cutoffTargetDb = passbandGainDb === null ? null : passbandGainDb - 3;
-  function cutoff(start: BodePoint | undefined, step: -1 | 1): number | null {
+  function cutoff(start: Frequency | undefined, step: -1 | 1): number | null {
     if (!start || cutoffTargetDb === null) return null;
-    for (let i = points.indexOf(start); i + step >= 0 && i + step < points.length; i += step) {
-      const inside = points[i]!;
-      const outside = points[i + step]!;
-      if (!usable(inside) || !usable(outside) || inside.frequencyHz === outside.frequencyHz
-          || inside.gainDb < cutoffTargetDb || outside.gainDb > cutoffTargetDb || inside.gainDb === outside.gainDb) continue;
+    for (let i = frequencies.indexOf(start); i + step >= 0 && i + step < frequencies.length; i += step) {
+      const inside = frequencies[i]!;
+      const outside = frequencies[i + step]!;
+      if (inside.gainDb === null || outside.gainDb === null || inside.gainDb < cutoffTargetDb
+          || outside.gainDb > cutoffTargetDb || inside.gainDb === outside.gainDb) continue;
+      if (inside.gainDb === cutoffTargetDb) return inside.frequencyHz;
+      if (outside.gainDb === cutoffTargetDb) return outside.frequencyHz;
       const fraction = (cutoffTargetDb - inside.gainDb) / (outside.gainDb - inside.gainDb);
       return Math.exp(Math.log(inside.frequencyHz) + fraction * (Math.log(outside.frequencyHz) - Math.log(inside.frequencyHz)));
     }
     return null;
   }
-  const cutoffLowHz = cutoff(plateau[0], -1);
-  const cutoffHighHz = cutoff(plateau.at(-1), 1);
+  let cutoffLowHz = cutoff(plateau[0], -1);
+  let cutoffHighHz = cutoff(plateau.at(-1), 1);
+  const first = accepted[0];
+  const last = accepted.at(-1);
+  if (cutoffTargetDb !== null && first && last && first.gainDb > cutoffTargetDb && last.gainDb > cutoffTargetDb) {
+    const falling = cutoff(first, 1);
+    const rising = cutoff(last, -1);
+    const target = cutoffTargetDb;
+    if (falling !== null && rising !== null && falling < rising && accepted.some(point =>
+      point.frequencyHz > falling && point.frequencyHz < rising && point.gainDb < target)) {
+      cutoffLowHz = falling;
+      cutoffHighHz = rising;
+    }
+  }
   return {
     inputChannel: options.inputChannel, outputChannel: options.outputChannel, points, passbandGainDb,
     cutoffHz: cutoffLowHz ?? cutoffHighHz, cutoffTargetDb, cutoffLowHz, cutoffHighHz,
-    acceptedCount: accepted.length, rejectedCount: points.length - accepted.length, elapsedMs, gateOptions: options,
+    acceptedCount, rejectedCount: points.length - acceptedCount, elapsedMs, gateOptions: options,
   };
 }
 
@@ -157,9 +185,20 @@ export function analyzeBodeBatch(extractions: readonly ExtractionResult[], optio
   return summarize(points, normalized, performance.now() - start);
 }
 
-export function recomputeBodeResult(result: BodeResult, overrides: BodeOverrides = {}, options: BodeGateOptions = {}): BodeResult {
+function isGateOptions(options: BodeGateOptions | BodeOverrides): options is BodeGateOptions {
+  return !(options instanceof Map) && Object.values(options).some(value => typeof value === 'number' || typeof value === 'string');
+}
+
+export function recomputeBodeResult(result: BodeResult, options?: BodeGateOptions): BodeResult;
+export function recomputeBodeResult(result: BodeResult, overrides: BodeOverrides | undefined, options?: BodeGateOptions): BodeResult;
+export function recomputeBodeResult(result: BodeResult, edits?: BodeOverrides | BodeGateOptions, options?: BodeGateOptions): BodeResult {
   const start = performance.now();
-  const normalized = gates({ inputChannel: result.inputChannel, outputChannel: result.outputChannel, ...result.gateOptions, ...options });
-  const points = result.points.map(point => evaluate(point.extraction, point.id, normalized, overrideFor(overrides, point.id), true));
+  const gateOnly = options === undefined && edits !== undefined && isGateOptions(edits);
+  const normalized = gates({ inputChannel: result.inputChannel, outputChannel: result.outputChannel, ...result.gateOptions,
+    ...(gateOnly ? edits : options) });
+  const points = result.points.map(point => {
+    if (!edits || gateOnly) return evaluate(point.extraction, point.id, normalized, point.override, point.preferManualFrequency ?? false);
+    return evaluate(point.extraction, point.id, normalized, overrideFor(edits as BodeOverrides, point.id), true);
+  });
   return summarize(points, normalized, performance.now() - start);
 }

@@ -864,11 +864,13 @@ input.tiny {
   position: absolute;
   inset: 0;
   overflow: visible;
+  touch-action: none;
 }
 
 .cursor {
   cursor: ew-resize;
   outline: none;
+  touch-action: none;
 }
 
 .cursor.hy {
@@ -879,6 +881,7 @@ input.tiny {
   stroke: transparent;
   stroke-width: 14;
   pointer-events: stroke;
+  touch-action: none;
 }
 
 .cursor-line {
@@ -1175,6 +1178,10 @@ input.tiny {
   font-size: 16px;
 }
 
+.empty .btn-row {
+  justify-content: center;
+}
+
 .center-msg {
   margin: auto;
 }
@@ -1288,20 +1295,33 @@ input.tiny {
 @media (max-width: 1000px) {
   .app {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto auto auto auto;
+    grid-template-rows: auto 1fr auto auto;
     grid-template-areas: 'top' 'center' 'right' 'left';
     height: auto;
     min-height: 100%;
   }
 
   .topbar {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 6px;
     padding: 8px 16px;
   }
 
+  .wordmark {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .btn.compact-only {
     display: inline-flex;
+  }
+
+  .btn.wide-only,
+  .app.mode-empty .zone.right,
+  .app.no-history .zone.left {
+    display: none;
   }
 
   .zone,
@@ -1330,5 +1350,34 @@ input.tiny {
 
   .fit .capture .canvas {
     width: calc(100cqw * var(--z, 1));
+  }
+
+  .capture > .toolbar:not(.crop-bar) > .grow {
+    display: none;
+  }
+
+  .capture > .toolbar:not(.crop-bar) > .btn,
+  .capture > .toolbar:not(.crop-bar) > .seg {
+    flex: 1 1 auto;
+  }
+
+  .capture > .toolbar:not(.crop-bar) > .seg .btn {
+    flex: 1 1 0;
+  }
+
+  .capture > .toolbar:not(.crop-bar) > .zoom {
+    flex: 1 1 200px;
+  }
+
+  .capture > .toolbar:not(.crop-bar) > .zoom input[type='range'] {
+    flex: 1;
+    width: auto;
+    min-width: 80px;
+  }
+}
+
+@media (max-width: 540px) {
+  .mode {
+    display: none;
   }
 }

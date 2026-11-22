@@ -58,6 +58,21 @@ describe('four-corner deskew', () => {
     expect(result.height).toBeLessThan(30);
   });
 
+  test('rejects cyclic corner orders while preserving both directions of 35-degree tilt', () => {
+    const rectangle: Quad = [{ x: 0, y: 0 }, { x: 1023, y: 0 }, { x: 1023, y: 599 }, { x: 0, y: 599 }];
+    const [a, b, c, d] = rectangle;
+    for (const shifted of [[b, c, d, a], [c, d, a, b], [d, a, b, c]] as const) {
+      expect(validateQuad(shifted, 1024, 600)).toBe(false);
+    }
+    for (const direction of [-1, 1]) {
+      const angle = direction * 35 * Math.PI / 180;
+      const rotate = ({ x, y }: (typeof rectangle)[number]) => ({
+        x: 550 + x * Math.cos(angle) - y * Math.sin(angle), y: 630 + x * Math.sin(angle) + y * Math.cos(angle),
+      });
+      expect(validateQuad([rotate(a), rotate(b), rotate(c), rotate(d)], 1800, 1800)).toBe(true);
+    }
+  });
+
   test('recovers calibration on a perspective grid and projects the overlay to the source photo', () => {
     const src = bitmap(200, 160);
     for (let y = 0; y < src.height; y++) {
@@ -84,6 +99,6 @@ describe('four-corner deskew', () => {
     const first = result.traces[0]!.samples.find(sample => sample.status === 'ok')!;
     const point = projectRectToQuad({ x: first.xPx, y: first.yPx! }, quad, { width: result.imageWidth, height: result.imageHeight });
     const rounded = (value: number) => Math.round(value * 100) / 100;
-    expect(overlay).toContain("M" + rounded(point.x) + " " + rounded(point.y));
+    expect(overlay).toContain('M' + rounded(point.x + 0.5) + ' ' + rounded(point.y + 0.5));
   });
 });

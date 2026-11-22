@@ -11,7 +11,7 @@ interface Props {
   readonly dark: boolean;
   readonly onLocale: (locale: Locale) => void;
   readonly onTheme: () => void;
-  readonly onShortcuts: () => void;
+  readonly onShortcuts?: (() => void) | undefined;
   readonly onAdd: () => void;
   readonly onCamera?: (() => void) | undefined;
 }
@@ -26,10 +26,12 @@ export function TopBar({ tx, mode, locale, dark, onLocale, onTheme, onShortcuts,
         </span>
       )}
       <span className="spacer" />
-      <button type="button" className="btn icon compact-only" onClick={onAdd} aria-label={tx.add} title={tx.addTitle}>
-        <Plus size={16} aria-hidden="true" />
-      </button>
-      {onCamera && (
+      {mode !== 'empty' && (
+        <button type="button" className="btn icon compact-only" onClick={onAdd} aria-label={tx.add} title={tx.addTitle}>
+          <Plus size={16} aria-hidden="true" />
+        </button>
+      )}
+      {mode !== 'empty' && onCamera && (
         <button type="button" className="btn icon compact-only" onClick={onCamera} aria-label={tx.takePhoto} title={tx.takePhoto}>
           <Camera size={16} aria-hidden="true" />
         </button>
@@ -50,16 +52,18 @@ export function TopBar({ tx, mode, locale, dark, onLocale, onTheme, onShortcuts,
       >
         {dark ? <Sun size={16} aria-hidden="true" /> : <Moon size={16} aria-hidden="true" />}
       </button>
-      <button
-        type="button"
-        className="btn icon"
-        onClick={onShortcuts}
-        aria-label={tx.shortcuts}
-        title={tx.shortcuts}
-        aria-keyshortcuts="?"
-      >
-        ?
-      </button>
+      {onShortcuts && (
+        <button
+          type="button"
+          className="btn icon wide-only"
+          onClick={onShortcuts}
+          aria-label={tx.shortcuts}
+          title={tx.shortcuts}
+          aria-keyshortcuts="?"
+        >
+          ?
+        </button>
+      )}
     </header>
   );
 }

@@ -7,7 +7,11 @@ export function quantile(sorted: readonly number[], fraction: number): number {
   const index = fraction * (sorted.length - 1);
   const below = Math.floor(index);
   const above = Math.ceil(index);
-  return sorted[below]! + (sorted[above]! - sorted[below]!) * (index - below);
+  if (below === above) return sorted[below]!;
+  const lower = sorted[below]!;
+  const upper = sorted[above]!;
+  const weight = index - below;
+  return lower < 0 && upper > 0 ? lower * (1 - weight) + upper * weight : lower + (upper - lower) * weight;
 }
 
 export function wrapPhase(degrees: number): number {

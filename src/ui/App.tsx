@@ -50,6 +50,7 @@ interface BodeSession {
   readonly gate: BodeGateOptions;
   readonly points: PointOverrides;
   readonly pointItems: Readonly<Record<string, string>>;
+  readonly profile?: ProfileChoice;
 }
 
 const STAGED_SESSION: BodeSession = { state: 'staged', result: null, error: null, gate: {}, points: {}, pointItems: {} };
@@ -189,10 +190,14 @@ export function App() {
   const liveUrls = useRef<Set<string>>(new Set());
   const singleReq = useRef<Map<string, number>>(new Map());
   const bodeReq = useRef<Map<string, number>>(new Map());
+  const recomputeReq = useRef<Map<string, number>>(new Map());
+  const sessionsRef = useRef<Readonly<Record<string, BodeSession>>>({});
+  const keepRef = useRef(keepHistory);
   const feedbackTimer = useRef<number | undefined>(undefined);
   itemsRef.current = items;
   activeRef.current = activeId;
   selectedRef.current = selected;
+  keepRef.current = keepHistory;
 
   const canUseCamera = useMemo(isMobileOrTablet, []);
   const tx = t(locale);
@@ -252,6 +257,8 @@ export function App() {
           return;
         }
         persisted.current = new Map(loaded.map((i) => [i.id, i]));
+        // Registered as live so the URL effect revokes any that capHistory drops.
+        for (const i of loaded) liveUrls.current.add(i.url);
         setItems((prev) => {
           const have = new Set(prev.map((i) => i.id));
           return capHistory([...prev, ...loaded.filter((i) => !have.has(i.id))].sort(compareItems), have);
@@ -274,18 +281,27 @@ export function App() {
       if (timer !== undefined) window.clearTimeout(timer);
       cursorSaves.current.delete(id);
     };
+    const save = (item: HistoryItem): void => {
+      void store.put(item).then((ok) => {
+        if (!ok || storeRef.current !== store) return;
+        // Removed while the write was running, so the removal effect never saw it as saved.
+        if (!itemsRef.current.some((i) => i.id === item.id)) void store.remove(item.id);
+        else if (keepRef.current) persisted.current.set(item.id, item);
+      });
+    };
     for (const item of items) {
       const was = prev.get(item.id);
       if (was && item.state === 'extracting') {
         next.set(item.id, was);
         continue;
       }
-      next.set(item.id, item);
       const change = was ? storedChange(was, item) : 'other';
       if (change === 'other') {
+        if (was) next.set(item.id, was);
         cancelCursorSave(item.id);
-        void store.put(item);
-      } else if (change === 'cursors') {
+        save(item);
+      } else if (change === 'cursors' && was) {
+        next.set(item.id, was);
         cancelCursorSave(item.id);
         const id = item.id;
         cursorSaves.current.set(
@@ -293,9 +309,12 @@ export function App() {
           window.setTimeout(() => {
             cursorSaves.current.delete(id);
             const latest = itemsRef.current.find((i) => i.id === id);
-            if (latest && storeRef.current && persisted.current.has(id)) void storeRef.current.put(latest);
+            if (latest && storeRef.current === store && persisted.current.has(id)) save(latest);
           }, CURSOR_SAVE_DELAY),
         );
+      } else {
+        next.set(item.id, item);
+        if (was && was.lastUsed !== item.lastUsed) void store.updateMeta(item.id, { lastUsed: item.lastUsed });
       }
     }
     for (const id of prev.keys()) {
@@ -330,7 +349,10 @@ export function App() {
   const bode = session?.result ?? null;
 
   const setSession = useCallback((key: string, patch: Partial<BodeSession>) => {
-    setSessions((all) => ({ ...all, [key]: { ...(all[key] ?? STAGED_SESSION), ...patch } }));
+    const all = sessionsRef.current;
+    const next = { ...all, [key]: { ...(all[key] ?? STAGED_SESSION), ...patch } };
+    sessionsRef.current = next;
+    setSessions(next);
   }, []);
 
   const resetCaptureView = (nextView: CaptureMode): void => {
@@ -381,18 +403,40 @@ export function App() {
     [patchItem],
   );
 
+  const recompute = useCallback(
+    (key: string, current: BodeResult, gate: BodeGateOptions, points: PointOverrides) => {
+      const req = (recomputeReq.current.get(key) ?? 0) + 1;
+      recomputeReq.current.set(key, req);
+      setSession(key, { gate, points });
+      recomputeBode(current, gate, points).then(
+        (r) => {
+          if (recomputeReq.current.get(key) === req) setSession(key, { result: r, error: null });
+        },
+        (e: unknown) => {
+          if (recomputeReq.current.get(key) === req) setSession(key, { error: message(e) });
+        },
+      );
+    },
+    [setSession],
+  );
+
   const runBode = useCallback(
-    (key: string, list: readonly HistoryItem[], profile: ProfileChoice, gate: BodeGateOptions, points: PointOverrides) => {
+    (key: string, list: readonly HistoryItem[], profile: ProfileChoice) => {
       const req = (bodeReq.current.get(key) ?? 0) + 1;
       bodeReq.current.set(key, req);
+      const { gate, points } = sessionsRef.current[key] ?? STAGED_SESSION;
       const choiceFor = (i: HistoryItem): ProfileChoice => (profile === 'auto' ? i.profile : profile);
       const input = list.map((i) => ({ fileName: i.name, bytes: i.bytes, overrides: withProfile(i.overrides, choiceFor(i)) }));
       const pointItems = pointItemMap(list);
-      setSession(key, { state: 'extracting', error: null });
+      setSession(key, { state: 'extracting', error: null, profile });
       analyzeBode(input, gate, points).then(
         (r) => {
           if (bodeReq.current.get(key) !== req) return;
-          setSession(key, { state: 'extracted', result: r, error: null, gate, points, pointItems });
+          // Any recompute still running was based on the old result.
+          recomputeReq.current.set(key, (recomputeReq.current.get(key) ?? 0) + 1);
+          const latest = sessionsRef.current[key] ?? STAGED_SESSION;
+          setSession(key, { state: 'extracted', result: r, error: null, pointItems });
+          if (latest.gate !== gate || latest.points !== points) recompute(key, r, latest.gate, latest.points);
           const cache = new Map<string, ExtractionResult>();
           for (const p of r.points) {
             const itemId = pointItems[p.id];
@@ -412,24 +456,7 @@ export function App() {
         },
       );
     },
-    [setSession],
-  );
-
-  const recompute = useCallback(
-    (key: string, current: BodeResult, gate: BodeGateOptions, points: PointOverrides) => {
-      const req = (bodeReq.current.get(key) ?? 0) + 1;
-      bodeReq.current.set(key, req);
-      setSession(key, { gate, points });
-      recomputeBode(current, gate, points).then(
-        (r) => {
-          if (bodeReq.current.get(key) === req) setSession(key, { result: r });
-        },
-        (e: unknown) => {
-          if (bodeReq.current.get(key) === req) setSession(key, { error: message(e) });
-        },
-      );
-    },
-    [setSession],
+    [setSession, recompute],
   );
 
   const openItem = useCallback((id: string) => {
@@ -443,11 +470,27 @@ export function App() {
     setItems((list) => list.map((i) => (i.id === id ? { ...i, lastUsed: now } : i)));
   }, []);
 
-  const toggleSelect = useCallback((id: string) => {
-    setSelected((sel) => (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]));
-    setInspectedId(null);
-    setNotice(null);
-  }, []);
+  const toggleSelect = useCallback(
+    (id: string) => {
+      const cur = selectedRef.current;
+      const next = cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id];
+      setInspectedId(null);
+      setNotice(null);
+      if (next.length === 1 && cur.length >= 2) {
+        openItem(next[0]!);
+        return;
+      }
+      selectedRef.current = next;
+      setSelected(next);
+      if (next.length >= 2) {
+        activeRef.current = null;
+        setActiveId(null);
+        setCropOpen(false);
+        setForceQuad(false);
+      }
+    },
+    [openItem],
+  );
 
   const removeItem = useCallback(
     (id: string) => {
@@ -470,6 +513,8 @@ export function App() {
   const clearAll = (): void => {
     singleReq.current.clear();
     bodeReq.current.clear();
+    recomputeReq.current.clear();
+    sessionsRef.current = {};
     replaceIdRef.current = null;
     persisted.current = new Map();
     for (const timer of cursorSaves.current.values()) window.clearTimeout(timer);
@@ -571,9 +616,10 @@ export function App() {
   const capture: ExtractionResult | null = mode === 'single' ? activeItem?.result ?? null : inspected?.extraction ?? null;
   const captureItem = mode === 'single' ? activeItem : inspectedItem;
   const captureName = captureItem?.name ?? inspected?.fileName ?? '';
-  const captureTitle = (mode === 'single' ? activeItem?.title?.trim() : '') || captureName;
-  const captureLabels: ChannelLabels | undefined = mode === 'single' ? activeItem?.channelLabels : undefined;
-  const profileChoice: ProfileChoice = mode === 'single' ? activeItem?.profile ?? 'auto' : bodeProfile;
+  const captureTitle = captureItem?.title?.trim() || captureName;
+  const captureLabels: ChannelLabels | undefined = captureItem?.channelLabels;
+  const sessionProfile: ProfileChoice = session?.profile ?? bodeProfile;
+  const profileChoice: ProfileChoice = mode === 'single' ? activeItem?.profile ?? 'auto' : sessionProfile;
   const isUniversal =
     mode === 'single' &&
     (activeItem?.profile === 'universal-fallback' || activeItem?.result?.detection.profileId === 'universal-fallback');
@@ -616,9 +662,7 @@ export function App() {
       setCursorsOn(false);
       return;
     }
-    if (cropVisible) {
-      setCropDismissed((prev) => (prev.has(item.id) ? prev : new Set(prev).add(item.id)));
-    }
+    if (cropVisible) return;
     setView('clean');
     setOverlay(false);
     setCropOpen(false);
@@ -636,7 +680,7 @@ export function App() {
       const labels = captureLabels;
       const svgCursors = cursors ?? undefined;
       return {
-        baseName: baseName(captureName),
+        baseName: baseName(captureTitle),
         svg: () =>
           renderWaveformSvg(capture, {
             locale,
@@ -645,7 +689,7 @@ export function App() {
             ...(svgCursors ? { cursors: svgCursors } : {}),
           }),
         csv: () => renderWaveformCsv(capture, labels),
-        table: (f) => renderMeasurementsTable(capture, f, locale, labels),
+        table: (f) => renderMeasurementsTable(capture, f, locale, labels, captureTitle),
       };
     }
     if (mode === 'bode' && bode) {
@@ -706,14 +750,14 @@ export function App() {
       } else if (k === 't' && showCapture && capture) {
         e.preventDefault();
         toggleOverlay();
-      } else if (k === 'c' && mode === 'single' && capture) {
+      } else if (k === 'c' && mode === 'single' && capture && !cropVisible) {
         e.preventDefault();
         toggleCursors();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [help, openPicker, showCapture, capture, toggleOverlay, toggleCursors, mode, exportSource, copyPlot]);
+  }, [help, openPicker, showCapture, capture, toggleOverlay, toggleCursors, mode, exportSource, copyPlot, cropVisible]);
 
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
@@ -781,7 +825,7 @@ export function App() {
 
   return (
     <div
-      className={`app${dragging ? ' dragging' : ''}`}
+      className={`app mode-${mode}${items.length === 0 ? ' no-history' : ''}${dragging ? ' dragging' : ''}`}
       onDragOver={(e) => {
         if (!hasFiles(e.dataTransfer)) return;
         e.preventDefault();
@@ -799,7 +843,7 @@ export function App() {
         dark={dark}
         onLocale={setLocale}
         onTheme={toggleTheme}
-        onShortcuts={() => setHelp((h) => !h)}
+        onShortcuts={canUseCamera ? undefined : () => setHelp((h) => !h)}
         onAdd={() => openPicker(false)}
         onCamera={canUseCamera ? () => openCamera() : undefined}
       />
@@ -968,7 +1012,7 @@ export function App() {
               type="button"
               className="btn primary"
               disabled={session?.state === 'extracting'}
-              onClick={() => runBode(bodeKey, selectedItems, bodeProfile, session?.gate ?? {}, session?.points ?? {})}
+              onClick={() => runBode(bodeKey, selectedItems, sessionProfile)}
             >
               {session?.state === 'extracting' ? tx.working : tx.extractBode(selectedItems.length)}
             </button>
@@ -1043,7 +1087,9 @@ export function App() {
                 updateItem(activeItem.id, { profile: choice });
               } else {
                 setBodeProfile(choice);
-                if (bodeKey && session?.result) runBode(bodeKey, selectedItems, choice, session.gate, session.points);
+                if (!bodeKey) return;
+                if (session?.result || session?.state === 'extracting') runBode(bodeKey, selectedItems, choice);
+                else setSession(bodeKey, { profile: choice });
               }
             }}
           />

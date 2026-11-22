@@ -12,7 +12,7 @@ import type {
 } from '../types.js';
 import { projectRectToQuad } from '../deskew.js';
 import { GRATICULE_VERSION, formatEng, localizeDecimal, trimTrailingZeros } from './format.js';
-import { GAP_LABELS, SVG_TEXT } from './labels.js';
+import { EXPORT_TEXT, GAP_LABELS, SVG_TEXT } from './labels.js';
 import { splitTrace } from './trace-geometry.js';
 import type { TraceGap } from './trace-geometry.js';
 
@@ -62,6 +62,7 @@ export const CHANNEL_LINE_STYLES: Readonly<Record<ChannelId, LineStyle>> = {
 
 export function escapeXml(text: string): string {
   return text
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -160,10 +161,12 @@ export interface WaveformFrame {
 function waveformLayout(result: ExtractionResult, options: SvgExportOptions) {
   const grid = result.detection.grid;
   const traces = result.traces.filter(tr => tr.settings.enabled);
-  const width = Math.round(options.width ?? 960);
   const x0 = 76;
   const y0 = 56;
-  const plotW = width - x0 - (traces.length > 1 ? 76 : 28);
+  const marginR = traces.length > 1 ? 76 : 28;
+  const requestedWidth = options.width ?? 960;
+  const width = Number.isFinite(requestedWidth) ? Math.max(x0 + marginR + 1, Math.round(requestedWidth)) : 960;
+  const plotW = width - x0 - marginR;
   const plotH = plotW / Math.max(1, grid.hDivs) * Math.max(1, grid.vDivs);
   const laneGap = 5;
   const lanesH = traces.length * laneGap + 6;
@@ -495,14 +498,21 @@ export function renderBodeSvg(result: BodeResult, options: SvgExportOptions = {}
 
   const pts = result.points.filter(validFreq).slice().sort((a, b) => a.frequencyHz - b.frequencyHz);
   const freqs = pts.map((p) => p.frequencyHz);
-  const cutoffs = [...new Set([result.cutoffLowHz ?? result.cutoffHz, result.cutoffHighHz ?? null])]
-    .filter((frequency): frequency is number => finiteNum(frequency) && frequency > 0);
-  freqs.push(...cutoffs);
-  let dMin = freqs.length ? Math.floor(Math.log10(Math.min(...freqs))) : 1;
+  const cutoffEntries = result.cutoffLowHz != null || result.cutoffHighHz != null
+    ? [{ frequency: result.cutoffLowHz, side: 'low' }, { frequency: result.cutoffHighHz, side: 'high' }] as const
+    : [{ frequency: result.cutoffHz, side: null }] as const;
+  const cutoffs = cutoffEntries.flatMap(({ frequency, side }) =>
+    frequency != null && finiteNum(frequency) && frequency > 0 ? [{ frequency, side }] : []);
+  freqs.push(...cutoffs.map(({ frequency }) => frequency));
+  const dMin = freqs.length ? Math.floor(Math.log10(Math.min(...freqs))) : 1;
   let dMax = freqs.length ? Math.ceil(Math.log10(Math.max(...freqs))) : 5;
   if (dMax <= dMin) dMax = dMin + 1;
   const logSpan = dMax - dMin;
-  const mapF = (f: number): number => x0 + ((Math.log10(f) - dMin) / logSpan) * plotW;
+  const mapLog = (logFrequency: number): number => x0 + ((logFrequency - dMin) / logSpan) * plotW;
+  const mapF = (f: number): number => mapLog(Math.log10(f));
+  const decadeStep = Math.max(1, Math.ceil(logSpan / 12));
+  const decades = Array.from({ length: Math.floor(logSpan / decadeStep) + 1 }, (_, index) => dMin + index * decadeStep);
+  if (decades.at(-1) !== dMax) decades.push(dMax);
 
   const gains = pts.map((p) => p.gainDb).filter(finiteNum);
   if (finiteNum(result.cutoffTargetDb)) gains.push(result.cutoffTargetDb);
@@ -526,12 +536,12 @@ export function renderBodeSvg(result: BodeResult, options: SvgExportOptions = {}
 
   const decadeGrid = (top: number, bot: number): string => {
     const g: string[] = [];
-    for (let d = dMin; d <= dMax; d++) {
-      const xx = mapF(10 ** d);
+    for (const d of decades) {
+      const xx = mapLog(d);
       if (d > dMin && d < dMax) g.push(line(xx, top, xx, bot, pal.grid, 1));
-      if (d < dMax) {
+      if (decadeStep === 1 && d < dMax) {
         for (let m = 2; m <= 9; m++) {
-          const xm = mapF(m * 10 ** d);
+          const xm = mapLog(d + Math.log10(m));
           g.push(line(xm, top, xm, bot, pal.gridMinor, 1));
         }
       }
@@ -596,11 +606,12 @@ export function renderBodeSvg(result: BodeResult, options: SvgExportOptions = {}
   out.push(panel('Phase plot', t.phaseAxis, pTop, pBot, pR, mapP, (p) => p.phaseDeg, true));
 
   const axis: string[] = [];
-  for (let d = dMin; d <= dMax; d++) {
-    const xx = mapF(10 ** d);
+  for (const d of decades) {
+    const xx = mapLog(d);
     axis.push(line(xx, pBot, xx, pBot + 4, pal.ink, 1));
     axis.push(line(xx, gBot, xx, gBot + 4, pal.ink, 1));
-    const lbl = formatEng(10 ** d, 'Hz', locale, { sig: 3, trim: true });
+    const tick = 10 ** d;
+    const lbl = tick > 0 && Number.isFinite(tick) ? formatEng(tick, 'Hz', locale, { sig: 3, trim: true }) : `1e${d} Hz`;
     axis.push(text(xx, pBot + 16, lbl, { anchor: 'middle', size: 10, mono: true }, pal.ink));
     axis.push(text(xx, gBot + 16, lbl, { anchor: 'middle', size: 10, mono: true, fill: pal.muted }, pal.ink));
   }
@@ -618,14 +629,18 @@ export function renderBodeSvg(result: BodeResult, options: SvgExportOptions = {}
       c.push(line(x0, yy, x1, yy, pal.muted, 1, '1 2'));
       c.push(text(x1 - 4, yy - 4, `${MINUS}3 dB`, { anchor: 'end', size: 10, mono: true, fill: pal.muted }, pal.ink));
     }
-    for (const [i, frequency] of cutoffs.entries()) {
+    for (const [i, { frequency, side }] of cutoffs.entries()) {
       const cx = mapF(frequency);
+      const tx = EXPORT_TEXT[locale];
+      c.push(`<g aria-label="${escapeXml(side === 'low' ? tx.cutoffLow : side === 'high' ? tx.cutoffHigh : tx.cutoff)}">`);
       c.push(line(cx, gTop, cx, pBot, pal.ink, 1, '4 3'));
-      const label = `${cutoffs.length === 1 ? 'fc' : `fc${i + 1}`} = ${formatEng(frequency, 'Hz', locale, { sig: 4, trim: true })}`;
+      const symbol = cutoffs.length > 1 ? `fc${i + 1}` : side === 'low' ? 'fcL' : side === 'high' ? 'fcH' : 'fc';
+      const label = `${symbol} = ${formatEng(frequency, 'Hz', locale, { sig: 4, trim: true })}`;
       const rightSide = cx < x1 - 120;
       const lx = rightSide ? cx + 6 : cx - 6;
       c.push(`<rect x="${n(rightSide ? lx - 2 : lx - 112)}" y="${n(gTop + 6 + i * 18)}" width="114" height="16" fill="${pal.paper}"/>`);
       c.push(text(lx, gTop + 18 + i * 18, label, { anchor: rightSide ? 'start' : 'end', size: 11, mono: true, weight: 600 }, pal.ink));
+      c.push('</g>');
     }
     c.push('</g>');
     out.push(c.join(''));
@@ -671,10 +686,13 @@ export function renderOverlaySvg(result: ExtractionResult, options: OverlayOptio
   const g = result.detection.grid;
   const size = { width: result.imageWidth, height: result.imageHeight };
   const at = (x: number, y: number) => projected && sourceQuad ? projectRectToQuad({ x, y }, sourceQuad, size) : { x, y };
-  const xy = (x: number, y: number) => {
+  const coords = ({ x, y }: ReturnType<typeof at>) => `${n(x)} ${n(y)}`;
+  const xy = (x: number, y: number) => coords(at(x, y));
+  const pixelCenter = (x: number, y: number) => {
     const point = at(x, y);
-    return `${n(point.x)} ${n(point.y)}`;
+    return { x: point.x + 0.5, y: point.y + 0.5 };
   };
+  const pixelBoundary = (x: number, y: number) => pixelCenter(x - 0.5, y - 0.5);
   const region = (left: number, right: number) => projected
     ? `polygon points="${xy(left, g.top)} ${xy(right, g.top)} ${xy(right, g.bottom)} ${xy(left, g.bottom)}"`
     : `rect x="${n(left)}" y="${n(g.top)}" width="${n(right - left)}" height="${n(g.height)}"`;
@@ -689,22 +707,27 @@ export function renderOverlaySvg(result: ExtractionResult, options: OverlayOptio
   for (const tr of result.traces) {
     if (!tr.settings.enabled) continue;
     const split = splitTrace(tr.samples);
-    const shift = projected ? 0 : 0.5;
     const d = split.segments
-      .map((seg) => seg.map((p, i) => `${i === 0 ? 'M' : 'L'}${xy(p.xPx + shift, p.yPx + shift)}`).join(''))
+      .map((seg) => {
+        const points = seg.map(p => coords(pixelCenter(p.xPx, p.yPx)));
+        return points.length === 1 ? `M${points[0]}L${points[0]}` : `M${points.join('L')}`;
+      })
       .join('');
     if (d) {
-      out.push(`<path d="${d}" fill="none" stroke="#000000" stroke-width="3.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`);
-      out.push(`<path d="${d}" fill="none" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`);
+      out.push(`<path d="${d}" fill="none" stroke="#000000" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`);
+      out.push(`<path d="${d}" fill="none" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>`);
     }
     if (options.showGaps ?? true) {
       for (const gap of split.gaps) {
-        const a = gap.x0;
-        const b = Math.max(gap.x1, gap.x0 + 1);
-        out.push(`<${region(a, projected ? Math.min(b + 1, g.right) : b + 1)} fill="#ffffff" fill-opacity="0.09"/>`);
+        const a = Math.max(gap.x0, g.left);
+        const b = Math.min(gap.x1 + 1, g.right + 1);
+        if (b <= a) continue;
+        const polygon = [[a, g.top], [b, g.top], [b, g.bottom + 1], [a, g.bottom + 1]] as const;
+        const points = polygon.map(([x, y]) => coords(pixelBoundary(x, y))).join(' ');
+        out.push(`<polygon points="${points}" fill="#ffffff" fill-opacity="0.09"/>`);
         const markY = gap.kind === 'clipped_high' ? g.top + 3 : g.bottom - 3;
-        const start = at(a, markY);
-        const end = at(projected ? Math.min(b + 1, g.right) : b + 1, markY);
+        const start = pixelBoundary(a, markY + 0.5);
+        const end = pixelBoundary(b, markY + 0.5);
         const mark = `x1="${n(start.x)}" y1="${n(start.y)}" x2="${n(end.x)}" y2="${n(end.y)}"`;
         out.push(`<line ${mark} stroke="#000000" stroke-width="3.5" vector-effect="non-scaling-stroke"/>`);
         out.push(`<line ${mark} stroke="#ffffff" stroke-width="1.5" stroke-dasharray="2 2" vector-effect="non-scaling-stroke"/>`);

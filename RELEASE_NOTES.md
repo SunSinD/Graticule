@@ -1,41 +1,51 @@
-# Graticule 1.1.0
+# Graticule 1.1.1
 
 Try it live at [sunsind.github.io/Graticule](https://sunsind.github.io/Graticule/).
 
-## Highlights
+A fix release that cleans up the app on phones and fixes small bugs found after 1.1.0.
 
-- Eight native scopes. New in this release: Siglent SDS800X HD and Keysight DSOX1000
-- Measurement cursors on the clean plot. Press C, drag X1, X2, Y1 and Y2, and read Δt, 1/Δt, ΔV and phase. The cursors also go into the SVG and PNG exports
-- 4 corner crop to straighten tilted phone photos. The Straighten button on the photo check opens it for you, and the 1:1 overlay still lines up with the original photo
-- Copy the plot as a white 2x PNG with the Copy button or Ctrl+C, then paste it into your report
-- A title for the plot and a label for each channel, like Vin and Vout. They show up in the SVG, the PNG, the CSV and the tables
-- LaTeX tables next to Word, Markdown and TSV
-- Rise time from 10 to 90%, fall time and overshoot in the measurements
-- Band pass Bode plots now show the low and the high cutoff
+## Phones
 
-## Fixes and polish
+- The empty screen on a phone now only shows the Add images and Take photo buttons, centered, with no empty panels below
+- The history only shows up on a phone once it has something in it
+- The top bar stays on one row. The shortcuts button is gone on phones and tablets, and the Add and camera buttons in the top bar only show up once a capture is open
+- The empty screen says Add an oscilloscope screenshot or take a photo on phones, since there is nothing to drop or paste
+- The plot buttons fill clean full rows on a narrow screen, with no sideways scrolling
+- Dragging a cursor with your finger moves the cursor instead of scrolling the page
 
-- Cancel, Crop and Clean Plot now close the crop box on scopes found in universal mode
-- Bode batch mode keeps the crop and the scales you set on each capture
-- Every cell in the Bode table saves when you press Enter or leave the cell. Escape puts the old value back
-- Clear asks you to confirm before it deletes the history
-- Opening a capture no longer rewrites it in the browser storage, and one broken saved capture can no longer wipe the rest
-- The history keeps 50 captures even when you add more than 50 at once
-- Crop corners are bigger for touch and move with the arrow keys. Enter applies and Escape cancels
-- Smoother zoom with a trackpad. Click the zoom percentage to go back to 100%
-- Photos stay smooth when zoomed out and only show sharp pixels when zoomed in
-- The remove button in the history is always visible on touch screens
-- Add and camera buttons in the top bar on phones
-- The drop zone only shows up when you drag files
-- Removing a capture from a Bode selection of two opens the one left
-- Better French labels
-- The keyboard stays inside the shortcuts window while it is open
-- PNG and copy errors now show a message in the Export panel
+## Fixes
 
-## Offline and command line
+- Escape now really cancels what you typed in the title, a channel label or a scale field
+- The phase between cursors stays between 0 and 360°
+- Pressing C while the crop box is open no longer throws away the corners you moved
+- The 4 corners message now says the corners must make a convex box, placed clockwise from the top left
+- When a crop box is open and the extraction finishes, the box moves to the screen it found, unless you already moved it
+- Unticking or removing captures in Bode mode opens the one left, not a capture you had open before
+- Changing the scope or the gate while a Bode plot is still working no longer gets stuck on Working or loses your change
+- A capture opened from the Bode table keeps its title and channel labels in the exports
+- Copying the plot works in more browsers
 
-- The offline app updates itself to the new version and cleans up old caches
-- The `graticule` command can deskew a photo with `--deskew` and write LaTeX tables with `--format latex`
+## Exports
+
+- The title you type now names the downloaded SVG, PNG and CSV files and shows up on the copied tables
+- File names are made safe for Windows, macOS and Linux
+- Safer escaping in CSV, TSV, Markdown, LaTeX and SVG when titles or channel labels have special characters
+
+## Measurements, Bode and offline
+
+- Fixed ringing overshoot math so damped steps measure the settled level, and smooth sine or triangle waves no longer get fake step times
+- Bode plots handle duplicate frequencies, band stop crossings and manual edits kept across gate changes
+- Checksum checks reject corrupt PNG files, and 4 corner deskew checks that the corners start at the top left
+- Improved channel reading on Keysight DSOX1000 and trigger masking on Siglent SDS800X HD
+- Offline mode precaches the whole app on your first visit, including the extraction worker, so extractions work offline right away
+- `graticule-portable.html` runs cleanly whether opened as a local file or from a local server
+- Hardened command line output checks so bad paths never leave partial files
+
+## History
+
+- The history remembers which captures you opened last, even after a reload, so the oldest ones go first when it is full
+- When the browser storage is full, Graticule makes room by removing the oldest saved captures, then saves again
+- A capture is only marked as saved once the browser storage really has it
 
 ## Credits
 

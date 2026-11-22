@@ -67,6 +67,46 @@ describe('step edge measurements', () => {
     expect(result).toMatchObject({ riseTimeSec: 2 * dt, fallTimeSec: 2 * dt, riseLimited: true, fallLimited: true, overshootPct: 0 });
   });
 
+  test('times both edges of a three-column high pulse', () => {
+    const result = measure(Array.from({ length: 1000 }, (_, i) => i % 100 >= 25 && i % 100 < 28 ? 1 : 0));
+    expect(result).toMatchObject({ riseTimeSec: 2 * dt, fallTimeSec: 2 * dt, overshootPct: 0 });
+  });
+
+  test('uses the settled voltage of a damped step to measure overshoot', () => {
+    const damping = 0.2;
+    const dampedFrequency = Math.sqrt(1 - damping ** 2);
+    const response = Array.from({ length: 500 }, (_, i) => {
+      const phase = i * Math.PI / 20;
+      return 1 - Math.exp(-damping * phase / dampedFrequency)
+        * (Math.cos(phase) + damping / dampedFrequency * Math.sin(phase));
+    });
+    const result = measure([...Array<number>(40).fill(0), ...response]);
+    expect(result.overshootPct).toBeCloseTo(52.66, 2);
+    expect(result.fallTimeSec).toBeNull();
+  });
+
+  test('interprets a flat overshoot lobe followed by settling as a single rising edge', () => {
+    const result = measure([...Array<number>(30).fill(0), ...Array<number>(6).fill(1.4), ...Array<number>(30).fill(1)]);
+    expect(result.overshootPct).toBeCloseTo(40, 8);
+    expect(result.riseTimeSec).toBeCloseTo(2 * dt, 12);
+    expect(result.fallTimeSec).toBeNull();
+  });
+
+  test.each([12, 80, 240])('rejects smooth cosine and triangle steps at %i columns per cycle', period => {
+    const values = Array.from({ length: period * 4 }, (_, i) => i / period);
+    for (const wave of [values.map(cycle => Math.cos(2 * Math.PI * cycle)),
+      values.map(cycle => 4 * Math.abs(cycle % 1 - 0.5) - 1)]) {
+      expect(measure(wave)).toMatchObject({ riseTimeSec: null, fallTimeSec: null, overshootPct: null });
+    }
+  });
+
+  test.each([1e155, 1e308])('keeps RMS finite and rare extreme samples safe at %s V', voltage => {
+    const result = measure(Array.from({ length: 300 }, (_, i) => i % 100 < 3 ? voltage : -voltage));
+    expect(result.vrms).toBe(voltage);
+    expect(result.vavg! / voltage).toBeCloseTo(-0.94, 12);
+    expect(result.vpp).toBe(voltage === 1e308 ? null : 2 * voltage);
+  });
+
   test('withholds step metrics for a smooth sine and an obscured transition', () => {
     const sine = measure(Array.from({ length: 600 }, (_, i) => Math.sin(2 * Math.PI * i / 151)));
     const masked = measure([...Array<number>(25).fill(0), 0.25, 'masked_overlay', 0.75, ...Array<number>(25).fill(1)]);

@@ -131,14 +131,14 @@ function waveformLevels(values: readonly number[], minimumAmplitude: number): re
 }
 
 interface Plateau { start: number; end: number; readonly anchor: number }
-interface StableLevel { end: number; duration: number; voltage: number }
+interface StableLevel extends Plateau { duration: number; voltage: number }
 interface Edge { readonly duration: number; readonly overshoot: number | null }
 type EdgeMetrics = Pick<ChannelMeasurements, 'riseTimeSec' | 'fallTimeSec' | 'overshootPct' | 'riseLimited' | 'fallLimited'>;
 
 function measureEdges(samples: readonly TraceSample[], pixelVoltage: number, span: number, sampleInterval: number): EdgeMetrics {
   const rises: Edge[] = [];
   const falls: Edge[] = [];
-  const window = 5;
+  const window = 3;
   const tolerance = Math.max(pixelVoltage * 1.5, span * 0.02);
 
   function inspect(segment: readonly VoltageSample[]) {
@@ -146,14 +146,14 @@ function measureEdges(samples: readonly TraceSample[], pixelVoltage: number, spa
     for (let i = 0; i <= segment.length - window; i++) {
       const levels = segment.slice(i, i + window).map(sample => sample.voltage).sort((a, b) => a - b);
       const center = median(levels);
-      const mad = median(levels.map(value => Math.abs(value - center)).sort((a, b) => a - b));
-      if (levels[window - 1]! - levels[0]! > tolerance || mad > tolerance / 3) continue;
+      if (levels[window - 1]! - levels[0]! > tolerance / 2) continue;
       const last = plateaus.at(-1);
       if (last && i <= last.end && Math.abs(center - last.anchor) <= tolerance / 2) last.end = i + window - 1;
       else if (!last || i > last.end) plateaus.push({ start: i, end: i + window - 1, anchor: center });
     }
     const levels: StableLevel[] = [];
-    for (const { start, end } of plateaus) {
+    for (const plateau of plateaus) {
+      const { start, end } = plateau;
       const voltage = median(segment.slice(start, end + 1).map(s => s.voltage).sort((a, b) => a - b));
       const duration = segment[end]!.timeSec - segment[start]!.timeSec;
       const last = levels.at(-1);
@@ -163,23 +163,37 @@ function measureEdges(samples: readonly TraceSample[], pixelVoltage: number, spa
       if (last && nearby) {
         last.end = end;
         if (duration > last.duration) {
+          last.start = start;
           last.duration = duration;
           last.voltage = voltage;
         }
       } else {
-        levels.push({ end, duration, voltage });
+        levels.push({ ...plateau, duration, voltage });
       }
     }
     for (let i = 1; i < levels.length; i++) {
       const before = levels[i - 1]!;
-      const after = levels[i]!;
+      let after = levels[i]!;
       const start = before.voltage;
+      const initialChange = after.voltage - start;
+      const minChange = Math.max(4 * pixelVoltage, span * 0.25);
+      if (Math.abs(initialChange) < minChange) continue;
+      // A short dwell near a ringing peak can look like a plateau. Prefer a longer
+      // settled dwell while the signal remains on the same side of the starting level.
+      for (let k = i + 1; k < levels.length; k++) {
+        const candidate = levels[k]!;
+        if ((candidate.voltage - start) / initialChange < 0.4
+            || Math.abs(candidate.voltage - levels[i]!.voltage) > span * 0.55
+            || segment.slice(levels[k - 1]!.end + 1, candidate.start)
+              .some(sample => (sample.voltage - start) / initialChange < 0.3)) break;
+        if (candidate.duration > after.duration * 1.5) after = candidate;
+      }
       const change = after.voltage - start;
-      if (Math.abs(change) < Math.max(4 * pixelVoltage, span * 0.25)) continue;
+      if (Math.abs(change) < minChange) continue;
       let t10: number | null = null;
       let t90: number | null = null;
       let extreme = 1;
-      for (let j = before.end; j <= after.end; j++) {
+      for (let j = before.end; j <= Math.min(after.start + window - 1, after.end); j++) {
         const a = segment[j - 1]!;
         const b = segment[j]!;
         const f1 = (a.voltage - start) / change;
@@ -195,6 +209,7 @@ function measureEdges(samples: readonly TraceSample[], pixelVoltage: number, spa
       if (duration <= 0 || Math.min(before.duration, after.duration) < duration * 0.75) continue;
       const overshoot = 100 * Math.max(0, extreme - 1);
       (change > 0 ? rises : falls).push({ duration, overshoot: change > 0 ? overshoot : null });
+      i = levels.indexOf(after, i);
     }
   }
 
@@ -226,12 +241,16 @@ export function measureChannel(trace: ChannelTrace, pxPerVDiv: number): ChannelM
   const values = trace.samples.filter(valid).map(s => s.voltage).sort((a, b) => a - b);
   const vmin = values[0] ?? null;
   const vmax = values.at(-1) ?? null;
-  const pixelVoltage = trace.settings.voltsPerDiv / pxPerVDiv;
+  const peak = Math.max(Math.abs(vmin ?? 0), Math.abs(vmax ?? 0));
+  const scale = peak > Math.sqrt(Number.MAX_VALUE) ? peak : 1;
+  const levels = scale === 1 ? values : values.map(value => value / scale);
+  const samples = scale === 1 ? trace.samples : trace.samples.map(sample => valid(sample) ? { ...sample, voltage: sample.voltage / scale } : sample);
+  const pixelVoltage = trace.settings.voltsPerDiv / scale / pxPerVDiv;
   const minimumAmplitude = 4 * pixelVoltage;
-  const [low, high] = waveformLevels(values, minimumAmplitude);
+  const [low, high] = waveformLevels(levels, minimumAmplitude);
   const amplitude = high - low;
-  const mid = (high + low) / 2;
-  const { events, spans } = amplitude >= minimumAmplitude ? schmittCrossings(trace.samples, mid, amplitude * 0.25)
+  const mid = low + amplitude / 2;
+  const { events, spans } = amplitude > 0 && amplitude >= minimumAmplitude ? schmittCrossings(samples, mid, amplitude * 0.25)
     : { events: [], spans: [] };
   const rises = cycleTimes(events, spans, true);
   const falls = cycleTimes(events, spans, false);
@@ -248,7 +267,7 @@ export function measureChannel(trace: ChannelTrace, pxPerVDiv: number): ChannelM
   const duty = [...rises, ...falls]
     .flatMap(c => c.on !== null && plausible(c) && c.on > 0 && c.on < c.period ? [100 * c.on / c.period] : [])
     .sort((a, b) => a - b);
-  const middleCount = values.filter(v => Math.abs(v - mid) < amplitude * 0.31).length;
+  const middleCount = levels.filter(v => Math.abs(v - mid) < amplitude * 0.31).length;
   const pulseLike = values.length > 0 && middleCount / values.length <= 0.18;
   // A burst can have several regular edge spacings inside a much longer idle interval.
   const longestHold = events.reduce((longest, event, index) => {
@@ -266,14 +285,18 @@ export function measureChannel(trace: ChannelTrace, pxPerVDiv: number): ChannelM
   const periodSec = enoughObservation && confirmed.length >= periods.length * 0.75
     && longestHold <= typical * 1.25 && stableDuty ? median(confirmed) : null;
   const completeCycles = periodSec === null ? 0 : Math.max(rises.filter(plausible).length, falls.filter(plausible).length);
+  const span = (vmax ?? 0) - (vmin ?? 0);
+  const ratios = peak > 0 ? values.map(value => value / peak) : values;
+  const mean = ratios.reduce((sum, ratio) => sum + ratio, 0) / ratios.length;
+  const meanSquare = ratios.reduce((sum, ratio) => sum + ratio ** 2, 0) / ratios.length;
   return {
-    channel: trace.channel, vmax, vmin, vpp: vmax !== null && vmin !== null ? vmax - vmin : null,
-    vavg: values.length ? values.reduce((s, v) => s + v, 0) / values.length : null,
-    vrms: values.length ? Math.sqrt(values.reduce((s, v) => s + v * v, 0) / values.length) : null,
+    channel: trace.channel, vmax, vmin, vpp: values.length && Number.isFinite(span) ? span : null,
+    vavg: values.length ? peak * mean : null,
+    vrms: values.length ? peak * Math.sqrt(meanSquare) : null,
     periodSec, frequencyHz: periodSec !== null ? 1 / periodSec : null,
     dutyCyclePct: periodSec !== null && pulseLike && completeCycles >= 2 && duty.length >= 2 ? median(duty) : null,
     completeCycles, clipped: trace.clippedCount > 0,
-    ...measureEdges(trace.samples, pixelVoltage, (vmax ?? 0) - (vmin ?? 0), sampleInterval),
+    ...measureEdges(samples, pixelVoltage, (levels.at(-1) ?? 0) - (levels[0] ?? 0), sampleInterval),
   };
 }
 

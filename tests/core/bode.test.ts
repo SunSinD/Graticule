@@ -1,7 +1,9 @@
 import { describe, expect, test } from 'vitest';
 import { frequencyFromFileName } from '../../src/core/bode.js';
 import { measurePhase } from '../../src/core/measurements.js';
+import { renderBodeCsv } from '../../src/core/export/csv.js';
 import { renderBodeSvg } from '../../src/core/export/svg.js';
+import { renderBodeTable } from '../../src/core/export/table.js';
 import { analyzeBodeBatch, recomputeBodeResult } from '../../src/core/pipeline.js';
 import { makeGrid } from '../../src/core/profiles.js';
 import type { BodePointOverride, ChannelId, ChannelSettings, ChannelTrace, ExtractionResult, TraceSample } from '../../src/core/types.js';
@@ -127,6 +129,71 @@ describe('Bode sine fit', () => {
     expect(result.passbandGainDb).toBeCloseTo(3, 10);
     expect(result.cutoffLowHz).toBeCloseTo(1000, 6);
     expect(result.cutoffHighHz).toBeCloseTo(4000, 6);
+  });
+
+  test('finds both sides of a band-stop response', () => {
+    const points = [[100, 0], [200, -3], [300, -20], [400, -3], [500, 0]] as const;
+    const result = analyzeBodeBatch(points.map(([f]) => pair(f, 1, 0)), {},
+      Object.fromEntries(points.map(([f, gainDb]) => [`${f} Hz.png`, { gainDb }])));
+    expect(result).toMatchObject({ passbandGainDb: 0, cutoffLowHz: 200, cutoffHighHz: 400 });
+  });
+
+  test('averages accepted gains at duplicate frequencies before interpolation', () => {
+    const points = [[100, 0], [200, 0], [200, -8], [200, 12], [400, -10]] as const;
+    const rows = points.map(([frequencyHz, gainDb], index) => ({
+      capture: pair(frequencyHz, 1, 0, { fileName: `${frequencyHz} Hz sample ${index}.png` }),
+      edit: { gainDb, excluded: index === 3 },
+    }));
+    const overrides = Object.fromEntries(rows.map(({ capture, edit }) => [capture.fileName, edit]));
+    for (const order of [rows, [...rows].reverse()]) {
+      const result = analyzeBodeBatch(order.map(({ capture }) => capture), {}, overrides);
+      expect(result).toMatchObject({ acceptedCount: 4, rejectedCount: 1, cutoffLowHz: null });
+      expect(result.cutoffHighHz).toBeCloseTo(100 * 2 ** 0.75, 9);
+    }
+  });
+
+  test('keeps live point edits through repeated gate-only recalculations', () => {
+    const base = analyzeBodeBatch([pair(100, 1, 0), pair(200, 1, 0)]);
+    const edits = new Map([['100 Hz.png', { frequencyHz: 101, vinVpp: 2, voutVpp: 4, gainDb: 5, phaseDeg: -15 }],
+      ['200 Hz.png', { excluded: true }]]);
+    const edited = recomputeBodeResult(base, edits);
+    const changed = recomputeBodeResult(edited, { minR2: 0.97 });
+    for (const result of [changed, recomputeBodeResult(changed, undefined, { minCycles: 2 })]) {
+      expect(result.points[0]).toMatchObject({ frequencyHz: 101, vinVpp: 2, voutVpp: 4, gainDb: 5, phaseDeg: -15, edited: true });
+      expect(result.points[1]!.rejectionReasons).toContain('manually_excluded');
+    }
+    expect(changed.gateOptions?.minR2).toBe(0.97);
+    expect(recomputeBodeResult(changed, new Map()).points.every(point => !point.edited)).toBe(true);
+    expect(recomputeBodeResult(changed, {}).points.every(point => !point.edited)).toBe(true);
+  });
+
+  test('accepts a clean 12-column sine even when floating point rounds the density slightly lower', () => {
+    const capture = pair(1000, 1, 30, { columns: 48 });
+    const result = analyzeBodeBatch([{ ...capture, traces: capture.traces.map(trace => ({
+      ...trace, samples: trace.samples.map(sample => ({ ...sample, timeSec: sample.timeSec * (1 + 8e-16) })),
+    })) }]);
+    expect(result.points[0]!.colsPerCycle).toBeLessThan(12);
+    expect(result.points[0]!.accepted).toBe(true);
+  });
+
+  test.each(['low', 'high'] as const)('labels a single %s cutoff in all exports', side => {
+    const base = analyzeBodeBatch([pair(100, 1, 0)]);
+    const result = { ...base, cutoffHz: 100, cutoffLowHz: side === 'low' ? 100 : null, cutoffHighHz: side === 'high' ? 100 : null };
+    const other = side === 'low' ? 'high' : 'low';
+    const label = side === 'low' ? 'Lower' : 'Upper';
+    const csv = renderBodeCsv(result);
+    expect(csv).toContain(`# cutoff_${side}_hz_minus_3db: 100`);
+    expect(csv).not.toContain(`# cutoff_${other}_hz_minus_3db`);
+    expect(renderBodeTable(result, 'tsv', 'en')).toContain(`${label} cutoff frequency (-3 dB)\t`);
+    expect(renderBodeSvg(result)).toContain(`aria-label="${label} cutoff frequency (-3 dB)"`);
+  });
+
+  test('keeps Bode tick coordinates finite for subnormal and near-maximum frequencies', () => {
+    const base = analyzeBodeBatch([pair(100, 1, 0), pair(200, 1, 0)]);
+    const result = { ...base, points: base.points.map((point, index) => ({ ...point, frequencyHz: index ? 1e308 : 5e-324 })) };
+    for (const sweep of [result, ...result.points.map(point => ({ ...result, points: [point] }))]) {
+      expect(renderBodeSvg(sweep)).not.toMatch(/(?:Infinity|NaN)/);
+    }
   });
 
   test('rejects sparse coverage and long gaps despite a wide timestamp span', () => {

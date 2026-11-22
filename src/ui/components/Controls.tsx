@@ -2,7 +2,7 @@ import type { ChannelId, ExtractionOverrides, ExtractionResult, Locale, ProfileI
 import type { Dict } from '../i18n';
 import type { ChannelLabels } from '../history';
 import { ScaleInput } from './ScaleInput';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 export type ProfileChoice = ProfileId | 'auto';
 
@@ -70,7 +70,13 @@ interface ScaleProps {
 
 function LabelInput({ id, label, placeholder, value, onCommit }: { id: string; label: string; placeholder: string; value: string; onCommit: (v: string) => void }) {
   const [draft, setDraft] = useState<string | null>(null);
+  const skip = useRef(false);
   const commit = (): void => {
+    if (skip.current) {
+      skip.current = false;
+      setDraft(null);
+      return;
+    }
     if (draft === null) return;
     const next = draft.trim().slice(0, 24);
     setDraft(null);
@@ -89,8 +95,16 @@ function LabelInput({ id, label, placeholder, value, onCommit }: { id: string; l
       onChange={(e) => setDraft(e.target.value)}
       onBlur={commit}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') commit();
-        if (e.key === 'Escape') setDraft(null);
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          e.currentTarget.blur();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          skip.current = true;
+          setDraft(null);
+          e.currentTarget.blur();
+        }
       }}
     />
   );

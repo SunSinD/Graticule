@@ -200,15 +200,26 @@ function plotAnnotations(image: RgbaImage, detection: ProfileDetection, markers:
     for (const y of hLines.slice(1)) fill(left, Math.round(y) - 12, left + 65, Math.round(y) + 1);
     for (const x of grid.vLines.slice(1, -1)) fill(x - 32, bottom - 17, x + 32, bottom - 3);
     // A trigger level arrow can obscure samples along the last few columns.
-    let first = -1;
-    for (let y = top; y <= bottom + 1; y++) {
-      const i = at(image, right - 1, Math.min(y, bottom));
-      const c = image.data.subarray(i, i + 3);
-      const pureInk = y <= bottom && Math.max(...c) === 255 && Math.min(...c) === 0;
-      if (pureInk && first < 0) first = y;
-      if (!pureInk && first >= 0) {
-        if (y - first >= 7) fill(right - 9, first, right, y - 1);
-        first = -1;
+    const base = right - 1;
+    const packed = (x: number, y: number) => {
+      const i = at(image, x, y);
+      return (image.data[i]! << 16) | (image.data[i + 1]! << 8) | image.data[i + 2]!;
+    };
+    for (let y = top + 3; y <= bottom - 3; y++) {
+      const color = packed(base, y);
+      const rgb = [color >> 16, (color >> 8) & 255, color & 255];
+      if (Math.max(...rgb) !== 255 || Math.min(...rgb) !== 0
+          || packed(base, y - 3) !== color || packed(base, y + 3) !== color) continue;
+      let tip = base;
+      while (tip > Math.max(left, right - 12) && packed(tip - 1, y) === color) tip--;
+      if (base - tip < 3 || packed(tip, y - 2) === color || packed(tip, y + 2) === color) continue;
+      let shapeTop = y;
+      let shapeBottom = y;
+      while (shapeTop > top && y - shapeTop < 12 && packed(base, shapeTop - 1) === color) shapeTop--;
+      while (shapeBottom < bottom && shapeBottom - y < 12 && packed(base, shapeBottom + 1) === color) shapeBottom++;
+      if (Math.abs(shapeTop + shapeBottom - 2 * y) > 2 || shapeBottom - shapeTop >= 18) continue;
+      for (let row = shapeTop; row <= shapeBottom; row++) {
+        for (let x = base; x >= tip && packed(x, row) === color; x--) fill(x, row, x, row);
       }
     }
     return pixels;
@@ -320,7 +331,7 @@ export function extractTraces(image: RgbaImage, detection: ProfileDetection, met
         })) status = 'overlap_ambiguous';
       }
       const yPx = status === 'ok' ? cluster!.y : null;
-      return { col, xPx, yPx, timeSec, voltage: yPx === null ? null : (trace.settings.zeroY - yPx) * trace.settings.voltsPerDiv / grid.pxPerVDiv, status };
+      return { col, xPx, yPx, timeSec, voltage: yPx === null ? null : (trace.settings.zeroY - yPx) / grid.pxPerVDiv * trace.settings.voltsPerDiv, status };
     });
     const count = (...statuses: GapStatus[]) => samples.reduce((n, sample) => n + Number(statuses.includes(sample.status)), 0);
     return {
