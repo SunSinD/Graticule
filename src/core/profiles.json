@@ -329,6 +329,111 @@
           [91, 85, 69]
         ]
       }
+    },
+    {
+      "id": "siglent-sds800x-hd",
+      "name": "Siglent SDS824X HD",
+      "width": 1024,
+      "height": 600,
+      "supportsInverted": false,
+      "anchors": {
+        "logoRoi": {"x": 710, "y": 4, "width": 71, "height": 13},
+        "topBarRoi": {"x": 0, "y": 0, "width": 678, "height": 46},
+        "bottomBarRoi": {"x": 485, "y": 535, "width": 166, "height": 61}
+      },
+      "graticule": {
+        "left": 19,
+        "right": 1019,
+        "top": 49,
+        "hDivs": 10,
+        "vDivs": 8,
+        "pxPerHDiv": 100,
+        "variants": [
+          {"id": "measure-stats", "bottom": 329, "pxPerVDiv": 35, "measureBar": null}
+        ]
+      },
+      "zeroMarkerStrip": {"x": 0, "y": 49, "width": 18, "height": 281},
+      "topFrequencyRoi": null,
+      "timebaseCard": {
+        "box": {"x": 660, "y": 536, "width": 145, "height": 61},
+        "scaleRoi": {"x": 728, "y": 557, "width": 77, "height": 16},
+        "delayRoi": {"x": 664, "y": 557, "width": 64, "height": 16}
+      },
+      "channelCardSlots": [
+        {"slot": 0, "x": 4, "y": 537, "width": 116, "height": 60},
+        {"slot": 1, "x": 124, "y": 537, "width": 116, "height": 60},
+        {"slot": 2, "x": 244, "y": 537, "width": 116, "height": 60},
+        {"slot": 3, "x": 364, "y": 537, "width": 116, "height": 60}
+      ],
+      "channels": {
+        "C1": {"rgb": [255, 255, 0], "hueMin": 45, "hueMax": 75, "satMin": 0.4, "valMin": 0.3},
+        "C2": {"rgb": [255, 0, 116], "hueMin": 308, "hueMax": 352, "satMin": 0.4, "valMin": 0.3},
+        "C3": {"rgb": [0, 255, 255], "hueMin": 165, "hueMax": 205, "satMin": 0.4, "valMin": 0.3},
+        "C4": {"rgb": [0, 255, 0], "hueMin": 100, "hueMax": 147, "satMin": 0.35, "valMin": 0.22}
+      },
+      "raster": {
+        "logoInk": [177, 177, 177],
+        "headerInk": [30, 30, 30],
+        "footerInk": [20, 20, 20],
+        "topEdgeInk": [31, 31, 31],
+        "bottomEdgeInk": [31, 31, 31],
+        "sideEdgeInk": [31, 31, 31],
+        "lineInk": [[80, 80, 80]],
+        "lineFill": 0.22
+      }
+    },
+    {
+      "id": "keysight-dsox1000",
+      "name": "Keysight DSOX1204G",
+      "width": 800,
+      "height": 503,
+      "supportsInverted": false,
+      "anchors": {
+        "logoRoi": {"x": 709, "y": 50, "width": 81, "height": 14},
+        "topBarRoi": {"x": 0, "y": 0, "width": 800, "height": 22},
+        "bottomBarRoi": {"x": 0, "y": 444, "width": 657, "height": 59}
+      },
+      "graticule": {
+        "left": 17,
+        "right": 657,
+        "top": 42,
+        "hDivs": 10,
+        "vDivs": 8,
+        "pxPerHDiv": 64,
+        "variants": [
+          {"id": "standard", "bottom": 442, "pxPerVDiv": 50, "measureBar": null},
+          {"id": "decode-table", "top": 242, "bottom": 442, "pxPerVDiv": 25, "measureBar": null}
+        ]
+      },
+      "zeroMarkerStrip": {"x": 0, "y": 44, "width": 16, "height": 398},
+      "topFrequencyRoi": null,
+      "timebaseCard": {
+        "box": {"x": 418, "y": 22, "width": 134, "height": 20},
+        "scaleRoi": {"x": 500, "y": 23, "width": 51, "height": 17},
+        "delayRoi": {"x": 420, "y": 23, "width": 52, "height": 17}
+      },
+      "channelCardSlots": [
+        {"slot": 0, "x": 2, "y": 23, "width": 73, "height": 17},
+        {"slot": 1, "x": 86, "y": 23, "width": 73, "height": 17},
+        {"slot": 2, "x": 170, "y": 23, "width": 73, "height": 17},
+        {"slot": 3, "x": 254, "y": 23, "width": 73, "height": 17}
+      ],
+      "channels": {
+        "C1": {"rgb": [255, 255, 0], "hueMin": 47, "hueMax": 75, "satMin": 0.4, "valMin": 0.3},
+        "C2": {"rgb": [0, 210, 0], "hueMin": 100, "hueMax": 145, "satMin": 0.4, "valMin": 0.3},
+        "C3": {"rgb": [0, 150, 255], "hueMin": 195, "hueMax": 230, "satMin": 0.4, "valMin": 0.3},
+        "C4": {"rgb": [255, 0, 50], "hueMin": 339, "hueMax": 358, "satMin": 0.4, "valMin": 0.3}
+      },
+      "raster": {
+        "logoInk": [255, 255, 255],
+        "headerInk": [255, 255, 255],
+        "footerInk": [0, 0, 0],
+        "topEdgeInk": [255, 255, 255],
+        "bottomEdgeInk": [255, 255, 255],
+        "sideEdgeInk": [255, 255, 255],
+        "lineInk": [[51, 51, 51]],
+        "lineFill": 0.5
+      }
     }
   ]
 }

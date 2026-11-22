@@ -34,7 +34,7 @@ for (const match of [...html.matchAll(/<link[^>]+href=["']([^"']+\.css)["'][^>]*
   const file = resolve(tmpDir, href.replace(/^\.\//, '').replace(/^\//, ''));
   if (existsSync(file)) {
     const css = readFileSync(file, 'utf8').replaceAll('</style', '<\\/style');
-    html = html.replace(match[0], `<style>${css}</style>`);
+    html = html.replace(match[0], () => `<style>${css}</style>`);
   }
 }
 
@@ -49,14 +49,22 @@ for (const match of scripts) {
     code = code.replaceAll('</script', '<\\/script');
     inlineScripts.push(code);
   }
-  html = html.replace(match[0], '');
+  html = html.replace(match[0], () => '');
 }
 
 if (inlineScripts.length > 0) {
-  html = html.replace('</body>', `<script type="module">${inlineScripts.join('\n')}</script></body>`);
+  const portableBootstrap = '<script>if (location.protocol === \'file:\') globalThis.Worker = undefined;</script>';
+  html = html.replace('</body>', () => `${portableBootstrap}<script type="module">${inlineScripts.join('\n')}</script></body>`);
 }
 
 mkdirSync(outputDir, { recursive: true });
 writeFileSync(outputFile, html);
 rmSync(tmpDir, { recursive: true, force: true });
+if (Buffer.byteLength(html) === 0) throw new Error('Portable build produced an empty HTML file.');
+if (/<script[^>]+src=["'][^"']+["'][^>]*>/i.test(html)) {
+  throw new Error('Portable build contains an external script reference.');
+}
+if (/<link[^>]+rel=["']stylesheet["'][^>]*>/i.test(html)) {
+  throw new Error('Portable build contains an external stylesheet reference.');
+}
 console.log(`Created ${outputFile} (${(Buffer.byteLength(html) / 1024).toFixed(1)} KB)`);

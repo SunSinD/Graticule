@@ -9,6 +9,7 @@ import type { ChannelId, ExtractionOverrides, GridGeometry, LayoutVariant, Profi
 
 interface NativeVariant {
   readonly id: Exclude<LayoutVariant, 'manual'>;
+  readonly top?: number;
   readonly right?: number;
   readonly bottom: number;
   readonly pxPerVDiv: number;
@@ -55,6 +56,8 @@ const profileVariants = {
   'rigol-dho924': ['fft'],
   'rohde-schwarz-rtb2004': ['standard', 'measure-1row'],
   'tektronix-dpo7104c': ['standard'],
+  'siglent-sds800x-hd': ['measure-stats'],
+  'keysight-dsox1000': ['standard', 'decode-table'],
 } satisfies Record<NativeProfile['id'], readonly NativeVariant['id'][]>;
 
 type RasterProfileId = keyof typeof rasterFonts;
@@ -110,9 +113,11 @@ export function validateProfiles(value: unknown): readonly NativeProfile[] {
     const { top, vDivs } = g;
     if (g.variants.length !== variants.length || !g.variants.every((v: unknown, i) =>
       isRecord(v) && v.id === variants[i] && int(v.bottom) && v.bottom > top && v.bottom < height
-      && positive(v.pxPerVDiv) && v.pxPerVDiv * vDivs === v.bottom - top
+      && (v.top === undefined || (measuredRaster && int(v.top) && v.top >= top && v.top < v.bottom))
+      && positive(v.pxPerVDiv) && v.pxPerVDiv * vDivs === v.bottom - (int(v.top) ? v.top : top)
       && (v.right === undefined || (measuredRaster && int(v.right) && int(g.left) && int(g.right) && v.right > g.left && v.right < g.right))
-      && (v.id === 'no-measure' || v.id === 'fft' || (measuredRaster && v.id === 'standard') ? v.measureBar === null
+      && (v.id === 'no-measure' || v.id === 'fft' || v.id === 'measure-stats'
+        || (measuredRaster && (v.id === 'standard' || v.id === 'decode-table')) ? v.measureBar === null
         : isRecord(v.measureBar) && v.measureBar.rows === (v.id === 'measure-2row' ? 2 : 1) && rect(v.measureBar)))) return false;
     const coveredSlots = new Set(p.channelCardSlots.map(slot => slot.slot));
     return CHANNELS.every((id, index) => {
@@ -204,7 +209,9 @@ function logoMatch(image: RgbaImage, p: NativeProfile, inverted: boolean): boole
 }
 
 function findRasterPlot(image: RgbaImage, profile: NativeProfile, raster: RasterAnchors): GridGeometry | null {
-  const { left, right, top, hDivs, vDivs, variants } = profile.graticule;
+  const { left, right, hDivs, vDivs, variants } = profile.graticule;
+  const keysight = profile.id === 'keysight-dsox1000';
+  const sds800 = profile.id === 'siglent-sds800x-hd';
   const topEdge = rgbNear(raster.topEdgeInk);
   const bottomEdge = rgbNear(raster.bottomEdgeInk);
   const sideEdge = rgbNear(raster.sideEdgeInk);
@@ -212,12 +219,15 @@ function findRasterPlot(image: RgbaImage, profile: NativeProfile, raster: Raster
   const lineInk: PixelPredicate = (r, g, b) => lineColors.some(ink => ink(r, g, b));
   for (const variant of variants) {
     const visibleRight = variant.right ?? right;
-    const { bottom } = variant;
+    const { bottom, top = profile.graticule.top } = variant;
     const plan = makeGrid(left, top, right, bottom, hDivs, vDivs, variant.id, false);
     const span = (y: number, ink: PixelPredicate) => proportion(image, { x: left + 4, y, width: visibleRight - left - 7, height: 1 }, ink);
     const column = (x: number, ink: PixelPredicate) => proportion(image, { x, y: top + 4, width: 1, height: bottom - top - 7 }, ink);
-    if (span(top, topEdge) < 0.70 || span(bottom, bottomEdge) < 0.70
-        || column(left, sideEdge) < 0.62 || column(visibleRight, sideEdge) < 0.62) continue;
+    const decodeTop = keysight && variant.id === 'decode-table';
+    const upper = decodeTop ? rgbNear([86, 90, 92]) : topEdge;
+    if (span(keysight && !decodeTop ? top + 1 : top, upper) < 0.70
+        || span(sds800 ? bottom - 1 : bottom, bottomEdge) < 0.70
+        || column(keysight || sds800 ? left - 1 : left, sideEdge) < 0.62 || column(visibleRight, sideEdge) < 0.62) continue;
 
     const rows = plan.hLines.slice(1, -1);
     const cols = plan.vLines.slice(1, -1).filter(x => x < visibleRight);
@@ -332,6 +342,22 @@ export function findNativeCards(image: RgbaImage, profile: NativeProfile, invert
   const colors = colorsFor(profile.id);
   if (profile.raster) {
     for (const slot of profile.channelCardSlots) {
+      if (profile.id === 'siglent-sds800x-hd') {
+        const badge = { x: slot.x + 5, y: slot.y + 3, width: 30, height: 16 };
+        for (const [i, channel] of CHANNELS.entries()) {
+          const label = matchBitmap(readBitmap(image, badge, (r, g, b) => channelColor(r, g, b, colors) === i),
+            rasterFonts['siglent-sds800x-hd'].glyphs);
+          if (label === channel) analog.set(channel, slot);
+        }
+        continue;
+      }
+      if (profile.id === 'keysight-dsox1000') {
+        const scale = { x: slot.x + 21, y: slot.y, width: 51, height: slot.height };
+        if (proportion(image, scale, (r, g, b) => Math.min(r, g, b) > 170) >= 0.025) {
+          analog.set(CHANNELS[slot.slot]!, slot);
+        }
+        continue;
+      }
       const active = proportion(image, slot, (r, g, b) => channelColor(r, g, b, colors) === slot.slot);
       if (active > 0.12) analog.set(CHANNELS[slot.slot]!, slot);
     }

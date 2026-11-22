@@ -1,0 +1,79 @@
+import { describe, expect, test } from 'vitest';
+import { measureChannel } from '../../src/core/measurements.js';
+import type { ChannelTrace, TraceSample } from '../../src/core/types.js';
+
+const dt = 1e-6;
+
+function measure(values: readonly (number | TraceSample['status'])[]) {
+  const samples: TraceSample[] = values.map((value, col) => ({
+    col, xPx: col, timeSec: col * dt, voltage: typeof value === 'number' ? value : null,
+    yPx: typeof value === 'number' ? 100 - value * 50 : null, status: typeof value === 'number' ? 'ok' : value,
+  }));
+  const trace: ChannelTrace = {
+    channel: 'C1', settings: { channel: 'C1', enabled: true, zeroY: 100, voltsPerDiv: 1, probeAttenuation: 1,
+      offsetVolts: 0, coupling: 'DC', scaleSource: 'manual', zeroSource: 'manual', rawScaleText: null, rawOffsetText: null },
+    samples, validCount: samples.filter(s => s.status === 'ok').length, maskedCount: 0, overlapCount: 0,
+    unresolvedCount: 0, clippedCount: samples.filter(s => s.status.startsWith('clipped')).length, medianThicknessPx: 1,
+  };
+  return measureChannel(trace, 50);
+}
+
+describe('period and pulse measurements', () => {
+  test.each([1, 3, 5])('measures a repeating pulse with %i%% duty', duty => {
+    const result = measure(Array.from({ length: 1001 }, (_, i) => i % 100 < duty ? 1 : 0));
+    expect(result.frequencyHz).toBeCloseTo(10_000, 6);
+    expect(result.dutyCyclePct).toBeCloseTo(duty, 6);
+  });
+
+  test.each(['masked_overlay', 'masked_cursor', 'unresolved', 'clipped_high'] as const)(
+    'never derives a period from crossings across %s columns', gap => {
+      const wave = (i: number) => Math.sin(i * Math.PI / 40);
+      const alternating = measure(Array.from({ length: 801 }, (_, i) => i % 160 >= 76 && i % 160 <= 82 ? gap : wave(i)));
+      expect(alternating.frequencyHz).toBeCloseTo(12_500, 5);
+      const everyCycle = measure(Array.from({ length: 801 }, (_, i) => i % 80 === 0 ? gap : wave(i)));
+      expect(everyCycle.frequencyHz).toBeNull();
+      expect(everyCycle.clipped).toBe(gap === 'clipped_high');
+    },
+  );
+
+  test('times visible falling edges when only one column at each rising edge is missing', () => {
+    const result = measure(Array.from({ length: 601 }, (_, i) =>
+      i % 100 === 0 ? 'unresolved' : i % 100 < 50 ? 1 : 0));
+    expect(result.frequencyHz).toBeCloseTo(10_000, 6);
+    expect(result.dutyCyclePct).toBeNull();
+    expect(result.riseTimeSec).toBeNull();
+  });
+});
+
+describe('step edge measurements', () => {
+  test('uses the local levels for 10–90% rise, 90–10% fall and overshoot', () => {
+    const signal = [
+      ...Array.from({ length: 30 }, (_, i) => (i % 3 - 1) * 0.004),
+      ...Array.from({ length: 10 }, (_, i) => (i + 1) / 10),
+      1.2, 1.1, 1.03,
+      ...Array.from({ length: 35 }, (_, i) => 1 + (i % 3 - 1) * 0.004),
+      ...Array.from({ length: 20 }, (_, i) => (19 - i) / 20),
+      ...Array<number>(30).fill(0),
+    ];
+    const result = measure(signal);
+    expect(result.riseTimeSec).toBeCloseTo(8 * dt, 8);
+    expect(result.fallTimeSec).toBeCloseTo(16 * dt, 8);
+    expect(result.overshootPct).toBeCloseTo(20, 1);
+    expect(result).toMatchObject({ riseLimited: false, fallLimited: false });
+  });
+
+  test('reports a two-column limit for instantaneous edges', () => {
+    const result = measure([...Array<number>(24).fill(0), ...Array<number>(24).fill(1), ...Array<number>(24).fill(0)]);
+    expect(result).toMatchObject({ riseTimeSec: 2 * dt, fallTimeSec: 2 * dt, riseLimited: true, fallLimited: true, overshootPct: 0 });
+  });
+
+  test('withholds step metrics for a smooth sine and an obscured transition', () => {
+    const sine = measure(Array.from({ length: 600 }, (_, i) => Math.sin(2 * Math.PI * i / 151)));
+    const masked = measure([...Array<number>(25).fill(0), 0.25, 'masked_overlay', 0.75, ...Array<number>(25).fill(1)]);
+    const clipped = measure([...Array<number>(25).fill(0), 0.2, 0.8, 'clipped_high', ...Array<number>(25).fill(1)]);
+    for (const result of [sine, masked, clipped]) {
+      expect(result).toMatchObject({ riseTimeSec: null, fallTimeSec: null, overshootPct: null, riseLimited: false, fallLimited: false });
+    }
+    expect(clipped.clipped).toBe(true);
+  });
+});

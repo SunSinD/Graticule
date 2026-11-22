@@ -254,6 +254,17 @@ td.num,
   color: var(--text);
 }
 
+.btn.chip.danger,
+.btn.chip.danger:hover:not(:disabled) {
+  background: var(--press);
+  color: var(--press-text);
+  border-color: var(--press);
+}
+
+.btn.compact-only {
+  display: none;
+}
+
 /* controls */
 
 .btn {
@@ -455,6 +466,45 @@ input.tiny {
   outline: none;
 }
 
+.exports .section-head {
+  flex-wrap: nowrap;
+}
+
+.exports .feedback {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.btn-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.btn-grid .btn {
+  height: 30px;
+  padding: 0 4px;
+  font-size: 12px;
+  min-width: 0;
+}
+
+.title-field {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.title-field input {
+  height: 30px;
+  width: 100%;
+}
+
 /* files */
 
 .files {
@@ -531,6 +581,12 @@ input.tiny {
   opacity: 1;
 }
 
+@media (hover: none) {
+  .btn.icon.remove {
+    opacity: 1;
+  }
+}
+
 .btn.icon.remove:hover {
   color: var(--text);
 }
@@ -583,7 +639,19 @@ input.tiny {
 }
 
 .channel legend {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 0 4px;
+  max-width: 100%;
+}
+
+.channel legend input.ch-label {
+  height: 22px;
+  width: 72px;
+  min-width: 0;
+  padding: 0 4px;
+  font-size: 12px;
 }
 
 .channel.off .field {
@@ -746,10 +814,88 @@ input.tiny {
   accent-color: var(--text);
 }
 
-.zoom-value {
-  min-width: 40px;
-  text-align: right;
+.btn.chip.zoom-value {
+  min-width: 52px;
+  height: 28px;
+  padding: 0 6px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.cursor-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  min-height: 28px;
+  font-size: 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px 10px;
+}
+
+.cursor-bar select.cursor-ch {
+  width: auto;
+  height: 24px;
+  font-size: 12px;
+  padding: 0 4px;
+}
+
+.cursor-item {
+  display: inline-flex;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.cursor-item .k {
   color: var(--muted);
+}
+
+.canvas.plot {
+  position: relative;
+}
+
+.plot-svg {
+  width: 100%;
+  height: 100%;
+}
+
+.cursor-layer {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+
+.cursor {
+  cursor: ew-resize;
+  outline: none;
+}
+
+.cursor.hy {
+  cursor: ns-resize;
+}
+
+.cursor-hit {
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+}
+
+.cursor-line {
+  stroke: var(--text);
+  stroke-width: 1.25;
+  pointer-events: none;
+}
+
+.cursor text {
+  fill: var(--text);
+  font: 11px var(--mono);
+  pointer-events: none;
+}
+
+.cursor:focus-visible .cursor-line,
+.cursor:hover .cursor-line {
+  stroke-width: 2.5;
 }
 
 .banner {
@@ -776,6 +922,9 @@ input.tiny {
   display: block;
   width: 100%;
   height: 100%;
+}
+
+.stage.pixel img {
   image-rendering: pixelated;
 }
 
@@ -834,37 +983,114 @@ input.tiny {
   border-top: 1px dashed #fff;
 }
 
+.crop-box:focus-visible {
+  outline: 2px solid #000;
+  outline-offset: 0;
+}
+
 .crop-handle {
   position: absolute;
+  width: 28px;
+  height: 28px;
+  margin: -14px 0 0 -14px;
+  touch-action: none;
+  z-index: 1;
+}
+
+.crop-handle::before {
+  content: '';
+  position: absolute;
+  left: 8px;
+  top: 8px;
   width: 12px;
   height: 12px;
   background: #fff;
   border: 1px solid #000;
-  touch-action: none;
+}
+
+.crop-handle:focus {
+  outline: none;
+}
+
+.crop-handle:focus-visible::before {
+  background: #000;
+  border-color: #fff;
+  box-shadow: 0 0 0 1px #000;
 }
 
 .crop-handle.tl {
-  left: -6px;
-  top: -6px;
+  left: 0;
+  top: 0;
   cursor: nwse-resize;
 }
 
 .crop-handle.tr {
-  right: -6px;
-  top: -6px;
+  left: 100%;
+  top: 0;
   cursor: nesw-resize;
 }
 
 .crop-handle.bl {
-  left: -6px;
-  bottom: -6px;
+  left: 0;
+  top: 100%;
   cursor: nesw-resize;
 }
 
 .crop-handle.br {
-  right: -6px;
-  bottom: -6px;
+  left: 100%;
+  top: 100%;
   cursor: nwse-resize;
+}
+
+.quad-box {
+  position: absolute;
+  inset: 0;
+}
+
+.quad-box svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.quad-box .crop-handle {
+  cursor: move;
+}
+
+.quad-area {
+  fill: transparent;
+  cursor: move;
+  touch-action: none;
+}
+
+.quad-edge,
+.quad-line {
+  fill: none;
+  vector-effect: non-scaling-stroke;
+  pointer-events: none;
+}
+
+.quad-edge.outer {
+  stroke: #fff;
+  stroke-width: 3;
+}
+
+.quad-edge {
+  stroke: #000;
+  stroke-width: 1;
+}
+
+.quad-edge.bad {
+  stroke-dasharray: 4 3;
+}
+
+.quad-line {
+  stroke: #fff;
+  stroke-width: 1;
+  stroke-dasharray: 4 3;
+  opacity: 0.75;
 }
 
 .paper {
@@ -1070,7 +1296,12 @@ input.tiny {
 
   .topbar {
     flex-wrap: wrap;
+    gap: 6px;
     padding: 8px 16px;
+  }
+
+  .btn.compact-only {
+    display: inline-flex;
   }
 
   .zone,

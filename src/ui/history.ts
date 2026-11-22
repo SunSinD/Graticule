@@ -1,9 +1,10 @@
-import type { ExtractionOverrides, ExtractionResult } from '../core/types';
+import type { ChannelId, ExtractionOverrides, ExtractionResult, PlotCursors } from '../core/types';
 import type { PhotoQualityReport } from '../core/photoQuality';
 import type { ProfileChoice } from './components/Controls';
 import { makeUrl, releaseUrl } from './files';
 
 export type ItemState = 'staged' | 'extracting' | 'extracted' | 'error';
+export type ChannelLabels = Partial<Record<ChannelId, string>>;
 
 export interface HistoryItem {
   readonly id: string;
@@ -18,6 +19,10 @@ export interface HistoryItem {
   readonly overrides: ExtractionOverrides;
   readonly profile: ProfileChoice;
   readonly quality: PhotoQualityReport | null;
+  readonly isPhoto?: boolean;
+  readonly title?: string;
+  readonly channelLabels?: ChannelLabels;
+  readonly cursors?: PlotCursors | null;
 }
 
 interface StoredItem {
@@ -29,6 +34,11 @@ interface StoredItem {
   readonly result: ExtractionResult | null;
   readonly overrides: ExtractionOverrides;
   readonly profile: ProfileChoice;
+  readonly isPhoto?: boolean;
+  readonly quality?: PhotoQualityReport | null;
+  readonly title?: string;
+  readonly channelLabels?: ChannelLabels;
+  readonly cursors?: PlotCursors | null;
 }
 
 export interface HistoryStore {
@@ -51,17 +61,43 @@ export function releaseItems(items: readonly HistoryItem[]): void {
   for (const item of items) releaseUrl(item.url);
 }
 
+/** Pure: never revokes anything. Items in `keep` are dropped last, newest names first. */
 export function capHistory(items: readonly HistoryItem[], keep: ReadonlySet<string>): HistoryItem[] {
   if (items.length <= HISTORY_LIMIT) return [...items];
-  const drop = new Set(
-    [...items]
-      .filter((i) => !keep.has(i.id))
-      .sort((a, b) => a.lastUsed - b.lastUsed)
-      .slice(0, items.length - HISTORY_LIMIT)
-      .map((i) => i.id),
-  );
-  releaseItems(items.filter((i) => drop.has(i.id)));
+  const index = new Map(items.map((item, i) => [item.id, i]));
+  const order = [...items].sort((a, b) => {
+    const ka = keep.has(a.id) ? 1 : 0;
+    const kb = keep.has(b.id) ? 1 : 0;
+    if (ka !== kb) return ka - kb;
+    if (ka === 1) return index.get(b.id)! - index.get(a.id)!;
+    return a.lastUsed - b.lastUsed;
+  });
+  const drop = new Set(order.slice(0, items.length - HISTORY_LIMIT).map((i) => i.id));
   return items.filter((i) => !drop.has(i.id));
+}
+
+function storedResult(item: HistoryItem): ExtractionResult | null {
+  return item.state === 'error' ? null : item.result;
+}
+
+/**
+ * Compares only what is saved to disk. `lastUsed` and the extracting state are left out on purpose,
+ * so opening an item or starting an extraction never rewrites the image bytes.
+ */
+export function storedChange(a: HistoryItem, b: HistoryItem): 'none' | 'cursors' | 'other' {
+  const same =
+    a.name === b.name &&
+    a.bytes === b.bytes &&
+    a.addedAt === b.addedAt &&
+    storedResult(a) === storedResult(b) &&
+    a.overrides === b.overrides &&
+    a.profile === b.profile &&
+    a.quality === b.quality &&
+    a.isPhoto === b.isPhoto &&
+    a.title === b.title &&
+    a.channelLabels === b.channelLabels;
+  if (!same) return 'other';
+  return a.cursors === b.cursors ? 'none' : 'cursors';
 }
 
 function toStored(item: HistoryItem): StoredItem {
@@ -71,13 +107,65 @@ function toStored(item: HistoryItem): StoredItem {
     bytes: item.bytes,
     addedAt: item.addedAt,
     lastUsed: item.lastUsed,
-    result: item.state === 'error' ? null : item.result,
+    result: storedResult(item),
     overrides: item.overrides,
     profile: item.profile,
+    isPhoto: item.isPhoto ?? false,
+    quality: item.quality,
+    ...(item.title ? { title: item.title } : {}),
+    ...(item.channelLabels ? { channelLabels: item.channelLabels } : {}),
+    ...(item.cursors ? { cursors: item.cursors } : {}),
   };
 }
 
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null;
+}
+
+function validStored(v: unknown): v is StoredItem {
+  if (!isRecord(v)) return false;
+  return (
+    typeof v.id === 'string' &&
+    v.id.length > 0 &&
+    typeof v.name === 'string' &&
+    v.bytes instanceof Uint8Array &&
+    v.bytes.length > 0 &&
+    typeof v.addedAt === 'number' &&
+    Number.isFinite(v.addedAt) &&
+    typeof v.lastUsed === 'number' &&
+    Number.isFinite(v.lastUsed)
+  );
+}
+
+function validResult(v: unknown): ExtractionResult | null {
+  if (!isRecord(v)) return null;
+  if (!Array.isArray(v.traces) || !Array.isArray(v.measurements) || !isRecord(v.detection) || !isRecord(v.timebase)) return null;
+  return v as unknown as ExtractionResult;
+}
+
+function validCursors(v: unknown): PlotCursors | null {
+  if (!isRecord(v)) return null;
+  const nums = [v.x1, v.x2, v.y1, v.y2];
+  if (!nums.every((n) => typeof n === 'number' && Number.isFinite(n))) return null;
+  if (typeof v.channel !== 'string' || !/^C[1-4]$/.test(v.channel)) return null;
+  return v as unknown as PlotCursors;
+}
+
+function validLabels(v: unknown): ChannelLabels | undefined {
+  if (!isRecord(v)) return undefined;
+  const out: ChannelLabels = {};
+  for (const ch of ['C1', 'C2', 'C3', 'C4'] as const) {
+    const label = v[ch];
+    if (typeof label === 'string' && label.trim()) out[ch] = label;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 function fromStored(s: StoredItem): HistoryItem {
+  const result = validResult(s.result);
+  const quality = isRecord(s.quality) && Array.isArray((s.quality as { issues?: unknown }).issues) ? s.quality : null;
+  const labels = validLabels(s.channelLabels);
+  const cursors = validCursors(s.cursors);
   return {
     id: s.id,
     name: s.name,
@@ -85,20 +173,37 @@ function fromStored(s: StoredItem): HistoryItem {
     url: makeUrl(s.bytes),
     addedAt: s.addedAt,
     lastUsed: s.lastUsed,
-    state: s.result ? 'extracted' : 'staged',
-    result: s.result,
+    state: result ? 'extracted' : 'staged',
+    result,
     error: null,
-    overrides: s.overrides ?? {},
-    profile: s.profile ?? 'auto',
-    quality: null,
+    overrides: isRecord(s.overrides) ? s.overrides : {},
+    profile: typeof s.profile === 'string' ? s.profile : 'auto',
+    quality,
+    isPhoto: s.isPhoto === true,
+    ...(typeof s.title === 'string' && s.title.trim() ? { title: s.title } : {}),
+    ...(labels ? { channelLabels: labels } : {}),
+    ...(cursors ? { cursors } : {}),
   };
+}
+
+function loadValid(records: readonly unknown[]): HistoryItem[] {
+  const valid = records.filter(validStored).sort((a, b) => b.lastUsed - a.lastUsed);
+  const out: HistoryItem[] = [];
+  for (const s of valid.slice(0, HISTORY_LIMIT)) {
+    try {
+      out.push(fromStored(s));
+    } catch {
+      /* skip a record that cannot be restored */
+    }
+  }
+  return out;
 }
 
 function memoryStore(): HistoryStore {
   const map = new Map<string, StoredItem>();
   return {
     persistent: false,
-    loadAll: async () => [...map.values()].map(fromStored),
+    loadAll: async () => loadValid([...map.values()]),
     put: async (item) => {
       map.set(item.id, toStored(item));
     },
@@ -142,14 +247,16 @@ function idbStore(db: IDBDatabase): HistoryStore {
   return {
     persistent: true,
     loadAll: async () => {
-      const all = await request(tx('readonly').getAll() as IDBRequest<StoredItem[]>);
-      const sorted = [...all].sort((a, b) => b.lastUsed - a.lastUsed);
-      const extra = sorted.slice(HISTORY_LIMIT);
+      const all = await request(tx('readonly').getAll() as IDBRequest<unknown[]>);
+      const valid = all.filter(validStored).sort((a, b) => b.lastUsed - a.lastUsed);
+      const extra = valid.slice(HISTORY_LIMIT);
       if (extra.length) {
-        const store = tx('readwrite');
-        for (const e of extra) store.delete(e.id);
+        await safe(async () => {
+          const store = tx('readwrite');
+          await Promise.all(extra.map((e) => request(store.delete(e.id))));
+        });
       }
-      return sorted.slice(0, HISTORY_LIMIT).map(fromStored);
+      return loadValid(valid);
     },
     put: (item) => safe(() => request(tx('readwrite').put(toStored(item)))),
     remove: (id) => safe(() => request(tx('readwrite').delete(id))),

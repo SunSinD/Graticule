@@ -1,9 +1,22 @@
 {
   "name": "graticule",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "A clean tool that turns oscilloscope screenshots into plots and data.",
   "author": "SunSinD",
   "license": "MIT",
+  "files": [
+    "dist-cli",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SunSinD/Graticule.git"
+  },
+  "homepage": "https://sunsind.github.io/Graticule/",
   "type": "module",
   "bin": {
     "graticule": "./dist-cli/cli/index.js"
@@ -19,7 +32,8 @@
     "check:prose": "node scripts/check-prose.mjs",
     "verify:parity": "node scripts/verify-parity.mjs",
     "build:portable": "node scripts/build-portable.mjs",
-    "cli": "tsx src/cli/index.ts"
+    "cli": "tsx src/cli/index.ts",
+    "prepack": "npm run build"
   },
   "dependencies": {
     "fflate": "^0.8.2",

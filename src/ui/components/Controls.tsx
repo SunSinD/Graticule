@@ -1,6 +1,8 @@
 import type { ChannelId, ExtractionOverrides, ExtractionResult, Locale, ProfileId } from '../../core/types';
 import type { Dict } from '../i18n';
+import type { ChannelLabels } from '../history';
 import { ScaleInput } from './ScaleInput';
+import { useState } from 'react';
 
 export type ProfileChoice = ProfileId | 'auto';
 
@@ -13,16 +15,19 @@ export const PROFILE_OPTIONS: readonly (readonly [ProfileId, string])[] = [
   ['rigol-dho924', 'Rigol DHO924'],
   ['rohde-schwarz-rtb2004', 'Rohde & Schwarz RTB2004'],
   ['tektronix-dpo7104c', 'Tektronix DPO7104C'],
+  ['siglent-sds800x-hd', 'Siglent SDS800X HD'],
+  ['keysight-dsox1000', 'Keysight DSOX1000'],
 ];
 
 interface ProfileProps {
   readonly tx: Dict;
   readonly choice: ProfileChoice;
   readonly result: ExtractionResult | null;
+  readonly disabled?: boolean;
   readonly onChoice: (choice: ProfileChoice) => void;
 }
 
-export function ProfilePanel({ tx, choice, result, onChoice }: ProfileProps) {
+export function ProfilePanel({ tx, choice, result, disabled, onChoice }: ProfileProps) {
   const d = result?.detection;
   const notes = d ? [d.fallbackReason, ...d.warnings].filter((w, i, all): w is string => !!w && all.indexOf(w) === i) : [];
   return (
@@ -34,7 +39,7 @@ export function ProfilePanel({ tx, choice, result, onChoice }: ProfileProps) {
           <span className="num muted">{Math.round(d.confidence * 100)}%</span>
         </p>
       )}
-      <select aria-label={tx.profile} value={choice} onChange={(e) => onChoice(e.target.value as ProfileChoice)}>
+      <select aria-label={tx.profile} value={choice} disabled={disabled} onChange={(e) => onChoice(e.target.value as ProfileChoice)}>
         <option value="auto">{tx.profileAuto}</option>
         {PROFILE_OPTIONS.map(([id, name]) => (
           <option key={id} value={id}>
@@ -58,12 +63,42 @@ interface ScaleProps {
   readonly result: ExtractionResult | null;
   readonly overrides: ExtractionOverrides;
   readonly disabled: boolean;
+  readonly labels?: ChannelLabels | undefined;
   readonly onOverrides: (next: ExtractionOverrides) => void;
+  readonly onLabel?: (ch: ChannelId, label: string) => void;
+}
+
+function LabelInput({ id, label, placeholder, value, onCommit }: { id: string; label: string; placeholder: string; value: string; onCommit: (v: string) => void }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = (): void => {
+    if (draft === null) return;
+    const next = draft.trim().slice(0, 24);
+    setDraft(null);
+    if (next !== value) onCommit(next);
+  };
+  return (
+    <input
+      id={id}
+      type="text"
+      className="ch-label"
+      aria-label={label}
+      placeholder={placeholder}
+      maxLength={24}
+      value={draft ?? value}
+      onFocus={() => setDraft(value)}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') commit();
+        if (e.key === 'Escape') setDraft(null);
+      }}
+    />
+  );
 }
 
 type ChannelPatch = { enabled?: boolean; voltsPerDiv?: number; offsetVolts?: number };
 
-export function ScaleControls({ tx, locale, result, overrides, disabled, onOverrides }: ScaleProps) {
+export function ScaleControls({ tx, locale, result, overrides, disabled, labels, onOverrides, onLabel }: ScaleProps) {
   const secPerDiv = overrides.secPerDiv ?? result?.timebase.secPerDiv ?? null;
   const patchChannel = (ch: ChannelId, patch: ChannelPatch): void => {
     const prev = overrides.channels?.[ch] ?? {};
@@ -125,6 +160,15 @@ export function ScaleControls({ tx, locale, result, overrides, disabled, onOverr
                     <input type="checkbox" checked onChange={(e) => patchChannel(ch, { enabled: e.target.checked })} />
                     <span className="ch">{ch}</span>
                   </label>
+                  {onLabel && (
+                    <LabelInput
+                      id={`label-${ch}`}
+                      label={`${tx.channelLabel} ${ch}`}
+                      placeholder={tx.channelLabel}
+                      value={labels?.[ch] ?? ''}
+                      onCommit={(v) => onLabel(ch, v)}
+                    />
+                  )}
                 </legend>
                 <ScaleInput
                   id={`vdiv-${ch}`}

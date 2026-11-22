@@ -1,79 +1,118 @@
-import { forwardRef, useEffect, useRef, useState } from 'react';
-import { Copy, Download } from 'lucide-react';
+import { forwardRef, useState } from 'react';
+import type { TableFormat } from '../../core/export/table';
 import type { Dict } from '../i18n';
 
 export interface ExportSource {
   readonly baseName: string;
   readonly svg: () => string;
   readonly csv: () => string;
-  readonly table: (format: 'html' | 'markdown' | 'tsv') => string;
+  readonly table: (format: TableFormat) => string;
+}
+
+export interface TitleField {
+  readonly value: string;
+  readonly placeholder: string;
+  readonly onCommit: (value: string) => void;
 }
 
 interface Props {
   readonly tx: Dict;
   readonly source: ExportSource | null;
+  readonly feedback: string;
+  readonly title: TitleField | null;
   readonly onSvg: (src: ExportSource) => void;
-  readonly onPng: (src: ExportSource) => Promise<void>;
+  readonly onPng: (src: ExportSource) => void;
   readonly onCsv: (src: ExportSource) => void;
-  readonly onCopy: (src: ExportSource, format: 'html' | 'markdown' | 'tsv') => Promise<void>;
+  readonly onCopyPlot: (src: ExportSource) => void;
+  readonly onCopyTable: (src: ExportSource, format: TableFormat) => void;
 }
 
-export const ExportPanel = forwardRef<HTMLElement, Props>(function ExportPanel({ tx, source, onSvg, onPng, onCsv, onCopy }, ref) {
-  const [feedback, setFeedback] = useState<string>('');
-  const timer = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(timer.current), []);
-
-  const flash = (text: string): void => {
-    setFeedback(text);
-    window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => setFeedback(''), 1600);
+function TitleInput({ tx, field, disabled }: { tx: Dict; field: TitleField; disabled: boolean }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const commit = (): void => {
+    if (draft === null) return;
+    const next = draft.trim().slice(0, 120);
+    setDraft(null);
+    if (next !== field.value) field.onCommit(next);
   };
+  return (
+    <label className="title-field">
+      <span>{tx.title}</span>
+      <input
+        type="text"
+        value={draft ?? field.value}
+        placeholder={field.placeholder}
+        disabled={disabled}
+        maxLength={120}
+        onFocus={() => setDraft(field.value)}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            commit();
+            e.currentTarget.blur();
+          }
+          if (e.key === 'Escape') {
+            setDraft(null);
+            e.currentTarget.blur();
+          }
+        }}
+      />
+    </label>
+  );
+}
 
-  const copy = (format: 'html' | 'markdown' | 'tsv') => {
-    if (!source) return;
-    onCopy(source, format).then(
-      () => flash(tx.copied),
-      () => flash(tx.copyFailed),
-    );
-  };
-
+export const ExportPanel = forwardRef<HTMLElement, Props>(function ExportPanel(props, ref) {
+  const { tx, source, feedback, title } = props;
   const off = source === null;
+  const run = (fn: (src: ExportSource) => void) => () => {
+    if (source) fn(source);
+  };
+  const tables: readonly (readonly [TableFormat, string])[] = [
+    ['html', tx.copyWord],
+    ['markdown', tx.copyMarkdown],
+    ['latex', tx.copyLatex],
+    ['tsv', tx.copyTsv],
+  ];
   return (
     <section ref={ref} className="exports" tabIndex={-1} aria-labelledby="exports-title">
       <div className="section-head">
         <h2 id="exports-title">
           {tx.export} <kbd>E</kbd>
         </h2>
-        <span className="feedback small" role="status" aria-live="polite">
+        <span className="feedback small" role="status" aria-live="polite" data-testid="export-feedback">
           {feedback}
         </span>
       </div>
-      <div className="btn-row">
-        <button type="button" className="btn" disabled={off} onClick={() => source && onSvg(source)}>
-          <Download size={16} aria-hidden="true" />
-          <span>{tx.downloadSvg}</span>
+      {title && <TitleInput key={title.placeholder} tx={tx} field={title} disabled={off} />}
+      <div className="btn-grid">
+        <button type="button" className="btn" disabled={off} onClick={run(props.onSvg)}>
+          {tx.downloadSvg}
         </button>
-        <button type="button" className="btn" disabled={off} onClick={() => source && void onPng(source)}>
-          <Download size={16} aria-hidden="true" />
-          <span>{tx.downloadPng}</span>
+        <button type="button" className="btn" disabled={off} onClick={run(props.onPng)}>
+          {tx.downloadPng}
         </button>
-        <button type="button" className="btn" disabled={off} onClick={() => source && onCsv(source)}>
-          <Download size={16} aria-hidden="true" />
-          <span>{tx.downloadCsv}</span>
+        <button type="button" className="btn" disabled={off} onClick={run(props.onCsv)}>
+          {tx.downloadCsv}
+        </button>
+        <button
+          type="button"
+          className="btn"
+          disabled={off}
+          onClick={run(props.onCopyPlot)}
+          title={tx.copyPlotTitle}
+          aria-keyshortcuts="Control+C"
+        >
+          {tx.copyPlot}
         </button>
       </div>
       <p className="label">{tx.copyTable}</p>
-      <div className="btn-row">
-        <button type="button" className="btn" disabled={off} onClick={() => copy('html')}>
-          <Copy size={16} aria-hidden="true" />
-          <span>{tx.copyWord}</span>
-        </button>
-        <button type="button" className="btn" disabled={off} onClick={() => copy('markdown')}>
-          {tx.copyMarkdown}
-        </button>
-        <button type="button" className="btn" disabled={off} onClick={() => copy('tsv')}>
-          {tx.copyTsv}
-        </button>
+      <div className="btn-grid">
+        {tables.map(([format, label]) => (
+          <button key={format} type="button" className="btn" disabled={off} onClick={() => source && props.onCopyTable(source, format)}>
+            {label}
+          </button>
+        ))}
       </div>
     </section>
   );

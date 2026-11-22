@@ -1,38 +1,41 @@
-# Graticule 1.0.0
+# Graticule 1.1.0
 
-First public release. Try it live at [sunsind.github.io/Graticule](https://sunsind.github.io/Graticule/).
+Try it live at [sunsind.github.io/Graticule](https://sunsind.github.io/Graticule/).
 
 ## Highlights
 
-- Native support for six scopes: Siglent SDS2000X Plus, Siglent SDS1000X E, Rigol DS1054Z, Rigol DHO924, Rohde & Schwarz RTB2004 and Tektronix DPO7104C
-- Universal mode with a draggable crop box for any other scope
-- A clear Extract button. Nothing runs until you ask, and changing a scale after that updates the plot by itself
-- History that stays in your browser, with a Keep history switch to turn it off and delete it
-- Zoom from 50% to 300% on plots and screenshots, and up to 250% on Bode plots
-- Phone photos with a quality check that tells you when to retake the picture
-- Measurements for every channel, plus a side by side check against the scope MEASURE bar
-- Bode batch mode with gain and phase plots, the `-3 dB` cutoff, and a table where every cell can be edited
-- 1:1 overlay to check the extraction right on top of the original screenshot
-- English and French, with a decimal comma in French
+- Eight native scopes. New in this release: Siglent SDS800X HD and Keysight DSOX1000
+- Measurement cursors on the clean plot. Press C, drag X1, X2, Y1 and Y2, and read Δt, 1/Δt, ΔV and phase. The cursors also go into the SVG and PNG exports
+- 4 corner crop to straighten tilted phone photos. The Straighten button on the photo check opens it for you, and the 1:1 overlay still lines up with the original photo
+- Copy the plot as a white 2x PNG with the Copy button or Ctrl+C, then paste it into your report
+- A title for the plot and a label for each channel, like Vin and Vout. They show up in the SVG, the PNG, the CSV and the tables
+- LaTeX tables next to Word, Markdown and TSV
+- Rise time from 10 to 90%, fall time and overshoot in the measurements
+- Band pass Bode plots now show the low and the high cutoff
 
-## Exports
+## Fixes and polish
 
-- SVG made for black and white printing. Each channel has its own line style so C1 to C4 stay readable without color
-- 2x PNG for slides and reports
-- CSV with a metadata header and a status column for every channel
-- Tables in Word HTML, Markdown and TSV
+- Cancel, Crop and Clean Plot now close the crop box on scopes found in universal mode
+- Bode batch mode keeps the crop and the scales you set on each capture
+- Every cell in the Bode table saves when you press Enter or leave the cell. Escape puts the old value back
+- Clear asks you to confirm before it deletes the history
+- Opening a capture no longer rewrites it in the browser storage, and one broken saved capture can no longer wipe the rest
+- The history keeps 50 captures even when you add more than 50 at once
+- Crop corners are bigger for touch and move with the arrow keys. Enter applies and Escape cancels
+- Smoother zoom with a trackpad. Click the zoom percentage to go back to 100%
+- Photos stay smooth when zoomed out and only show sharp pixels when zoomed in
+- The remove button in the history is always visible on touch screens
+- Add and camera buttons in the top bar on phones
+- The drop zone only shows up when you drag files
+- Removing a capture from a Bode selection of two opens the one left
+- Better French labels
+- The keyboard stays inside the shortcuts window while it is open
+- PNG and copy errors now show a message in the Export panel
 
-## Honest gaps
+## Offline and command line
 
-Clipped, hidden or unclear parts of a trace are never joined or filled in. They show as dotted marks in the plot and as empty cells with a clear status in the CSV.
-
-## Offline and privacy
-
-Everything runs in your browser. Nothing is uploaded and nothing is tracked. The website works offline after your first visit and can be installed like an app. `graticule-portable.html` is a single file you can open anywhere with no internet.
-
-## Command line
-
-The `graticule` command uses the same engine as the web app and gives the same CSV byte for byte.
+- The offline app updates itself to the new version and cleans up old caches
+- The `graticule` command can deskew a photo with `--deskew` and write LaTeX tables with `--format latex`
 
 ## Credits
 

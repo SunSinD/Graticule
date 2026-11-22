@@ -27,7 +27,9 @@ jobs:
       - run: npm test
       - run: npm run check:prose
       - run: npm run build
+      - run: npm run build:portable
       - run: npm run verify:parity
+      - run: npm pack --dry-run
       - name: Verify gzipped web bundle size
         run: node --input-type=module -e "import fs from 'node:fs'; import zlib from 'node:zlib'; import path from 'node:path'; const dir='dist/assets'; const bytes=fs.readdirSync(dir).filter((n)=>/\.m?js$/.test(n)||n.endsWith('.css')).reduce((n,f)=>n+zlib.gzipSync(fs.readFileSync(path.join(dir,f))).length,0); console.log('Gzipped JS+CSS:',bytes,'bytes'); if(bytes>=300*1024) throw new Error('Gzipped JS+CSS bundle is 300 KB or larger');"
       - name: Install Playwright Chromium

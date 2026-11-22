@@ -13,7 +13,7 @@ export interface PhotoQualityReport {
 }
 
 const sampleLimit = 640;
-const angles = Array.from({ length: 49 }, (_, i) => (i - 24) / 2);
+const angles = Array.from({ length: 101 }, (_, i) => (i - 50) / 2);
 const slopes = angles.map(angle => Math.tan(angle * Math.PI / 180));
 
 function percentile(histogram: Uint32Array, count: number, fraction: number): number {
@@ -137,11 +137,11 @@ function estimateTilt(width: number, height: number, xEdges: readonly number[], 
     for (let bin = 1; bin < votes.length; bin++) {
       const adjacent = votes[bin - 1]! + votes[bin]!;
       peak = Math.max(peak, adjacent);
-      if (adjacent >= width * 0.25) strength += adjacent ** 2;
+      if (adjacent >= width * 0.18) strength += adjacent ** 2;
     }
     const angle = angles[i]!;
     if (angle === 0) uprightStrength = strength;
-    if (peak >= width * 0.45 && strength > bestStrength) {
+    if (peak >= width * 0.30 && strength > bestStrength) {
       bestStrength = strength;
       bestAngle = angle;
     }

@@ -1,11 +1,20 @@
-import type { BodeGateOptions, BodeResult, ChannelId, ExtractionResult, GapStatus, Locale } from '../../core/types';
+import type { BodeGateOptions, BodeResult, ChannelId, ChannelMeasurements, ExtractionResult, GapStatus, Locale } from '../../core/types';
 import { formatMetric, metricValue } from '../../core/export/table';
 import { metricLabel, toMetricKey } from '../../core/export/labels';
 import type { MetricKey } from '../../core/export/labels';
 import { EMPTY_CELL, METRIC_LABELS, ROW_LABELS, formatEng, formatPercent, gapLabel } from '../i18n';
-import type { Dict } from '../i18n';
+import type { Dict, RowKey } from '../i18n';
+import type { ChannelLabels } from '../history';
 
-const ROWS: readonly (keyof (typeof ROW_LABELS)['en'])[] = ['vpp', 'vmax', 'vmin', 'vavg', 'vrms', 'period', 'freq', 'duty'];
+const ROWS: readonly RowKey[] = ['vpp', 'vmax', 'vmin', 'vavg', 'vrms', 'period', 'freq', 'duty', 'rise', 'fall', 'overshoot'];
+
+function cellText(m: ChannelMeasurements, key: RowKey, locale: Locale): string {
+  const value = metricValue(m, key);
+  const text = formatMetric(value, key, '', locale);
+  if (value === null || !Number.isFinite(value)) return text;
+  if ((key === 'rise' && m.riseLimited) || (key === 'fall' && m.fallLimited)) return `< ${text}`;
+  return text;
+}
 const GAP_KINDS: readonly Exclude<GapStatus, 'ok'>[] = [
   'clipped_high',
   'clipped_low',
@@ -19,9 +28,10 @@ interface Props {
   readonly tx: Dict;
   readonly locale: Locale;
   readonly result: ExtractionResult | null;
+  readonly labels?: ChannelLabels | undefined;
 }
 
-export function MeasurementsPanel({ tx, locale, result }: Props) {
+export function MeasurementsPanel({ tx, locale, result, labels }: Props) {
   const enabled = new Set(result?.traces.filter((t) => t.settings.enabled).map((t) => t.channel) ?? []);
   const ms = result?.measurements.filter((m) => enabled.has(m.channel)) ?? [];
   const ph = result?.phaseC1ToC2 ?? null;
@@ -35,7 +45,7 @@ export function MeasurementsPanel({ tx, locale, result }: Props) {
           <thead>
             <tr>
               <th>{tx.quantity}</th>
-              {ms.length === 0 ? <th className="r">{EMPTY_CELL}</th> : ms.map((m) => <th key={m.channel} className="r">{m.channel}</th>)}
+              {ms.length === 0 ? <th className="r">{EMPTY_CELL}</th> : ms.map((m) => <th key={m.channel} className="r">{labels?.[m.channel]?.trim() || m.channel}</th>)}
             </tr>
           </thead>
           <tbody>
@@ -47,7 +57,7 @@ export function MeasurementsPanel({ tx, locale, result }: Props) {
                 ) : (
                   ms.map((m) => (
                     <td key={m.channel} className="r num">
-                      {formatMetric(metricValue(m, key), key, '', locale)}
+                      {cellText(m, key, locale)}
                     </td>
                   ))
                 )}
@@ -166,6 +176,7 @@ const CHS: readonly ChannelId[] = ['C1', 'C2', 'C3', 'C4'];
 export function BodeSummary({ tx, locale, result, gate, onGate }: BodeProps) {
   const input = gate.inputChannel ?? result?.inputChannel ?? 'C1';
   const output = gate.outputChannel ?? result?.outputChannel ?? 'C2';
+  const bandPass = result?.cutoffLowHz != null && result.cutoffHighHz != null;
   return (
     <section>
       <h2>{tx.bodeSummary}</h2>
@@ -192,12 +203,25 @@ export function BodeSummary({ tx, locale, result, gate, onGate }: BodeProps) {
           <dt>{tx.passband}</dt>
           <dd className="num">{formatEng(result?.passbandGainDb ?? null, 'dB', locale)}</dd>
         </div>
-        <div>
-          <dt>{tx.cutoff}</dt>
-          <dd className="num">
-            {result?.cutoffHz != null ? formatEng(result.cutoffHz, 'Hz', locale, { sig: 4 }) : tx.noCutoff}
-          </dd>
-        </div>
+        {bandPass && result ? (
+          <>
+            <div>
+              <dt>{tx.cutoffLow}</dt>
+              <dd className="num">{formatEng(result.cutoffLowHz, 'Hz', locale, { sig: 4 })}</dd>
+            </div>
+            <div>
+              <dt>{tx.cutoffHigh}</dt>
+              <dd className="num">{formatEng(result.cutoffHighHz, 'Hz', locale, { sig: 4 })}</dd>
+            </div>
+          </>
+        ) : (
+          <div>
+            <dt>{tx.cutoff}</dt>
+            <dd className="num">
+              {result?.cutoffHz != null ? formatEng(result.cutoffHz, 'Hz', locale, { sig: 4 }) : tx.noCutoff}
+            </dd>
+          </div>
+        )}
         <div>
           <dt>
             {tx.acceptedCount} / {tx.rejectedCount}

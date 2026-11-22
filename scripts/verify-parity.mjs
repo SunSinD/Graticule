@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { resolve, basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -43,9 +43,12 @@ for (const sample of samples) {
   console.log(`Parity verified: ${sample} (${Buffer.byteLength(cliCsv)} bytes)`);
 }
 
-// Verify Bode batch CLI vs direct core parity on the 10-capture sweep
+// Verify Bode batch CLI vs direct core parity on the complete sample directory.
 const sweepDir = resolve(root, 'tests/fixtures/samples');
-const sweepFiles = Array.from({ length: 10 }, (_, i) => `sweep_${String(i + 1).padStart(2, '0')}.png`);
+const sweepFiles = (await readdir(sweepDir, { withFileTypes: true }))
+  .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.png'))
+  .map((entry) => entry.name)
+  .sort((a, b) => a.localeCompare(b, 'en', { numeric: true }));
 const sweepInputs = await Promise.all(
   sweepFiles.map(async (fileName) => ({
     fileName,
@@ -53,7 +56,10 @@ const sweepInputs = await Promise.all(
   })),
 );
 const directBodeCsv = csvMod.renderBodeCsv(pipelineMod.analyzeBodeBatch(sweepInputs)).replace(/\r\n/g, '\n').trimEnd();
-if (!directBodeCsv.includes('sweep_01.png') || !directBodeCsv.includes('sweep_10.png')) {
-  throw new Error('Bode CSV missing expected sweep rows');
+const cliBodeCsv = (await run('node', ['dist-cli/cli/index.js', '--bode', sweepDir, '--csv']))
+  .replace(/\r\n/g, '\n')
+  .trimEnd();
+if (cliBodeCsv !== directBodeCsv) {
+  throw new Error('Browser/Node CLI Bode CSV parity mismatch');
 }
-console.log(`Bode batch CSV verified: 10 captures (${Buffer.byteLength(directBodeCsv)} bytes)`);
+console.log(`Bode batch CSV verified: ${sweepFiles.length} captures (${Buffer.byteLength(cliBodeCsv)} bytes)`);

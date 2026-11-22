@@ -2,7 +2,7 @@ import { matchBitmap, parseQuantity, readBitmap } from './font/matcher.js';
 import { compactGlyphs, glyphs as siglentFont, labels as siglentLabels } from './font/siglentFont.js';
 import { glyphs as rigolFont } from './font/rigolFont.js';
 import { rasterFonts } from './font/rasterFonts.js';
-import { CHANNELS } from './pixels.js';
+import { at, CHANNELS } from './pixels.js';
 import { findNativeCards, getNativeProfile, hasCompactSiglentHeader, isRasterProfile, rigolCardInk, rigolScaleRoi } from './profiles.js';
 import type { ChannelColor, PixelPredicate } from './pixels.js';
 import type { ChannelId, ChannelSettings, ProfileDetection, Rect, RgbaImage, ScopeMeasureReading } from './types.js';
@@ -67,6 +67,7 @@ function inferChannel(image: RgbaImage, roi: Rect, inverted: boolean): ChannelId
 
 function readRasterMetadata(image: RgbaImage, profile: NonNullable<ReturnType<typeof getNativeProfile>>,
   id: keyof typeof rasterFonts): ScopeMetadata {
+  if (id === 'siglent-sds800x-hd' || id === 'keysight-dsox1000') return readNewRasterMetadata(image, profile, id);
   const siglent = id === 'siglent-sds1000x-e';
   const rigol = id === 'rigol-dho924';
   const tek = id === 'tektronix-dpo7104c';
@@ -98,6 +99,45 @@ function readRasterMetadata(image: RgbaImage, profile: NonNullable<ReturnType<ty
     cards, secPerDiv: parseScale(rawTimebase, 's'), triggerOffsetSec: parseQuantity(delay ?? '')?.value ?? null,
     rawTimebase, topFrequencyHz, topFrequencyRaw, scopeReadings: [],
   };
+}
+
+function readNewRasterMetadata(image: RgbaImage, profile: NonNullable<ReturnType<typeof getNativeProfile>>,
+  id: 'siglent-sds800x-hd' | 'keysight-dsox1000'): ScopeMetadata {
+  const sds800 = id === 'siglent-sds800x-hd';
+  const read = (roi: Rect) => matchBitmap(readBitmap(image, roi, (r, g, b) => Math.min(r, g, b) > 170), rasterFonts[id].glyphs) || null;
+  const cards = new Map<ChannelId, CardReading>();
+  for (const [channel, slot] of findNativeCards(image, profile, false).analog) {
+    const rawScaleText = read(sds800 ? box(slot.x + 42, 557, 74, 16) : box(slot.x + 21, slot.y, 51, slot.height));
+    const voltsPerDiv = parseScale(rawScaleText, 'V');
+    if (!sds800 && voltsPerDiv === null) continue;
+    const rawOffsetText = sds800 ? read(box(slot.x + 42, 575, 74, 16)) : null;
+    const probeText = sds800 ? read(box(slot.x, 557, 40, 16)) : null;
+    const attenuation = /^([\d.]+)X$/.exec(probeText ?? '')?.[1];
+    const offset = parseQuantity(rawOffsetText ?? '');
+    cards.set(channel, {
+      voltsPerDiv, offsetVolts: offset?.unit.endsWith('V') ? offset.value : null, rawScaleText, rawOffsetText,
+      probeAttenuation: attenuation ? Number(attenuation) : 1, coupling: 'UNKNOWN',
+    });
+  }
+  const rawTimebase = read(profile.timebaseCard.scaleRoi);
+  const secPerDiv = parseScale(rawTimebase, 's');
+  const delay = parseQuantity(read(profile.timebaseCard.delayRoi) ?? '');
+  let triggerOffsetSec = delay?.unit.endsWith('s') ? delay.value : null;
+  if (sds800 && secPerDiv !== null) {
+    // The delay card is relative to the trigger marker, which need not be at the graticule center.
+    const row = profile.graticule.top + 1;
+    const marks: number[] = [];
+    for (let x = profile.graticule.left; x <= profile.graticule.right; x++) {
+      const i = at(image, x, row);
+      if (image.data[i] === 128 && image.data[i + 1] === 128 && image.data[i + 2] === 255) marks.push(x);
+    }
+    if (marks.length >= 5 && marks.at(-1)! - marks[0]! < 24) {
+      const markerX = Math.round((marks[0]! + marks.at(-1)!) / 2);
+      const centerX = (profile.graticule.left + profile.graticule.right) / 2;
+      triggerOffsetSec = (triggerOffsetSec ?? 0) + (centerX - markerX) / profile.graticule.pxPerHDiv * secPerDiv;
+    }
+  }
+  return { cards, secPerDiv, triggerOffsetSec, rawTimebase, topFrequencyHz: null, topFrequencyRaw: null, scopeReadings: [] };
 }
 
 export function readScopeMetadata(image: RgbaImage, detection: ProfileDetection): ScopeMetadata {

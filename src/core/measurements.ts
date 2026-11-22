@@ -2,7 +2,37 @@ import { fitShared, median, quantile, valid, wrapPhase } from './dsp.js';
 import type { ChannelMeasurements, ChannelTrace, PhaseMeasurement, ScopeComparisonRow, ScopeMeasureReading, TraceSample } from './types.js';
 
 interface Transition { readonly rising: boolean; readonly time: number; readonly segment: number }
-interface ObservedSpan { readonly start: number; end: number }
+interface ObservedSpan { readonly start: number; end: number; readonly stepInto: 'rise' | 'fall' | null }
+type VoltageSample = TraceSample & { readonly voltage: number };
+
+function crossing(previous: VoltageSample, current: VoltageSample, level: number): number {
+  return previous.timeSec + (current.timeSec - previous.timeSec) * (level - previous.voltage) / (current.voltage - previous.voltage);
+}
+
+function smoothCrossing(samples: readonly TraceSample[], index: number, mid: number, band: number): number {
+  const current = samples[index] as VoltageSample;
+  const previous = samples[index - 1] as VoltageSample;
+  const linear = crossing(previous, current, mid);
+  const center = Math.abs(current.voltage - mid) < Math.abs(previous.voltage - mid) ? index : index - 1;
+  const pivot = samples[center]!;
+  const radius = 3;
+  let sumT = 0, sumV = 0, sumTT = 0, sumTV = 0;
+  for (let i = -radius; i <= radius; i++) {
+    const sample = samples[center + i];
+    if (!sample || !valid(sample) || sample.col !== pivot.col + i || Math.abs(sample.voltage - mid) > band) return linear;
+    const time = sample.timeSec - pivot.timeSec;
+    const voltage = sample.voltage - mid;
+    sumT += time;
+    sumV += voltage;
+    sumTT += time * time;
+    sumTV += time * voltage;
+  }
+  const count = 2 * radius + 1;
+  const slope = (sumTV - sumT * sumV / count) / (sumTT - sumT ** 2 / count);
+  const smoothed = pivot.timeSec + (sumT - sumV / slope) / count;
+  const dt = current.timeSec - previous.timeSec;
+  return Math.abs(smoothed - linear) <= dt ? smoothed : linear;
+}
 
 function schmittCrossings(samples: readonly TraceSample[], mid: number, hysteresis: number): {
   events: Transition[]; spans: ObservedSpan[];
@@ -10,28 +40,32 @@ function schmittCrossings(samples: readonly TraceSample[], mid: number, hysteres
   const events: Transition[] = [];
   const spans: ObservedSpan[] = [];
   let state: 'high' | 'low' | null = null;
-  let previous: (TraceSample & { readonly voltage: number }) | null = null;
+  let previous: VoltageSample | null = null;
+  let lastObserved: VoltageSample | null = null;
   let midpoint: number | null = null;
   let segment = 0;
-  let missed = 0;
-  for (const sample of samples) {
-    if (!valid(sample)) {
-      missed++;
-      continue;
-    }
-    if (missed > 4) {
-      if (missed > 24) segment++;
-      if (missed > 24 || !previous || (previous.voltage < mid) !== (sample.voltage < mid)) {
-        midpoint = null;
-        state = null;
-      }
+  for (const [index, sample] of samples.entries()) {
+    if (previous && (!valid(sample) || sample.col !== previous.col + 1 || sample.timeSec <= previous.timeSec)) {
+      segment++;
+      midpoint = null;
+      state = null;
       previous = null;
     }
-    missed = 0;
-    const span = spans[segment] ??= { start: sample.timeSec, end: sample.timeSec };
+    if (!valid(sample)) continue;
+    if (!spans[segment]) {
+      let stepInto: ObservedSpan['stepInto'] = null;
+      const hidden = samples[index - 1];
+      if (lastObserved && hidden && sample.col === lastObserved.col + 2 && hidden.col === sample.col - 1
+          && (hidden.status === 'unresolved' || hidden.status === 'masked_cursor' || hidden.status === 'masked_overlay')) {
+        if (lastObserved.voltage <= mid - hysteresis && sample.voltage >= mid + hysteresis) stepInto = 'rise';
+        if (lastObserved.voltage >= mid + hysteresis && sample.voltage <= mid - hysteresis) stepInto = 'fall';
+      }
+      spans[segment] = { start: sample.timeSec, end: sample.timeSec, stepInto };
+    }
+    const span = spans[segment]!;
     span.end = sample.timeSec;
     if (previous && ((previous.voltage < mid && sample.voltage >= mid) || (previous.voltage > mid && sample.voltage <= mid))) {
-      midpoint = previous.timeSec + (sample.timeSec - previous.timeSec) * (mid - previous.voltage) / (sample.voltage - previous.voltage);
+      midpoint = smoothCrossing(samples, index, mid, hysteresis);
     }
     const next = sample.voltage >= mid + hysteresis ? 'high' : sample.voltage <= mid - hysteresis ? 'low' : null;
     if (next && next !== state) {
@@ -40,11 +74,13 @@ function schmittCrossings(samples: readonly TraceSample[], mid: number, hysteres
       midpoint = null;
     }
     previous = sample;
+    lastObserved = sample;
   }
   return { events, spans };
 }
 
-function cycleTimes(events: readonly Transition[], rising: boolean): { period: number; on: number | null; segment: number }[] {
+function cycleTimes(events: readonly Transition[], spans: readonly ObservedSpan[], rising: boolean):
+  { period: number; on: number | null; segment: number }[] {
   const cycles: { period: number; on: number | null; segment: number }[] = [];
   let edge: Transition | null = null;
   let opposite: Transition | null = null;
@@ -53,29 +89,155 @@ function cycleTimes(events: readonly Transition[], rising: boolean): { period: n
       opposite = event;
       continue;
     }
-    if (edge?.segment === event.segment && event.time > edge.time) {
-      cycles.push({ period: event.time - edge.time, segment: event.segment, on: opposite?.segment === event.segment
-        && opposite.time > edge.time ? (rising ? opposite.time - edge.time : event.time - opposite.time) : null });
+    if (edge && event.time > edge.time) {
+      const visibleOpposite = opposite && opposite.time > edge.time ? opposite : null;
+      if (edge.segment === event.segment && visibleOpposite?.segment === event.segment) {
+        cycles.push({ period: event.time - edge.time, segment: event.segment,
+          on: rising ? visibleOpposite.time - edge.time : event.time - visibleOpposite.time });
+      // One obscured column between opposite plateaus can conceal a return edge, but cannot
+      // conceal a complete cycle at the minimum measurable period. Its time is unknown.
+      } else if (edge.segment + 1 === event.segment && !visibleOpposite
+          && spans[event.segment]!.stepInto === (rising ? 'fall' : 'rise')) {
+        cycles.push({ period: event.time - edge.time, segment: event.segment, on: null });
+      }
     }
     edge = event;
   }
   return cycles;
 }
 
+function waveformLevels(values: readonly number[], minimumAmplitude: number): readonly [number, number] {
+  const low = quantile(values, 0.05);
+  const high = quantile(values, 0.95);
+  const span = (values.at(-1) ?? 0) - (values[0] ?? 0);
+  if (!(span >= minimumAmplitude) || high - low >= span * 0.6) return [low, high];
+
+  // Search the tails for recurrent levels that are too rare for the 5th and 95th percentiles.
+  const binWidth = Math.max(span / 128, minimumAmplitude / 4);
+  const min = values[0]!;
+  const bins: number[][] = Array.from({ length: 129 }, () => []);
+  for (const value of values) bins[Math.min(128, Math.floor((value - min) / binWidth))]!.push(value);
+  const count = Math.max(3, Math.ceil(values.length * 0.005));
+  const tail = (order: readonly number[][]) => {
+    for (let i = 0; i < order.length; i++) {
+      const nearby = [...order[i]!, ...(order[i + 1] ?? [])];
+      if (nearby.length >= count) return median(nearby.sort((a, b) => a - b));
+    }
+    return NaN;
+  };
+  const tailLow = tail(bins);
+  const tailHigh = tail(bins.reverse());
+  return tailHigh - tailLow > high - low ? [tailLow, tailHigh] : [low, high];
+}
+
+interface Plateau { start: number; end: number; readonly anchor: number }
+interface StableLevel { end: number; duration: number; voltage: number }
+interface Edge { readonly duration: number; readonly overshoot: number | null }
+type EdgeMetrics = Pick<ChannelMeasurements, 'riseTimeSec' | 'fallTimeSec' | 'overshootPct' | 'riseLimited' | 'fallLimited'>;
+
+function measureEdges(samples: readonly TraceSample[], pixelVoltage: number, span: number, sampleInterval: number): EdgeMetrics {
+  const rises: Edge[] = [];
+  const falls: Edge[] = [];
+  const window = 5;
+  const tolerance = Math.max(pixelVoltage * 1.5, span * 0.02);
+
+  function inspect(segment: readonly VoltageSample[]) {
+    const plateaus: Plateau[] = [];
+    for (let i = 0; i <= segment.length - window; i++) {
+      const levels = segment.slice(i, i + window).map(sample => sample.voltage).sort((a, b) => a - b);
+      const center = median(levels);
+      const mad = median(levels.map(value => Math.abs(value - center)).sort((a, b) => a - b));
+      if (levels[window - 1]! - levels[0]! > tolerance || mad > tolerance / 3) continue;
+      const last = plateaus.at(-1);
+      if (last && i <= last.end && Math.abs(center - last.anchor) <= tolerance / 2) last.end = i + window - 1;
+      else if (!last || i > last.end) plateaus.push({ start: i, end: i + window - 1, anchor: center });
+    }
+    const levels: StableLevel[] = [];
+    for (const { start, end } of plateaus) {
+      const voltage = median(segment.slice(start, end + 1).map(s => s.voltage).sort((a, b) => a - b));
+      const duration = segment[end]!.timeSec - segment[start]!.timeSec;
+      const last = levels.at(-1);
+      const nearby = last && Math.abs(voltage - last.voltage) <= span * 0.2
+        && segment.slice(last.end + 1, start).every(sample =>
+          Math.abs(sample.voltage - voltage) <= span * 0.3 && Math.abs(sample.voltage - last.voltage) <= span * 0.3);
+      if (last && nearby) {
+        last.end = end;
+        if (duration > last.duration) {
+          last.duration = duration;
+          last.voltage = voltage;
+        }
+      } else {
+        levels.push({ end, duration, voltage });
+      }
+    }
+    for (let i = 1; i < levels.length; i++) {
+      const before = levels[i - 1]!;
+      const after = levels[i]!;
+      const start = before.voltage;
+      const change = after.voltage - start;
+      if (Math.abs(change) < Math.max(4 * pixelVoltage, span * 0.25)) continue;
+      let t10: number | null = null;
+      let t90: number | null = null;
+      let extreme = 1;
+      for (let j = before.end; j <= after.end; j++) {
+        const a = segment[j - 1]!;
+        const b = segment[j]!;
+        const f1 = (a.voltage - start) / change;
+        const f2 = (b.voltage - start) / change;
+        if (t90 === null) {
+          if (f1 < 0.1 && f2 >= 0.1) t10 = crossing(a, b, start + change * 0.1);
+          if (t10 !== null && f1 < 0.9 && f2 >= 0.9) t90 = crossing(a, b, start + change * 0.9);
+        }
+        if (t90 !== null) extreme = Math.max(extreme, f2);
+      }
+      if (t10 === null || t90 === null) continue;
+      const duration = t90 - t10;
+      if (duration <= 0 || Math.min(before.duration, after.duration) < duration * 0.75) continue;
+      const overshoot = 100 * Math.max(0, extreme - 1);
+      (change > 0 ? rises : falls).push({ duration, overshoot: change > 0 ? overshoot : null });
+    }
+  }
+
+  if (span >= 4 * pixelVoltage && sampleInterval > 0) {
+    let segment: VoltageSample[] = [];
+    for (const sample of samples) {
+      const last = segment.at(-1);
+      if (last && (!valid(sample) || sample.col !== last.col + 1 || sample.timeSec <= last.timeSec)) {
+        inspect(segment);
+        segment = [];
+      }
+      if (valid(sample)) segment.push(sample);
+    }
+    inspect(segment);
+  }
+  const rise = median(rises.map(edge => edge.duration).sort((a, b) => a - b));
+  const fall = median(falls.map(edge => edge.duration).sort((a, b) => a - b));
+  const overshoot = median(rises.flatMap(edge => edge.overshoot === null ? [] : [edge.overshoot]).sort((a, b) => a - b));
+  const floor = 2 * sampleInterval;
+  return {
+    riseTimeSec: Number.isFinite(rise) ? Math.max(floor, rise) : null,
+    fallTimeSec: Number.isFinite(fall) ? Math.max(floor, fall) : null,
+    overshootPct: Number.isFinite(overshoot) ? overshoot : null,
+    riseLimited: rise < floor * (1 - 1e-9), fallLimited: fall < floor * (1 - 1e-9),
+  };
+}
+
 export function measureChannel(trace: ChannelTrace, pxPerVDiv: number): ChannelMeasurements {
   const values = trace.samples.filter(valid).map(s => s.voltage).sort((a, b) => a - b);
   const vmin = values[0] ?? null;
   const vmax = values.at(-1) ?? null;
-  const low = quantile(values, 0.05);
-  const high = quantile(values, 0.95);
+  const pixelVoltage = trace.settings.voltsPerDiv / pxPerVDiv;
+  const minimumAmplitude = 4 * pixelVoltage;
+  const [low, high] = waveformLevels(values, minimumAmplitude);
   const amplitude = high - low;
   const mid = (high + low) / 2;
-  const minimumAmplitude = 4 * trace.settings.voltsPerDiv / pxPerVDiv;
   const { events, spans } = amplitude >= minimumAmplitude ? schmittCrossings(trace.samples, mid, amplitude * 0.25)
     : { events: [], spans: [] };
-  const rises = cycleTimes(events, true);
-  const falls = cycleTimes(events, false);
-  const sampleInterval = (trace.samples[1]?.timeSec ?? 0) - (trace.samples[0]?.timeSec ?? 0);
+  const rises = cycleTimes(events, spans, true);
+  const falls = cycleTimes(events, spans, false);
+  const first = trace.samples[0];
+  const last = trace.samples.at(-1);
+  const sampleInterval = first && last && last.col > first.col ? (last.timeSec - first.timeSec) / (last.col - first.col) : 0;
   const longEnough = ({ period }: { period: number }) => period >= sampleInterval * 6;
   const cycles = [...rises, ...falls].filter(longEnough);
   const periods = cycles.map(cycle => cycle.period).sort((a, b) => a - b);
@@ -98,7 +260,7 @@ export function measureChannel(trace: ChannelTrace, pxPerVDiv: number): ChannelM
     return Math.max(longest, event.time - start, end - event.time);
   }, 0);
   const stableDuty = !pulseLike || duty.length < 2 || quantile(duty, 0.9) - quantile(duty, 0.1) <= 20;
-  const singleCycleSpan = cycles.length === 1 ? spans[cycles[0]!.segment] : undefined;
+  const singleCycleSpan = cycles.length === 1 && cycles[0]!.on !== null ? spans[cycles[0]!.segment] : undefined;
   const enoughObservation = confirmed.length >= 2 || (singleCycleSpan
     && singleCycleSpan.end - singleCycleSpan.start >= typical * 1.5);
   const periodSec = enoughObservation && confirmed.length >= periods.length * 0.75
@@ -111,6 +273,7 @@ export function measureChannel(trace: ChannelTrace, pxPerVDiv: number): ChannelM
     periodSec, frequencyHz: periodSec !== null ? 1 / periodSec : null,
     dutyCyclePct: periodSec !== null && pulseLike && completeCycles >= 2 && duty.length >= 2 ? median(duty) : null,
     completeCycles, clipped: trace.clippedCount > 0,
+    ...measureEdges(trace.samples, pixelVoltage, (vmax ?? 0) - (vmin ?? 0), sampleInterval),
   };
 }
 
@@ -126,7 +289,7 @@ export function measurePhase(traces: readonly ChannelTrace[], frequencyHz: numbe
   if (!ref || !target) return null;
   const fit = frequencyHz ? fitShared(ref, target, frequencyHz) : null;
   const reason = !fit ? 'frequency_unconfirmed'
-    : !fit.input || !fit.output || fit.cycles < 1 ? 'insufficient_shared_samples'
+    : !fit.sufficientCoverage || !fit.input || !fit.output ? 'insufficient_shared_samples'
       : fit.input.r2 < 0.85 || fit.output.r2 < 0.85 ? 'poor_sine_fit' : null;
   return {
     refChannel: 'C1', targetChannel: 'C2',

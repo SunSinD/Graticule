@@ -1,5 +1,6 @@
 import { analyzeBodeBatch as fitBatch } from './bode.js';
 import type { BodeOverrides } from './bode.js';
+import { rectifyGrid } from './deskew.js';
 import { extractTraces, makeTimebase } from './extract.js';
 import { buildOverlayMask } from './mask.js';
 import { compareScope, measureChannel, measurePhase, scopeFrequency } from './measurements.js';
@@ -11,9 +12,14 @@ import type { BodeGateOptions, BodeResult, ExtractionOverrides, ExtractionResult
 export { recomputeBodeResult } from './bode.js';
 export type { BodeOverrides } from './bode.js';
 
-export function analyzeCapture(image: RgbaImage, fileName: string, overrides: ExtractionOverrides = {}): ExtractionResult {
+export function analyzeCapture(source: RgbaImage, fileName: string, overrides: ExtractionOverrides = {}): ExtractionResult {
   const start = performance.now();
-  const detection = detectProfile(image, overrides);
+  const quad = overrides.manualQuad;
+  const image = quad ? rectifyGrid(source, quad) : source;
+  const detection = detectProfile(image, quad ? {
+    ...overrides, profileId: 'universal-fallback',
+    manualCrop: { x: 0, y: 0, width: image.width - 1, height: image.height - 1 },
+  } : overrides);
   const metadata = readScopeMetadata(image, detection);
   const timebase = makeTimebase(metadata, overrides);
   const { scopeReadings, topFrequencyHz, topFrequencyRaw } = metadata;
@@ -24,6 +30,7 @@ export function analyzeCapture(image: RgbaImage, fileName: string, overrides: Ex
     ?? measurements.find(measurement => measurement.channel === 'C1')?.frequencyHz ?? null;
   return {
     fileName, imageWidth: image.width, imageHeight: image.height,
+    ...(quad && { sourceWidth: source.width, sourceHeight: source.height, sourceQuad: quad }),
     detection: warnings.length ? { ...detection, warnings: [...detection.warnings, ...warnings] } : detection,
     timebase, topFrequencyHz, topFrequencyRaw, traces,
     measurements, phaseC1ToC2: measurePhase(traces, timebase.source === 'default' ? null : referenceFrequency), scopeReadings,

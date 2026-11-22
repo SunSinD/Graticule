@@ -1,4 +1,4 @@
-import type { BodePoint, BodeResult, ChannelTrace, ExtractionResult, TraceSample } from '../types.js';
+import type { BodePoint, BodeResult, ChannelId, ChannelTrace, ExtractionResult, TraceSample } from '../types.js';
 import { GRATICULE_VERSION, csvNumber } from './format.js';
 
 const EOL = '\n';
@@ -28,7 +28,7 @@ function channelComment(trace: ChannelTrace): string {
   ].join(' ');
 }
 
-export function renderWaveformCsv(result: ExtractionResult): string {
+export function renderWaveformCsv(result: ExtractionResult, channelLabels?: Partial<Record<ChannelId, string>>): string {
   const traces = result.traces.filter((t) => t.settings.enabled);
   const tb = result.timebase;
   const grid = result.detection.grid;
@@ -41,13 +41,26 @@ export function renderWaveformCsv(result: ExtractionResult): string {
     `# trigger_offset_s: ${csvNumber(tb.triggerOffsetSec)}`,
   ];
   if (result.topFrequencyHz !== null) lines.push(`# scope_frequency_hz: ${csvNumber(result.topFrequencyHz)}`);
-  for (const t of traces) lines.push(channelComment(t));
+  for (const t of traces) {
+    lines.push(channelComment(t));
+    const label = channelLabels?.[t.channel]?.trim();
+    if (label) lines.push(`# ${t.channel} label: ${comment(label)}`);
+    const m = result.measurements.find(measurement => measurement.channel === t.channel);
+    if (m) lines.push([
+      `# ${t.channel} edge measurements:`,
+      `rise_time_s=${csvNumber(m.riseTimeSec)}`,
+      `fall_time_s=${csvNumber(m.fallTimeSec)}`,
+      `overshoot_pct=${csvNumber(m.overshootPct)}`,
+      `rise_limited=${m.riseLimited ?? false}`,
+      `fall_limited=${m.fallLimited ?? false}`,
+    ].join(' '));
+  }
   lines.push('# a blank voltage cell means no trustworthy data at that time, see the status column');
 
   const header = ['time_s'];
   for (const t of traces) {
-    const id = t.channel.toLowerCase();
-    header.push(`${id}_v`, `${id}_status`);
+    const id = channelLabels?.[t.channel]?.trim() || t.channel.toLowerCase();
+    header.push(csvField(`${id}_v`), csvField(`${id}_status`));
   }
   lines.push(header.join(','));
 
@@ -107,6 +120,10 @@ export function renderBodeCsv(result: BodeResult): string {
     `# passband_gain_db: ${csvNumber(result.passbandGainDb, 6)}`,
     `# cutoff_target_db: ${csvNumber(result.cutoffTargetDb, 6)}`,
     `# cutoff_hz_minus_3db: ${csvNumber(result.cutoffHz, 6)}`,
+    ...(result.cutoffLowHz != null && result.cutoffHighHz != null ? [
+      `# cutoff_low_hz_minus_3db: ${csvNumber(result.cutoffLowHz, 6)}`,
+      `# cutoff_high_hz_minus_3db: ${csvNumber(result.cutoffHighHz, 6)}`,
+    ] : []),
     `# accepted: ${result.acceptedCount}`,
     `# rejected: ${result.rejectedCount}`,
     'file,frequency_hz,vin_vpp,vout_vpp,gain_db,phase_deg,cycles,r2_in,r2_out,accepted,reasons',

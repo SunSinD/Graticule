@@ -14,6 +14,7 @@ describe('native capture profiles', () => {
     expect(validateProfiles(configuration).map(p => p.id)).toEqual([
       'siglent-sds2000x-plus', 'rigol-ds1054z', 'siglent-sds1000x-e', 'rigol-dho924',
       'rohde-schwarz-rtb2004', 'tektronix-dpo7104c',
+      'siglent-sds800x-hd', 'keysight-dsox1000',
     ]);
     expect(() => validateProfiles({ ...configuration, version: 2 })).toThrow('Invalid oscilloscope profile configuration');
     expect(() => validateProfiles({ ...configuration, profiles: [configuration.profiles[0], configuration.profiles[0],

@@ -1,4 +1,4 @@
-import { Moon, Sun } from 'lucide-react';
+import { Camera, Moon, Plus, Sun } from 'lucide-react';
 import type { Locale } from '../../core/types';
 import type { Dict } from '../i18n';
 
@@ -12,9 +12,11 @@ interface Props {
   readonly onLocale: (locale: Locale) => void;
   readonly onTheme: () => void;
   readonly onShortcuts: () => void;
+  readonly onAdd: () => void;
+  readonly onCamera?: (() => void) | undefined;
 }
 
-export function TopBar({ tx, mode, locale, dark, onLocale, onTheme, onShortcuts }: Props) {
+export function TopBar({ tx, mode, locale, dark, onLocale, onTheme, onShortcuts, onAdd, onCamera }: Props) {
   return (
     <header className="topbar">
       <span className="wordmark">Graticule</span>
@@ -24,7 +26,15 @@ export function TopBar({ tx, mode, locale, dark, onLocale, onTheme, onShortcuts 
         </span>
       )}
       <span className="spacer" />
-      <div className="seg" role="group" aria-label="Language">
+      <button type="button" className="btn icon compact-only" onClick={onAdd} aria-label={tx.add} title={tx.addTitle}>
+        <Plus size={16} aria-hidden="true" />
+      </button>
+      {onCamera && (
+        <button type="button" className="btn icon compact-only" onClick={onCamera} aria-label={tx.takePhoto} title={tx.takePhoto}>
+          <Camera size={16} aria-hidden="true" />
+        </button>
+      )}
+      <div className="seg" role="group" aria-label={tx.language}>
         {(['en', 'fr'] as const).map((l) => (
           <button key={l} type="button" className="btn" aria-pressed={locale === l} onClick={() => onLocale(l)}>
             {l.toUpperCase()}

@@ -1,84 +1,129 @@
 import { useRef } from 'react';
-import type { PointerEvent as ReactPointerEvent } from 'react';
-import type { Rect } from '../../core/types';
+import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
+import type { Point, Quad, Rect } from '../../core/types';
+import { projectRectToQuad } from '../../core/deskew';
+import type { Dict } from '../i18n';
 
-type Corner = 'tl' | 'tr' | 'bl' | 'br' | 'move';
+type Corner = 'tl' | 'tr' | 'bl' | 'br';
+type Grip = Corner | 'move';
 
-interface Props {
-  readonly rect: Rect;
-  readonly imageWidth: number;
-  readonly imageHeight: number;
-  readonly hDivs: number;
-  readonly vDivs: number;
-  readonly onChange: (rect: Rect) => void;
-}
-
-interface Drag {
-  readonly corner: Corner;
-  readonly startX: number;
-  readonly startY: number;
-  readonly rect: Rect;
-}
-
+const CORNERS: readonly Corner[] = ['tl', 'tr', 'br', 'bl'];
 const MIN = 4;
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v));
 }
 
-export function CropBox({ rect, imageWidth, imageHeight, hDivs, vDivs, onChange }: Props) {
-  const drag = useRef<Drag | null>(null);
-  const boxRef = useRef<HTMLDivElement>(null);
+function arrowDelta(e: ReactKeyboardEvent): { dx: number; dy: number } | null {
+  const step = e.shiftKey ? 10 : 1;
+  if (e.key === 'ArrowLeft') return { dx: -step, dy: 0 };
+  if (e.key === 'ArrowRight') return { dx: step, dy: 0 };
+  if (e.key === 'ArrowUp') return { dx: 0, dy: -step };
+  if (e.key === 'ArrowDown') return { dx: 0, dy: step };
+  return null;
+}
 
-  const toImage = (clientX: number, clientY: number): { x: number; y: number } => {
-    const stage = boxRef.current?.parentElement?.getBoundingClientRect();
+interface Common {
+  readonly tx: Dict;
+  readonly imageWidth: number;
+  readonly imageHeight: number;
+  readonly hDivs: number;
+  readonly vDivs: number;
+  readonly onApply: () => void;
+  readonly onCancel: () => void;
+}
+
+function useStageMapping(imageWidth: number, imageHeight: number) {
+  const ref = useRef<HTMLDivElement>(null);
+  const toImage = (clientX: number, clientY: number): Point => {
+    const stage = ref.current?.parentElement?.getBoundingClientRect();
     if (!stage || stage.width === 0 || stage.height === 0) return { x: 0, y: 0 };
     return {
       x: ((clientX - stage.left) / stage.width) * imageWidth,
       y: ((clientY - stage.top) / stage.height) * imageHeight,
     };
   };
+  return { ref, toImage };
+}
 
-  const start = (corner: Corner) => (e: ReactPointerEvent<HTMLElement>) => {
+function commonKeys(e: ReactKeyboardEvent, onApply: () => void, onCancel: () => void): boolean {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    e.stopPropagation();
+    onApply();
+    return true;
+  }
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    e.stopPropagation();
+    onCancel();
+    return true;
+  }
+  return false;
+}
+
+/* Rectangle */
+
+interface RectProps extends Common {
+  readonly rect: Rect;
+  readonly onChange: (rect: Rect) => void;
+}
+
+function moveRect(grip: Grip, r: Rect, dx: number, dy: number, w: number, h: number): Rect {
+  if (grip === 'move') {
+    return {
+      x: Math.round(clamp(r.x + dx, 0, w - r.width)),
+      y: Math.round(clamp(r.y + dy, 0, h - r.height)),
+      width: r.width,
+      height: r.height,
+    };
+  }
+  let left = r.x;
+  let top = r.y;
+  let right = r.x + r.width;
+  let bottom = r.y + r.height;
+  if (grip === 'tl' || grip === 'bl') left = clamp(r.x + dx, 0, right - MIN);
+  if (grip === 'tr' || grip === 'br') right = clamp(right + dx, left + MIN, w);
+  if (grip === 'tl' || grip === 'tr') top = clamp(r.y + dy, 0, bottom - MIN);
+  if (grip === 'bl' || grip === 'br') bottom = clamp(bottom + dy, top + MIN, h);
+  return {
+    x: Math.round(left),
+    y: Math.round(top),
+    width: Math.max(1, Math.round(right - left)),
+    height: Math.max(1, Math.round(bottom - top)),
+  };
+}
+
+export function CropBox({ tx, rect, imageWidth, imageHeight, hDivs, vDivs, onChange, onApply, onCancel }: RectProps) {
+  const drag = useRef<{ grip: Grip; start: Point; rect: Rect } | null>(null);
+  const { ref, toImage } = useStageMapping(imageWidth, imageHeight);
+
+  const start = (grip: Grip) => (e: ReactPointerEvent<HTMLElement>) => {
     e.preventDefault();
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
-    const p = toImage(e.clientX, e.clientY);
-    drag.current = { corner, startX: p.x, startY: p.y, rect };
+    drag.current = { grip, start: toImage(e.clientX, e.clientY), rect };
   };
 
   const move = (e: ReactPointerEvent<HTMLElement>) => {
     const d = drag.current;
     if (!d) return;
     const p = toImage(e.clientX, e.clientY);
-    const dx = p.x - d.startX;
-    const dy = p.y - d.startY;
-    const r = d.rect;
-    let left = r.x;
-    let top = r.y;
-    let right = r.x + r.width;
-    let bottom = r.y + r.height;
-    if (d.corner === 'move') {
-      const nx = clamp(r.x + dx, 0, imageWidth - r.width);
-      const ny = clamp(r.y + dy, 0, imageHeight - r.height);
-      onChange({ x: Math.round(nx), y: Math.round(ny), width: r.width, height: r.height });
-      return;
-    }
-    if (d.corner === 'tl' || d.corner === 'bl') left = clamp(r.x + dx, 0, right - MIN);
-    if (d.corner === 'tr' || d.corner === 'br') right = clamp(right + dx, left + MIN, imageWidth);
-    if (d.corner === 'tl' || d.corner === 'tr') top = clamp(r.y + dy, 0, bottom - MIN);
-    if (d.corner === 'bl' || d.corner === 'br') bottom = clamp(bottom + dy, top + MIN, imageHeight);
-    onChange({
-      x: Math.round(left),
-      y: Math.round(top),
-      width: Math.max(1, Math.round(right - left)),
-      height: Math.max(1, Math.round(bottom - top)),
-    });
+    onChange(moveRect(d.grip, d.rect, p.x - d.start.x, p.y - d.start.y, imageWidth, imageHeight));
   };
 
   const end = (e: ReactPointerEvent<HTMLElement>) => {
     drag.current = null;
     if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+  };
+
+  const keys = (grip: Grip) => (e: ReactKeyboardEvent<HTMLElement>) => {
+    if (commonKeys(e, onApply, onCancel)) return;
+    const d = arrowDelta(e);
+    if (!d) return;
+    e.preventDefault();
+    e.stopPropagation();
+    onChange(moveRect(grip, rect, d.dx, d.dy, imageWidth, imageHeight));
   };
 
   const pct = (v: number, of: number): string => `${(v / Math.max(1, of)) * 100}%`;
@@ -87,9 +132,12 @@ export function CropBox({ rect, imageWidth, imageHeight, hDivs, vDivs, onChange 
 
   return (
     <div
-      ref={boxRef}
+      ref={ref}
       className="crop-box"
       data-testid="crop-box"
+      role="group"
+      tabIndex={0}
+      aria-label={tx.cropBox}
       style={{
         left: pct(rect.x, imageWidth),
         top: pct(rect.y, imageHeight),
@@ -100,6 +148,7 @@ export function CropBox({ rect, imageWidth, imageHeight, hDivs, vDivs, onChange 
       onPointerMove={move}
       onPointerUp={end}
       onPointerCancel={end}
+      onKeyDown={keys('move')}
     >
       {vLines.map((f) => (
         <span key={`v${f}`} className="crop-line v" style={{ left: `${f * 100}%` }} />
@@ -107,15 +156,133 @@ export function CropBox({ rect, imageWidth, imageHeight, hDivs, vDivs, onChange 
       {hLines.map((f) => (
         <span key={`h${f}`} className="crop-line h" style={{ top: `${f * 100}%` }} />
       ))}
-      {(['tl', 'tr', 'bl', 'br'] as const).map((c) => (
+      {CORNERS.map((c) => (
         <span
           key={c}
           className={`crop-handle ${c}`}
-          role="presentation"
+          role="button"
+          tabIndex={0}
+          aria-label={tx.corners[c]}
           onPointerDown={start(c)}
           onPointerMove={move}
           onPointerUp={end}
           onPointerCancel={end}
+          onKeyDown={keys(c)}
+        />
+      ))}
+    </div>
+  );
+}
+
+/* Four corners */
+
+interface QuadProps extends Common {
+  readonly quad: Quad;
+  readonly valid: boolean;
+  readonly onChange: (quad: Quad) => void;
+}
+
+function setCorner(quad: Quad, index: number, p: Point): Quad {
+  const out = [...quad] as Point[];
+  out[index] = p;
+  return out as unknown as Quad;
+}
+
+function shiftQuad(quad: Quad, dx: number, dy: number, w: number, h: number): Quad {
+  const xs = quad.map((p) => p.x);
+  const ys = quad.map((p) => p.y);
+  const sx = clamp(dx, -Math.min(...xs), w - Math.max(...xs));
+  const sy = clamp(dy, -Math.min(...ys), h - Math.max(...ys));
+  return quad.map((p) => ({ x: Math.round(p.x + sx), y: Math.round(p.y + sy) })) as unknown as Quad;
+}
+
+export function QuadBox({ tx, quad, valid, imageWidth, imageHeight, hDivs, vDivs, onChange, onApply, onCancel }: QuadProps) {
+  const drag = useRef<{ grip: number | 'move'; start: Point; quad: Quad } | null>(null);
+  const { ref, toImage } = useStageMapping(imageWidth, imageHeight);
+  const w = imageWidth;
+  const h = imageHeight;
+
+  const start = (grip: number | 'move') => (e: ReactPointerEvent<Element>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    (e.currentTarget as Element).setPointerCapture(e.pointerId);
+    drag.current = { grip, start: toImage(e.clientX, e.clientY), quad };
+  };
+
+  const move = (e: ReactPointerEvent<Element>) => {
+    const d = drag.current;
+    if (!d) return;
+    const p = toImage(e.clientX, e.clientY);
+    if (d.grip === 'move') {
+      onChange(shiftQuad(d.quad, p.x - d.start.x, p.y - d.start.y, w, h));
+      return;
+    }
+    const base = d.quad[d.grip]!;
+    const next = {
+      x: Math.round(clamp(base.x + p.x - d.start.x, 0, w)),
+      y: Math.round(clamp(base.y + p.y - d.start.y, 0, h)),
+    };
+    onChange(setCorner(d.quad, d.grip, next));
+  };
+
+  const end = (e: ReactPointerEvent<Element>) => {
+    drag.current = null;
+    const el = e.currentTarget as Element;
+    if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
+  };
+
+  const keys = (index: number) => (e: ReactKeyboardEvent<HTMLElement>) => {
+    if (commonKeys(e, onApply, onCancel)) return;
+    const d = arrowDelta(e);
+    if (!d) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const p = quad[index]!;
+    onChange(setCorner(quad, index, { x: clamp(p.x + d.dx, 0, w), y: clamp(p.y + d.dy, 0, h) }));
+  };
+
+  const pts = quad.map((p) => `${p.x} ${p.y}`).join(' ');
+  const lines: { key: string; a: Point; b: Point }[] = [];
+  if (valid) {
+    const size = { width: hDivs + 1, height: vDivs + 1 };
+    for (let i = 1; i < hDivs; i++) {
+      lines.push({ key: `v${i}`, a: projectRectToQuad({ x: i, y: 0 }, quad, size), b: projectRectToQuad({ x: i, y: vDivs }, quad, size) });
+    }
+    for (let j = 1; j < vDivs; j++) {
+      lines.push({ key: `h${j}`, a: projectRectToQuad({ x: 0, y: j }, quad, size), b: projectRectToQuad({ x: hDivs, y: j }, quad, size) });
+    }
+  }
+
+  return (
+    <div ref={ref} className="quad-box" data-testid="quad-box">
+      <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" aria-hidden="true">
+        <polygon
+          className="quad-area"
+          points={pts}
+          onPointerDown={start('move')}
+          onPointerMove={move}
+          onPointerUp={end}
+          onPointerCancel={end}
+        />
+        {lines.map((l) => (
+          <line key={l.key} className="quad-line" x1={l.a.x} y1={l.a.y} x2={l.b.x} y2={l.b.y} />
+        ))}
+        <polygon className="quad-edge outer" points={pts} />
+        <polygon className={`quad-edge${valid ? '' : ' bad'}`} points={pts} />
+      </svg>
+      {quad.map((p, i) => (
+        <span
+          key={CORNERS[i]}
+          className="crop-handle"
+          role="button"
+          tabIndex={0}
+          aria-label={tx.corners[CORNERS[i]!]}
+          style={{ left: `${(p.x / Math.max(1, w)) * 100}%`, top: `${(p.y / Math.max(1, h)) * 100}%` }}
+          onPointerDown={start(i)}
+          onPointerMove={move}
+          onPointerUp={end}
+          onPointerCancel={end}
+          onKeyDown={keys(i)}
         />
       ))}
     </div>

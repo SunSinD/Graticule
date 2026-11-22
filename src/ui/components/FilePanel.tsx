@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { Camera, FolderPlus, Plus, X } from 'lucide-react';
 import type { HistoryItem } from '../history';
 import type { Dict } from '../i18n';
@@ -32,6 +33,49 @@ function StateMark({ item, rejected, tx }: { item: HistoryItem; rejected: boolea
   );
 }
 
+function ClearButton({ tx, onClear }: { tx: Dict; onClear: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const reset = (): void => {
+    window.clearTimeout(timer.current);
+    setConfirming(false);
+  };
+  if (!confirming) {
+    return (
+      <button
+        type="button"
+        className="btn chip"
+        onClick={() => {
+          setConfirming(true);
+          window.clearTimeout(timer.current);
+          timer.current = window.setTimeout(() => setConfirming(false), 4000);
+        }}
+      >
+        {tx.clear}
+      </button>
+    );
+  }
+  return (
+    <div className="chips">
+      <button type="button" className="btn chip" onClick={reset}>
+        {tx.cancel}
+      </button>
+      <button
+        type="button"
+        className="btn chip danger"
+        autoFocus
+        onClick={() => {
+          reset();
+          onClear();
+        }}
+      >
+        {tx.confirmClear}
+      </button>
+    </div>
+  );
+}
+
 export function FilePanel(props: Props) {
   const { tx, items, activeId, selected, rejected, keepHistory } = props;
   return (
@@ -53,11 +97,7 @@ export function FilePanel(props: Props) {
         </div>
         <div className="section-head">
           <h2>{tx.history}</h2>
-          {items.length > 0 && (
-            <button type="button" className="btn chip" onClick={props.onClear}>
-              {tx.clear}
-            </button>
-          )}
+          {items.length > 0 && <ClearButton tx={tx} onClear={props.onClear} />}
         </div>
         {items.length === 0 ? (
           <p className="muted small">{tx.historyEmpty}</p>

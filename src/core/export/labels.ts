@@ -10,6 +10,9 @@ export type MetricKey =
   | 'period'
   | 'freq'
   | 'duty'
+  | 'rise'
+  | 'fall'
+  | 'overshoot'
   | 'phase';
 
 export const METRIC_UNITS: Readonly<Record<MetricKey, string>> = {
@@ -22,6 +25,9 @@ export const METRIC_UNITS: Readonly<Record<MetricKey, string>> = {
   period: 's',
   freq: 'Hz',
   duty: '%',
+  rise: 's',
+  fall: 's',
+  overshoot: '%',
   phase: '\u00b0',
 };
 
@@ -36,6 +42,9 @@ export const METRIC_LABELS: Readonly<Record<Locale, Readonly<Record<MetricKey, s
     period: 'Period (T)',
     freq: 'Frequency (f)',
     duty: 'Duty cycle',
+    rise: 'Rise time (10–90%)',
+    fall: 'Fall time (90–10%)',
+    overshoot: 'Overshoot',
     phase: 'Phase',
   },
   fr: {
@@ -48,6 +57,9 @@ export const METRIC_LABELS: Readonly<Record<Locale, Readonly<Record<MetricKey, s
     period: 'P\u00e9riode (T)',
     freq: 'Fr\u00e9quence (f)',
     duty: 'Rapport cyclique',
+    rise: 'Temps de montée (10–90%)',
+    fall: 'Temps de descente (90–10%)',
+    overshoot: 'Dépassement',
     phase: 'D\u00e9phasage',
   },
 };
@@ -75,6 +87,9 @@ const METRIC_ALIASES: Readonly<Record<string, MetricKey>> = {
   freq: 'freq',
   frequency: 'freq',
   duty: 'duty',
+  rise: 'rise',
+  fall: 'fall',
+  overshoot: 'overshoot',
   phase: 'phase',
 };
 
@@ -114,6 +129,8 @@ export interface ExportText {
   readonly edited: string;
   readonly passbandGain: string;
   readonly cutoff: string;
+  readonly cutoffLow: string;
+  readonly cutoffHigh: string;
   readonly cutoffTarget: string;
   readonly inputOutput: string;
   readonly pointCounts: string;
@@ -149,6 +166,8 @@ export const EXPORT_TEXT: Readonly<Record<Locale, ExportText>> = {
     edited: 'edited',
     passbandGain: 'Passband gain',
     cutoff: 'Cutoff frequency (-3 dB)',
+    cutoffLow: 'Lower cutoff frequency (-3 dB)',
+    cutoffHigh: 'Upper cutoff frequency (-3 dB)',
     cutoffTarget: 'Cutoff level',
     inputOutput: 'Input / output',
     pointCounts: 'Accepted / rejected',
@@ -182,6 +201,8 @@ export const EXPORT_TEXT: Readonly<Record<Locale, ExportText>> = {
     edited: 'modifi\u00e9',
     passbandGain: 'Gain en bande passante',
     cutoff: 'Fr\u00e9quence de coupure (-3 dB)',
+    cutoffLow: 'Fréquence de coupure basse (-3 dB)',
+    cutoffHigh: 'Fréquence de coupure haute (-3 dB)',
     cutoffTarget: 'Niveau de coupure',
     inputOutput: 'Entr\u00e9e / sortie',
     pointCounts: 'Accept\u00e9s / rejet\u00e9s',
@@ -284,9 +305,12 @@ export const REASON_LABELS: Readonly<Record<Locale, Readonly<Record<string, stri
     clipped_channel: 'a trace is clipped off the screen',
     insufficient_cycles: 'not enough complete cycles',
     insufficient_cols_per_cycle: 'too few pixels per cycle',
+    insufficient_shared_coverage: 'too much missing data in the shared waveform',
+    nyquist_limit: 'frequency is beyond the sampling limit',
     insufficient_peak_to_peak_px: 'trace is too small on screen',
     poor_sine_fit: 'trace does not look like a clean sine',
     manually_excluded: 'excluded by you',
+    manual_measurement: 'accepted with manual measurements',
     fewer_than_3_cycles: 'fewer than 3 cycles, less precise',
   },
   fr: {
@@ -297,9 +321,12 @@ export const REASON_LABELS: Readonly<Record<Locale, Readonly<Record<string, stri
     clipped_channel: 'une trace est écrêtée',
     insufficient_cycles: 'pas assez de cycles complets',
     insufficient_cols_per_cycle: 'trop peu de pixels par cycle',
+    insufficient_shared_coverage: 'trop de données manquantes sur les deux traces',
+    nyquist_limit: 'fréquence au-delà de la limite d’échantillonnage',
     insufficient_peak_to_peak_px: 'trace trop petite à l’écran',
     poor_sine_fit: 'la trace ne ressemble pas à un sinus propre',
     manually_excluded: 'exclu par vous',
+    manual_measurement: 'accepté avec des mesures manuelles',
     fewer_than_3_cycles: 'moins de 3 cycles, moins précis',
   },
 };

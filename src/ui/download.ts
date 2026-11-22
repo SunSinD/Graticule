@@ -60,6 +60,14 @@ export async function copyRich(html: string, plain: string): Promise<void> {
   await copyPlain(plain);
 }
 
+export async function copyImage(png: Promise<Blob>): Promise<void> {
+  if (typeof ClipboardItem === 'undefined' || !navigator.clipboard?.write) {
+    await png.catch(() => undefined);
+    throw new Error('Copying images is not supported in this browser');
+  }
+  await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })]);
+}
+
 export async function copyPlain(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(text);

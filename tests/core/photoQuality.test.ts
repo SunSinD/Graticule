@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { assessPhotoQuality } from '../../src/core/photoQuality.js';
 import type { RgbaImage } from '../../src/core/types.js';
 
-function capture({ width = 640, height = 400, angle = 0, glare = false, print = false, contrast = 175 } = {}): RgbaImage {
+function capture({ width = 640, height = 400, angle = 0, glare = false, print = false, contrast = 175, bezel = false } = {}): RgbaImage {
   const data = new Uint8ClampedArray(width * height * 4);
   const radians = angle * Math.PI / 180;
   for (let y = 0; y < height; y++) {
@@ -13,7 +13,8 @@ function capture({ width = 640, height = 400, angle = 0, glare = false, print = 
       const v = oy * Math.cos(radians) - ox * Math.sin(radians);
       const grid = Math.abs(u - 52 * Math.round(u / 52)) <= 1.5 || Math.abs(v - 40 * Math.round(v / 40)) <= 1.5;
       const trace = Math.abs(v - 55 * Math.sin(u / 35)) < 2;
-      const level = glare && (ox - 45) ** 2 + (oy + 15) ** 2 < 70 ** 2 ? 255
+      const level = bezel && (Math.abs(u) > width * 0.28 || Math.abs(v) > height * 0.36) ? 42
+        : glare && (ox - 45) ** 2 + (oy + 15) ** 2 < 70 ** 2 ? 255
         : print ? (grid || trace ? 35 : 255) : grid || trace ? 22 + contrast : 22;
       data.set([level, level, level, 255], (y * width + x) * 4);
     }
@@ -79,6 +80,12 @@ describe('phone photo quality', () => {
     const report = assessPhotoQuality(capture({ angle }));
     expect(report.issues).toContain('tilted');
     expect(Math.abs(report.tiltDeg - angle)).toBeLessThanOrEqual(0.5);
+  });
+
+  it.each([-24, 21])('finds grid tilt of %s degrees through a wide bezel', angle => {
+    const report = assessPhotoQuality(capture({ angle, bezel: true }));
+    expect(report.issues).toContain('tilted');
+    expect(report.tiltDeg).toBeCloseTo(angle, 0);
   });
 
   it.each([-3, 3.5])('allows a small rotation of %s degrees', angle => {

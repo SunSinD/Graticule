@@ -1,6 +1,8 @@
 import type { BitmapFont } from './matcher.js';
+import { scopeFonts } from './scopeFonts.js';
 
 export const rasterFonts = {
+  ...scopeFonts,
   'siglent-sds1000x-e': {
     logo: [
       '0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000',

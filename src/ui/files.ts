@@ -34,8 +34,31 @@ export function isPhotoLike(file: File): boolean {
   return /jpe?g|heic|heif/i.test(file.type) || /\.(jpe?g|heic|heif)$/i.test(file.name);
 }
 
+function chunkType(bytes: Uint8Array, at: number): string {
+  return String.fromCharCode(bytes[at]!, bytes[at + 1]!, bytes[at + 2]!, bytes[at + 3]!);
+}
+
+function hasExifChunk(bytes: Uint8Array): boolean {
+  let pos = 8;
+  while (pos + 8 <= bytes.length) {
+    const len = ((bytes[pos]! << 24) | (bytes[pos + 1]! << 16) | (bytes[pos + 2]! << 8) | bytes[pos + 3]!) >>> 0;
+    const type = chunkType(bytes, pos + 4);
+    if (type === 'eXIf') return true;
+    if (type === 'IDAT' || type === 'IEND') return false;
+    pos += 12 + len;
+  }
+  return false;
+}
+
+/** True only for plain PNGs the core decoder reads exactly like the browser. Others go through the canvas. */
 export function isRawPng(bytes: Uint8Array): boolean {
-  return hasPngSignature(bytes) && bytes.length >= 29 && bytes[28] === 0;
+  if (!hasPngSignature(bytes) || bytes.length < 33 || chunkType(bytes, 12) !== 'IHDR') return false;
+  const bitDepth = bytes[24];
+  const colorType = bytes[25];
+  const interlace = bytes[28];
+  if (interlace !== 0) return false;
+  if (colorType === 0 && bitDepth !== undefined && bitDepth < 8) return false;
+  return !hasExifChunk(bytes);
 }
 
 async function decodeBitmap(file: Blob): Promise<ImageBitmap> {

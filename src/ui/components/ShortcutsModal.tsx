@@ -1,10 +1,13 @@
 import { useEffect, useRef } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { Dict } from '../i18n';
 
 interface Props {
   readonly tx: Dict;
   readonly onClose: () => void;
 }
+
+const FOCUSABLE = 'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])';
 
 export function ShortcutsModal({ tx, onClose }: Props) {
   const ref = useRef<HTMLDivElement>(null);
@@ -13,12 +16,35 @@ export function ShortcutsModal({ tx, onClose }: Props) {
     ref.current?.focus();
     return () => prev?.focus();
   }, []);
+
+  const trap = (e: ReactKeyboardEvent<HTMLDivElement>): void => {
+    if (e.key !== 'Tab' || !ref.current) return;
+    const nodes = Array.from(ref.current.querySelectorAll<HTMLElement>(FOCUSABLE));
+    if (nodes.length === 0) {
+      e.preventDefault();
+      ref.current.focus();
+      return;
+    }
+    const first = nodes[0]!;
+    const last = nodes[nodes.length - 1]!;
+    const active = document.activeElement;
+    if (e.shiftKey && (active === first || active === ref.current)) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && (active === last || !ref.current.contains(active))) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+
   const rows: readonly (readonly [string, string])[] = [
     ['O', tx.shortcutOpen],
     ['Ctrl+V', tx.shortcutPaste],
     ['E', tx.shortcutExport],
     ['T', tx.shortcutOverlay],
-    ['Ctrl+wheel', tx.shortcutZoom],
+    ['C', tx.shortcutCursors],
+    ['Ctrl+C', tx.shortcutCopy],
+    [tx.keyCtrlWheel, tx.shortcutZoom],
     ['?', tx.shortcutHelp],
   ];
   return (
@@ -31,6 +57,7 @@ export function ShortcutsModal({ tx, onClose }: Props) {
         aria-labelledby="shortcuts-title"
         tabIndex={-1}
         onMouseDown={(e) => e.stopPropagation()}
+        onKeyDown={trap}
       >
         <div className="modal-head">
           <h2 id="shortcuts-title">{tx.shortcuts}</h2>

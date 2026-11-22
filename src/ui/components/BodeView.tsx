@@ -27,14 +27,15 @@ interface CellProps {
   readonly label: string;
   readonly display: string;
   readonly allowNegative: boolean;
-  readonly commitOnBlurOnly?: boolean;
   readonly onCommit: (value: number | null) => void;
 }
 
-function EditCell({ label, display, allowNegative, commitOnBlurOnly, onCommit }: CellProps) {
+function EditCell({ label, display, allowNegative, onCommit }: CellProps) {
   const [draft, setDraft] = useState<string | null>(null);
+  const skip = useRef(false);
   const shown = display === '—' ? '' : display;
   const push = (text: string): void => {
+    if (text.trim() === shown.trim()) return;
     if (text.trim() === '') {
       onCommit(null);
       return;
@@ -53,20 +54,23 @@ function EditCell({ label, display, allowNegative, commitOnBlurOnly, onCommit }:
       placeholder={'—'}
       value={draft ?? shown}
       onFocus={() => setDraft(shown)}
-      onChange={(e) => {
-        setDraft(e.target.value);
-        if (!commitOnBlurOnly) push(e.target.value);
-      }}
+      onChange={(e) => setDraft(e.target.value)}
       onBlur={() => {
-        if (commitOnBlurOnly && draft !== null) push(draft);
+        if (!skip.current && draft !== null) push(draft);
+        skip.current = false;
         setDraft(null);
       }}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
-          if (commitOnBlurOnly && draft !== null) push(draft);
+          e.preventDefault();
+          e.currentTarget.blur();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          skip.current = true;
+          setDraft(null);
           e.currentTarget.blur();
         }
-        if (e.key === 'Escape') setDraft(null);
       }}
     />
   );
@@ -90,10 +94,9 @@ export function BodeView({ tx, locale, dark, result, overrides, inspectedId, onE
     const cell = (key: EditKey, display: string, allowNegative: boolean) => (
       <td>
         <EditCell
-          label={`${p.fileName} ${key}`}
+          label={`${p.fileName} ${tx.cellLabels[key] ?? key}`}
           display={display}
           allowNegative={allowNegative}
-          commitOnBlurOnly={key === 'frequencyHz'}
           onCommit={(v) => onEdit(p.id, key, v)}
         />
       </td>

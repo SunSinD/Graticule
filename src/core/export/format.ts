@@ -1,6 +1,6 @@
 import type { Locale } from '../types.js';
 
-export const GRATICULE_VERSION = '1.0.0';
+export const GRATICULE_VERSION = '1.1.0';
 export const EMPTY_CELL = '\u2014';
 
 interface SiPrefix {
@@ -155,10 +155,10 @@ const MULTIPLIERS: Readonly<Record<string, number>> = {
   G: 1e9,
 };
 
-const UNIT_SUFFIXES: readonly string[] = ['/div', 'hz', 'db', 'div', 'v', 's', '\u00b0', '%', 'a'];
+const UNIT_SUFFIXES: readonly string[] = ['hz', 'db', 'div', 'v', 's', '\u00b0', '%', 'a'];
 
 export function parseEngineering(input: string): number | null {
-  const text = input.trim().replace(/\s+/g, '').replace(/,/g, '.').replace(/\u2212/g, '-');
+  const text = input.trim().replace(/\s+/g, '').replace(/\/div$/i, '').replace(/,/g, '.').replace(/\u2212/g, '-');
   if (!text) return null;
   const match = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?/i.exec(text);
   if (!match) return null;
@@ -174,5 +174,6 @@ export function parseEngineering(input: string): number | null {
   }
   const mult = MULTIPLIERS[rest];
   if (mult === undefined) return null;
-  return cleanFloat(base * mult);
+  const value = base * mult;
+  return Number.isFinite(value) ? cleanFloat(value) : null;
 }

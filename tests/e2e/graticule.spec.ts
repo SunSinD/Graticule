@@ -6,8 +6,17 @@ const FIXTURES = path.resolve('tests/fixtures/samples');
 const SINE = path.join(FIXTURES, 'sine_schmitt.png');
 const SWEEP = Array.from({ length: 10 }, (_, i) => path.join(FIXTURES, `sweep_${String(i + 1).padStart(2, '0')}.png`));
 
-async function addFiles(page: Page, files: string | readonly string[]): Promise<void> {
-  await page.locator('[data-testid="file-input"]').setInputFiles(typeof files === 'string' ? files : [...files]);
+interface FilePayload {
+  readonly name: string;
+  readonly mimeType: string;
+  readonly buffer: Buffer;
+}
+
+async function addFiles(page: Page, files: string | readonly string[] | readonly FilePayload[]): Promise<void> {
+  const input = page.locator('[data-testid="file-input"]');
+  if (typeof files === 'string') await input.setInputFiles(files);
+  else if (files.every((f): f is string => typeof f === 'string')) await input.setInputFiles([...(files as readonly string[])]);
+  else await input.setInputFiles([...(files as readonly FilePayload[])]);
 }
 
 async function extractSine(page: Page): Promise<void> {
@@ -98,7 +107,7 @@ test('zoom slider grows the plot by layout width and scrolls', async ({ page }) 
   expect(scrolls).toBe(true);
   const transforms = await page.evaluate(() => getComputedStyle(document.querySelector('.viewport .canvas') as HTMLElement).transform);
   expect(transforms).toBe('none');
-  await page.getByRole('button', { name: 'Reset' }).click();
+  await page.getByRole('button', { name: 'Reset zoom' }).click();
   await expect(readout).toHaveText('100%');
 });
 
@@ -133,8 +142,15 @@ test('Bode batch mode extracts on click and renders gain, phase, cutoff and live
   await expect(page.getByText(/-3 dB/i)).toBeVisible();
   await expect(page.getByRole('slider', { name: 'Zoom' })).toHaveAttribute('max', '250');
 
-  const cell = page.getByRole('textbox').first();
+  const cell = page.getByRole('textbox', { name: /Frequency/ }).first();
   await cell.fill('12');
+  await expect(page.locator('.bode-table .tag')).toHaveCount(0);
+  await cell.press('Escape');
+  await expect(page.locator('.bode-table .tag')).toHaveCount(0);
+  const gain = page.getByRole('textbox', { name: /Gain dB/ }).first();
+  await gain.fill('-1');
+  await gain.press('Enter');
+  await expect(page.locator('.bode-table .tag').first()).toBeVisible();
   await expect(page.locator('[aria-label="Gain plot"]')).toBeVisible();
 });
 
@@ -216,7 +232,8 @@ test('extracted capture fits the desktop viewport and the French sidebar does no
   });
   expect(overflow).toBeLessThanOrEqual(1);
 
-  await page.getByRole('button', { name: /Vider/i }).click();
+  await page.getByRole('button', { name: 'Vider', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirmer ?' }).click();
   await expect(page.getByText(/Déposez une capture/i)).toBeVisible();
 });
 
@@ -240,6 +257,10 @@ test('camera button shows on mobile and stays hidden on touchscreen desktop', as
   await mobilePage.goto('/');
   await expect(mobilePage.getByRole('main').getByRole('button', { name: 'Take photo' })).toBeVisible();
   await expect(mobilePage.locator('aside').getByRole('button', { name: 'Take photo' })).toBeVisible();
+  await expect(mobilePage.locator('header').getByRole('button', { name: 'Add', exact: true })).toBeVisible();
+  await expect(mobilePage.locator('header').getByRole('button', { name: 'Take photo' })).toBeVisible();
+  const header = await mobilePage.locator('header').boundingBox();
+  expect(header?.height ?? 999).toBeLessThan(60);
   await mobile.close();
 });
 
@@ -259,4 +280,232 @@ test('dark mode renders dark plot on screen while SVG download stays print ready
   const svgText = await fs.readFile(filePath!, 'utf8');
   expect(svgText).toContain('fill="#ffffff"');
   await darkCtx.close();
+});
+
+async function paddedSine(page: Page): Promise<FilePayload> {
+  const src = (await fs.readFile(SINE)).toString('base64');
+  const out = await page.evaluate(async (b64) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${b64}`;
+    await img.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = img.naturalWidth + 70;
+    canvas.height = img.naturalHeight + 50;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 35, 25);
+    return canvas.toDataURL('image/png').split(',')[1]!;
+  }, src);
+  return { name: 'padded_capture.png', mimeType: 'image/png', buffer: Buffer.from(out, 'base64') };
+}
+
+async function layoutReport(page: Page) {
+  return page.evaluate(() => {
+    const center = document.querySelector('.zone.center') as HTMLElement;
+    const exportsEl = document.querySelector('.exports') as HTMLElement;
+    const r = exportsEl.getBoundingClientRect();
+    const buttons = Array.from(exportsEl.querySelectorAll('button'));
+    const toolbar = document.querySelector('.capture > .toolbar') as HTMLElement;
+    const tops = Array.from(toolbar.children).map((c) => {
+      const box = (c as HTMLElement).getBoundingClientRect();
+      return Math.round(box.top + box.height / 2);
+    });
+    return {
+      centerOverflow: center.scrollHeight - center.clientHeight,
+      pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      exportsVisible: r.top >= 0 && r.bottom <= window.innerHeight + 1,
+      clipped: buttons.filter((b) => b.scrollWidth > b.clientWidth + 1).map((b) => b.textContent),
+      toolbarRows: Math.max(...tops) - Math.min(...tops),
+    };
+  });
+}
+
+const inDialog = (page: Page) => page.evaluate(() => Boolean(document.activeElement?.closest('[role="dialog"]')));
+
+test('auto detected universal captures can dismiss the crop box and show the clean plot', async ({ page }) => {
+  await addFiles(page, [await paddedSine(page)]);
+  await page.getByRole('button', { name: 'Extract', exact: true }).click();
+  const crop = page.locator('[data-testid="crop-box"]');
+  await expect(crop).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator('.badge')).toContainText(/Universal/i);
+
+  await page.getByRole('button', { name: 'Cancel' }).click();
+  await expect(crop).toHaveCount(0);
+  await page.getByRole('button', { name: 'Clean Plot' }).click();
+  await expect(page.getByRole('button', { name: 'Clean Plot' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.paper svg').first()).toBeVisible();
+
+  const cropToggle = page.getByRole('button', { name: 'Crop', exact: true });
+  await cropToggle.click();
+  await expect(crop).toBeVisible();
+  await cropToggle.click();
+  await expect(crop).toHaveCount(0);
+  await expect(page.getByRole('combobox', { name: 'Profile' })).toHaveValue('auto');
+});
+
+test('measurement cursors toggle with C, move with the keyboard and go into the SVG export', async ({ page }) => {
+  await extractSine(page);
+  await page.keyboard.press('c');
+  const readout = page.locator('[data-testid="cursor-readout"]');
+  await expect(readout).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Cursors' })).toHaveAttribute('aria-pressed', 'true');
+  for (const label of ['X1', 'X2', 'Δt', '1/Δt', 'Y1', 'Y2', 'ΔV']) await expect(readout).toContainText(label);
+  await expect(page.getByRole('slider', { name: /^[XY][12]$/ })).toHaveCount(4);
+
+  const before = await readout.textContent();
+  const x1 = page.getByRole('slider', { name: 'X1' });
+  await x1.focus();
+  await page.keyboard.press('Shift+ArrowRight');
+  await expect(x1).toHaveAttribute('aria-valuenow', '30');
+  await expect(readout).not.toHaveText(before ?? '');
+
+  const svgDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'SVG', exact: true }).click();
+  const svgText = await fs.readFile((await (await svgDownload).path())!, 'utf8');
+  expect(svgText).toContain('X1 / X2 / Y1 / Y2');
+
+  await page.getByRole('button', { name: 'Cursors' }).click();
+  await expect(readout).toHaveCount(0);
+  await expect(page.locator('[data-testid="cursor-layer"]')).toHaveCount(0);
+  await page.locator('h2', { hasText: 'Profile' }).click();
+  await page.keyboard.press('c');
+  await expect(readout).toBeVisible();
+});
+
+test('crop switches between rectangle and 4 corners and applies a perspective box', async ({ page }) => {
+  await extractSine(page);
+  await page.getByRole('button', { name: 'Crop', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Rectangle' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-testid="crop-box"]')).toBeVisible();
+
+  await page.getByRole('button', { name: '4 corners' }).click();
+  await expect(page.getByRole('button', { name: '4 corners' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-testid="quad-box"]')).toBeVisible();
+  await expect(page.locator('[data-testid="quad-box"] .crop-handle')).toHaveCount(4);
+  await expect(page.locator('.quad-line').first()).toBeAttached();
+
+  const apply = page.getByRole('button', { name: 'Apply crop' });
+  await expect(apply).toBeEnabled();
+  const tl = page.getByRole('button', { name: 'Top left corner' });
+  await tl.focus();
+  await page.keyboard.press('Shift+ArrowDown');
+  await page.keyboard.press('ArrowRight');
+  await expect(apply).toBeEnabled();
+  await apply.click();
+  await expect(page.locator('[data-testid="quad-box"]')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Clean Plot' })).toBeEnabled({ timeout: 10_000 });
+
+  await page.getByRole('button', { name: 'Crop', exact: true }).click();
+  await expect(page.getByRole('button', { name: '4 corners' })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: 'Bottom right corner' }).focus();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('[data-testid="quad-box"]')).toHaveCount(0);
+});
+
+test('title, channel label, LaTeX table and plot copy go into the exports', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await extractSine(page);
+
+  const title = page.getByRole('textbox', { name: 'Title' });
+  await expect(title).toHaveAttribute('placeholder', 'sine_schmitt.png');
+  await title.fill('Lab 3 Schmitt trigger');
+  await title.press('Enter');
+  const label = page.getByRole('textbox', { name: 'Label C1' });
+  await label.fill('Vin');
+  await label.press('Enter');
+  await expect(page.locator('[data-testid="measurement-summary"] thead')).toContainText('Vin');
+
+  await page.getByRole('button', { name: 'LaTeX' }).click();
+  await expect(page.locator('[data-testid="export-feedback"]')).toHaveText('Copied');
+  const latex = await page.evaluate(() => navigator.clipboard.readText());
+  expect(latex).toContain('\\begin{tabular}');
+  expect(latex).toContain('Vin');
+
+  const svgDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'SVG', exact: true }).click();
+  const svgText = await fs.readFile((await (await svgDownload).path())!, 'utf8');
+  expect(svgText).toContain('Lab 3 Schmitt trigger');
+  expect(svgText).toContain('Vin');
+
+  await page.locator('h2', { hasText: 'Profile' }).click();
+  await page.keyboard.press('Control+c');
+  await expect(page.locator('[data-testid="export-feedback"]')).toHaveText('Plot copied', { timeout: 10_000 });
+  const types = await page.evaluate(async () => (await navigator.clipboard.read()).flatMap((i) => [...i.types]));
+  expect(types).toContain('image/png');
+
+  await page.waitForTimeout(300);
+  await page.reload();
+  await page.locator('.file-row', { hasText: 'sine_schmitt.png' }).click();
+  await expect(page.getByRole('textbox', { name: 'Title' })).toHaveValue('Lab 3 Schmitt trigger');
+  await expect(page.getByRole('textbox', { name: 'Label C1' })).toHaveValue('Vin');
+});
+
+test('Clear asks for confirmation before wiping the history', async ({ page }) => {
+  await addFiles(page, SINE);
+  const row = page.locator('.file-row', { hasText: 'sine_schmitt.png' });
+  await expect(row).toBeVisible();
+  await page.getByRole('button', { name: 'Clear', exact: true }).click();
+  await expect(row).toBeVisible();
+  await page.locator('.zone.left').getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.getByRole('button', { name: 'Clear', exact: true })).toBeVisible();
+  await expect(row).toBeVisible();
+  await page.getByRole('button', { name: 'Clear', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm clear?' }).click();
+  await expect(page.locator('.file-row')).toHaveCount(0);
+  await expect(page.getByText('Drop an oscilloscope screenshot, paste one, or add images.')).toBeVisible();
+});
+
+test('removing a Bode item that leaves one selected opens it', async ({ page }) => {
+  await addFiles(page, SWEEP.slice(0, 2));
+  await expect(page.getByRole('button', { name: 'Extract Bode (2)' })).toBeVisible();
+  await page.getByRole('button', { name: 'Remove sweep_01.png' }).click();
+  await expect(page.getByRole('button', { name: 'Extract', exact: true })).toBeVisible();
+  await expect(page.locator('.file-row[aria-current="true"]')).toContainText('sweep_02.png');
+});
+
+test('desktop 1440x900 fits in English and French with cursors and every export button', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await extractSine(page);
+  await page.keyboard.press('c');
+  await expect(page.locator('[data-testid="cursor-readout"]')).toBeVisible();
+
+  const en = await layoutReport(page);
+  expect(en.centerOverflow).toBeLessThanOrEqual(2);
+  expect(en.pageOverflow).toBeLessThanOrEqual(0);
+  expect(en.exportsVisible).toBe(true);
+  expect(en.clipped).toEqual([]);
+  expect(en.toolbarRows).toBeLessThanOrEqual(2);
+  const readoutHeight = await page.locator('[data-testid="cursor-readout"]').evaluate((el) => el.getBoundingClientRect().height);
+  expect(readoutHeight).toBeLessThan(40);
+  await expect(page.locator('header').getByRole('button', { name: 'Add', exact: true })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'FR', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Curseurs' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Superposition 1:1' })).toBeVisible();
+  await expect(page.getByRole('group', { name: 'Langue' })).toBeVisible();
+  for (const name of ['SVG', 'PNG 2x', 'CSV', 'Copier', 'Word', 'Markdown', 'LaTeX', 'TSV']) {
+    await expect(page.locator('.exports').getByRole('button', { name, exact: true })).toBeVisible();
+  }
+  await expect(page.getByText('Temps de montée')).toBeVisible();
+  const fr = await layoutReport(page);
+  expect(fr.centerOverflow).toBeLessThanOrEqual(2);
+  expect(fr.pageOverflow).toBeLessThanOrEqual(0);
+  expect(fr.exportsVisible).toBe(true);
+  expect(fr.clipped).toEqual([]);
+  expect(fr.toolbarRows).toBeLessThanOrEqual(2);
+});
+
+test('shortcuts dialog keeps keyboard focus inside while open', async ({ page }) => {
+  await page.keyboard.press('?');
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  for (let i = 0; i < 4; i++) {
+    await page.keyboard.press('Tab');
+    expect(await inDialog(page)).toBe(true);
+  }
+  await page.keyboard.press('Shift+Tab');
+  expect(await inDialog(page)).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
 });

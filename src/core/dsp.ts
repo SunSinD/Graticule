@@ -33,6 +33,11 @@ export interface SharedFit {
   readonly colsPerCycle: number;
   readonly vinPx: number;
   readonly voutPx: number;
+  readonly contiguousCycles: number;
+  readonly observedCycles: number;
+  readonly largestGapCycles: number;
+  readonly nyquist: boolean;
+  readonly sufficientCoverage: boolean;
 }
 
 function solveFit(rows: readonly SharedSample[], frequencyHz: number, key: 'input' | 'output'): SineFit | null {
@@ -76,9 +81,12 @@ function solveFit(rows: readonly SharedSample[], frequencyHz: number, key: 'inpu
   if (det <= n * n * 1e-12 || y2 <= Number.EPSILON * Math.max(sumY2, Number.MIN_VALUE) * 16) return null;
   const a = (yCos * sin2 - ySin * cosSin) / det;
   const b = (ySin * cos2 - yCos * cosSin) / det;
+  const amplitude = Math.hypot(a, b);
+  const r2 = (a * yCos + b * ySin) / y2;
+  if (!Number.isFinite(amplitude) || !Number.isFinite(r2)) return null;
   return {
-    amplitude: Math.hypot(a, b), phaseDeg: Math.atan2(-b, a) * 180 / Math.PI,
-    r2: Math.max(0, Math.min(1, (a * yCos + b * ySin) / y2)),
+    amplitude, phaseDeg: Math.atan2(-b, a) * 180 / Math.PI,
+    r2: Math.max(0, Math.min(1, r2)),
   };
 }
 
@@ -88,13 +96,31 @@ export function fitShared(input: ChannelTrace, output: ChannelTrace, frequencyHz
   let maxIn = -Infinity;
   let minOut = Infinity;
   let maxOut = -Infinity;
-  let firstColumn = 0;
   let lastColumn = 0;
+  let segmentStart = 0;
+  let contiguousCycles = 0;
+  let observedCycles = 0;
+  let largestGapCycles = 0;
+  const pixelSteps: number[] = [];
   const outputByColumn = new Map(output.samples.map(sample => [sample.col, sample]));
   for (const a of input.samples) {
     const b = outputByColumn.get(a.col);
-    if (!b || !valid(a) || !valid(b) || a.timeSec !== b.timeSec || a.yPx === null || b.yPx === null) continue;
-    if (!shared.length) firstColumn = a.col;
+    if (!b || !valid(a) || !valid(b) || a.timeSec !== b.timeSec || a.yPx === null || b.yPx === null
+        || !Number.isFinite(a.timeSec)) continue;
+    const previous = shared.at(-1);
+    if (!previous) {
+      segmentStart = a.timeSec;
+    } else {
+      const columns = a.col - lastColumn;
+      const elapsed = a.timeSec - previous.time;
+      if (columns <= 0 || elapsed <= 0) continue;
+      const step = elapsed * frequencyHz;
+      pixelSteps.push(step / columns);
+      largestGapCycles = Math.max(largestGapCycles, step);
+      if (columns === 1) observedCycles += step;
+      if (columns > 1 && step > 1 / 8) segmentStart = a.timeSec;
+      contiguousCycles = Math.max(contiguousCycles, (a.timeSec - segmentStart) * frequencyHz);
+    }
     lastColumn = a.col;
     shared.push({ time: a.timeSec, input: a.voltage, output: b.voltage });
     minIn = Math.min(minIn, a.yPx);
@@ -103,9 +129,16 @@ export function fitShared(input: ChannelTrace, output: ChannelTrace, frequencyHz
     maxOut = Math.max(maxOut, b.yPx);
   }
   const cycles = shared.length > 1 ? (shared.at(-1)!.time - shared[0]!.time) * frequencyHz : 0;
+  const colsPerCycle = cycles > 0 ? (shared.length - 1) / cycles : 0;
+  const pixelStepCycles = median(pixelSteps.sort((a, b) => a - b));
+  const nyquist = pixelStepCycles > 0 && pixelStepCycles < 0.5 && colsPerCycle > 2;
+  const sufficientCoverage = nyquist && colsPerCycle >= 6 && contiguousCycles >= 1 - 1e-9
+    && observedCycles >= 0.85 && observedCycles >= cycles * 0.85
+    && largestGapCycles <= Math.max(1 / 8, pixelStepCycles * 1.01);
   return {
-    input: solveFit(shared, frequencyHz, 'input'), output: solveFit(shared, frequencyHz, 'output'),
-    cycles, colsPerCycle: cycles > 0 ? Math.min(lastColumn - firstColumn, shared.length) / cycles : 0,
+    input: sufficientCoverage ? solveFit(shared, frequencyHz, 'input') : null,
+    output: sufficientCoverage ? solveFit(shared, frequencyHz, 'output') : null,
+    cycles, colsPerCycle, contiguousCycles, observedCycles, largestGapCycles, nyquist, sufficientCoverage,
     vinPx: shared.length ? maxIn - minIn : 0, voutPx: shared.length ? maxOut - minOut : 0,
   };
 }

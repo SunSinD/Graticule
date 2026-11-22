@@ -3,9 +3,12 @@ import type {
   BodeGateOptions,
   BodePointOverride,
   BodeResult,
+  ChannelId,
   ExtractionOverrides,
   ExtractionResult,
   Locale,
+  PlotCursors,
+  Quad,
   Rect,
 } from '../core/types';
 import { decodePng } from '../core/png';
@@ -16,9 +19,9 @@ import { renderBodeCsv, renderWaveformCsv } from '../core/export/csv';
 import { renderBodeTable, renderMeasurementsTable } from '../core/export/table';
 import { analyzeBode, analyzeSingle, recomputeBode } from './engine';
 import { filesFromDataTransfer, isImageFile, isPhotoLike, loadFile, releaseUrl } from './files';
-import { capHistory, compareItems, openHistory, releaseItems } from './history';
-import type { HistoryItem, HistoryStore, ItemState } from './history';
-import { baseName, copyPlain, copyRich, downloadBlob, downloadText, svgToPng } from './download';
+import { HISTORY_LIMIT, capHistory, compareItems, openHistory, releaseItems, storedChange } from './history';
+import type { ChannelLabels, HistoryItem, HistoryStore, ItemState } from './history';
+import { baseName, copyImage, copyPlain, copyRich, downloadBlob, downloadText, svgToPng } from './download';
 import { formatDuration, t } from './i18n';
 import { TopBar } from './components/TopBar';
 import type { AppMode } from './components/TopBar';
@@ -31,12 +34,14 @@ import { ProfilePanel, ScaleControls } from './components/Controls';
 import type { ProfileChoice } from './components/Controls';
 import { BodeSummary, MeasurementsPanel } from './components/Measurements';
 import { ExportPanel } from './components/Exports';
-import type { ExportSource } from './components/Exports';
+import type { ExportSource, TitleField } from './components/Exports';
 import { ShortcutsModal } from './components/ShortcutsModal';
+import { resolveCursors } from './components/Cursors';
 
 type Theme = 'light' | 'dark';
 type PointOverrides = Readonly<Record<string, BodePointOverride>>;
 type Source = 'pick' | 'camera';
+type MetaPatch = Pick<Partial<HistoryItem>, 'title' | 'channelLabels' | 'cursors'>;
 
 interface BodeSession {
   readonly state: ItemState;
@@ -48,6 +53,7 @@ interface BodeSession {
 }
 
 const STAGED_SESSION: BodeSession = { state: 'staged', result: null, error: null, gate: {}, points: {}, pointItems: {} };
+const CURSOR_SAVE_DELAY = 600;
 
 function readPref(key: string): string | null {
   try {
@@ -89,6 +95,15 @@ function isTyping(target: EventTarget | null): boolean {
   return tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
 }
 
+function hasTextSelection(): boolean {
+  const sel = typeof window.getSelection === 'function' ? window.getSelection() : null;
+  return Boolean(sel && !sel.isCollapsed && sel.toString().trim());
+}
+
+function hasFiles(dt: DataTransfer | null): boolean {
+  return Boolean(dt && Array.from(dt.types ?? []).includes('Files'));
+}
+
 function withProfile(overrides: ExtractionOverrides, choice: ProfileChoice): ExtractionOverrides {
   if (choice === 'auto') {
     const { profileId: _drop, ...rest } = overrides;
@@ -127,6 +142,10 @@ function pointItemMap(list: readonly HistoryItem[]): Record<string, string> {
   return map;
 }
 
+function hasManualBox(o: ExtractionOverrides): boolean {
+  return Boolean(o.manualCrop || o.manualQuad);
+}
+
 export function App() {
   const [locale, setLocale] = useState<Locale>(() => (readPref('graticule.locale') === 'fr' ? 'fr' : 'en'));
   const [theme, setTheme] = useState<Theme | null>(() => {
@@ -139,6 +158,7 @@ export function App() {
   const [dragging, setDragging] = useState(false);
   const [adding, setAdding] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState('');
 
   const [items, setItems] = useState<readonly HistoryItem[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -148,6 +168,9 @@ export function App() {
   const [view, setView] = useState<CaptureMode>('original');
   const [overlay, setOverlay] = useState(false);
   const [cropOpen, setCropOpen] = useState(false);
+  const [forceQuad, setForceQuad] = useState(false);
+  const [cropDismissed, setCropDismissed] = useState<ReadonlySet<string>>(() => new Set());
+  const [cursorsOn, setCursorsOn] = useState(false);
 
   const [bodeProfile, setBodeProfile] = useState<ProfileChoice>('auto');
   const [sessions, setSessions] = useState<Readonly<Record<string, BodeSession>>>({});
@@ -162,8 +185,11 @@ export function App() {
   const selectedRef = useRef<readonly string[]>([]);
   const storeRef = useRef<HistoryStore | null>(null);
   const persisted = useRef<Map<string, HistoryItem>>(new Map());
+  const cursorSaves = useRef<Map<string, number>>(new Map());
+  const liveUrls = useRef<Set<string>>(new Set());
   const singleReq = useRef<Map<string, number>>(new Map());
   const bodeReq = useRef<Map<string, number>>(new Map());
+  const feedbackTimer = useRef<number | undefined>(undefined);
   itemsRef.current = items;
   activeRef.current = activeId;
   selectedRef.current = selected;
@@ -190,7 +216,21 @@ export function App() {
     return () => mq.removeEventListener('change', on);
   }, []);
 
-  useEffect(() => () => releaseItems(itemsRef.current), []);
+  useEffect(
+    () => () => {
+      releaseItems(itemsRef.current);
+      window.clearTimeout(feedbackTimer.current);
+      for (const timer of cursorSaves.current.values()) window.clearTimeout(timer);
+    },
+    [],
+  );
+
+  // Object URLs are revoked here, after React commits, never inside a state updater.
+  useEffect(() => {
+    const now = new Set(items.map((i) => i.url));
+    for (const url of liveUrls.current) if (!now.has(url)) releaseUrl(url);
+    liveUrls.current = now;
+  }, [items]);
 
   useEffect(() => {
     let cancelled = false;
@@ -214,7 +254,7 @@ export function App() {
         persisted.current = new Map(loaded.map((i) => [i.id, i]));
         setItems((prev) => {
           const have = new Set(prev.map((i) => i.id));
-          return [...prev, ...loaded.filter((i) => !have.has(i.id))].sort(compareItems);
+          return capHistory([...prev, ...loaded.filter((i) => !have.has(i.id))].sort(compareItems), have);
         });
       }
       if (!cancelled) setHistoryReady(true);
@@ -229,13 +269,49 @@ export function App() {
     if (!store || !historyReady || !keepHistory) return;
     const prev = persisted.current;
     const next = new Map<string, HistoryItem>();
+    const cancelCursorSave = (id: string): void => {
+      const timer = cursorSaves.current.get(id);
+      if (timer !== undefined) window.clearTimeout(timer);
+      cursorSaves.current.delete(id);
+    };
     for (const item of items) {
+      const was = prev.get(item.id);
+      if (was && item.state === 'extracting') {
+        next.set(item.id, was);
+        continue;
+      }
       next.set(item.id, item);
-      if (prev.get(item.id) !== item) void store.put(item);
+      const change = was ? storedChange(was, item) : 'other';
+      if (change === 'other') {
+        cancelCursorSave(item.id);
+        void store.put(item);
+      } else if (change === 'cursors') {
+        cancelCursorSave(item.id);
+        const id = item.id;
+        cursorSaves.current.set(
+          id,
+          window.setTimeout(() => {
+            cursorSaves.current.delete(id);
+            const latest = itemsRef.current.find((i) => i.id === id);
+            if (latest && storeRef.current && persisted.current.has(id)) void storeRef.current.put(latest);
+          }, CURSOR_SAVE_DELAY),
+        );
+      }
     }
-    for (const id of prev.keys()) if (!next.has(id)) void store.remove(id);
+    for (const id of prev.keys()) {
+      if (!next.has(id)) {
+        cancelCursorSave(id);
+        void store.remove(id);
+      }
+    }
     persisted.current = next;
   }, [items, keepHistory, historyReady]);
+
+  const flash = useCallback((text: string) => {
+    setFeedback(text);
+    window.clearTimeout(feedbackTimer.current);
+    feedbackTimer.current = window.setTimeout(() => setFeedback(''), 2000);
+  }, []);
 
   const patchItem = useCallback((id: string, patch: Partial<HistoryItem>) => {
     setItems((list) => list.map((i) => (i.id === id ? { ...i, ...patch } : i)));
@@ -261,6 +337,7 @@ export function App() {
     setView(nextView);
     setOverlay(false);
     setCropOpen(false);
+    setForceQuad(false);
     setInspectedId(null);
   };
 
@@ -292,17 +369,24 @@ export function App() {
       if (!item) return;
       const next: HistoryItem = { ...item, ...patch };
       setItems((list) => list.map((i) => (i.id === id ? { ...i, ...patch } : i)));
-      if (item.result || item.state === 'extracting') runSingle(next, false);
+      if (item.result || item.state === 'extracting' || item.state === 'error') runSingle(next, false);
     },
     [runSingle],
+  );
+
+  const updateMeta = useCallback(
+    (id: string, patch: MetaPatch) => {
+      patchItem(id, patch);
+    },
+    [patchItem],
   );
 
   const runBode = useCallback(
     (key: string, list: readonly HistoryItem[], profile: ProfileChoice, gate: BodeGateOptions, points: PointOverrides) => {
       const req = (bodeReq.current.get(key) ?? 0) + 1;
       bodeReq.current.set(key, req);
-      const per = profile === 'auto' ? undefined : ({ profileId: profile } as ExtractionOverrides);
-      const input = list.map((i) => ({ fileName: i.name, bytes: i.bytes, ...(per ? { overrides: per } : {}) }));
+      const choiceFor = (i: HistoryItem): ProfileChoice => (profile === 'auto' ? i.profile : profile);
+      const input = list.map((i) => ({ fileName: i.name, bytes: i.bytes, overrides: withProfile(i.overrides, choiceFor(i)) }));
       const pointItems = pointItemMap(list);
       setSession(key, { state: 'extracting', error: null });
       analyzeBode(input, gate, points).then(
@@ -317,8 +401,8 @@ export function App() {
           setItems((all) =>
             all.map((i) => {
               const ex = cache.get(i.id);
-              if (!ex || i.result || i.state === 'extracting') return i;
-              return { ...i, state: 'extracted', result: ex, error: null, profile };
+              if (!ex || i.result || i.state === 'extracting' || Object.keys(i.overrides).length > 0) return i;
+              return { ...i, state: 'extracted', result: ex, error: null, profile: choiceFor(i) };
             }),
           );
         },
@@ -365,29 +449,38 @@ export function App() {
     setNotice(null);
   }, []);
 
-  const removeItem = useCallback((id: string) => {
-    const item = itemsRef.current.find((i) => i.id === id);
-    if (!item) return;
-    releaseUrl(item.url);
-    singleReq.current.delete(id);
-    if (replaceIdRef.current === id) replaceIdRef.current = null;
-    setItems((list) => list.filter((i) => i.id !== id));
-    setSelected((sel) => sel.filter((x) => x !== id));
-    if (activeRef.current === id) setActiveId(null);
-  }, []);
+  const removeItem = useCallback(
+    (id: string) => {
+      if (!itemsRef.current.some((i) => i.id === id)) return;
+      singleReq.current.delete(id);
+      if (replaceIdRef.current === id) replaceIdRef.current = null;
+      const nextSel = selectedRef.current.filter((x) => x !== id);
+      const nothingOpen = activeRef.current === null || activeRef.current === id;
+      if (nextSel.length === 1 && nothingOpen) {
+        openItem(nextSel[0]!);
+      } else {
+        setSelected(nextSel);
+        if (activeRef.current === id) setActiveId(null);
+      }
+      setItems((list) => list.filter((i) => i.id !== id));
+    },
+    [openItem],
+  );
 
   const clearAll = (): void => {
-    releaseItems(itemsRef.current);
     singleReq.current.clear();
     bodeReq.current.clear();
     replaceIdRef.current = null;
     persisted.current = new Map();
+    for (const timer of cursorSaves.current.values()) window.clearTimeout(timer);
+    cursorSaves.current.clear();
     void storeRef.current?.clear();
     setItems([]);
     setSelected([]);
     setActiveId(null);
     setSessions({});
     setNotice(null);
+    setCropDismissed(new Set());
     resetCaptureView('original');
   };
 
@@ -400,16 +493,19 @@ export function App() {
 
   const addFiles = useCallback(
     async (raw: readonly File[], source: Source) => {
-      const images = raw.filter(isImageFile).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      const images = raw
+        .filter(isImageFile)
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
+        .slice(0, HISTORY_LIMIT);
       if (images.length === 0) {
         if (raw.length > 0) setNotice(tx.unsupportedFile);
         return;
       }
       setAdding(true);
       setNotice(null);
+      const added: HistoryItem[] = [];
       try {
         const now = Date.now();
-        const added: HistoryItem[] = [];
         for (const f of images) {
           const photo = source === 'camera' || isPhotoLike(f);
           const loaded = await loadFile(f, f.name || 'photo.png', { photo: source === 'camera' });
@@ -423,15 +519,12 @@ export function App() {
             overrides: {},
             profile: 'auto',
             quality: photo ? checkPhoto(loaded.bytes) : null,
+            isPhoto: photo,
           });
         }
         const replaceId = replaceIdRef.current;
         replaceIdRef.current = null;
-        if (replaceId) {
-          const old = itemsRef.current.find((i) => i.id === replaceId);
-          if (old) releaseUrl(old.url);
-          singleReq.current.delete(replaceId);
-        }
+        if (replaceId) singleReq.current.delete(replaceId);
         const keep = new Set(added.map((i) => i.id));
         setItems((list) => {
           const base = replaceId ? list.filter((i) => i.id !== replaceId) : list;
@@ -446,6 +539,7 @@ export function App() {
         }
         resetCaptureView('original');
       } catch (e) {
+        releaseItems(added);
         setNotice(message(e));
       } finally {
         setAdding(false);
@@ -477,11 +571,18 @@ export function App() {
   const capture: ExtractionResult | null = mode === 'single' ? activeItem?.result ?? null : inspected?.extraction ?? null;
   const captureItem = mode === 'single' ? activeItem : inspectedItem;
   const captureName = captureItem?.name ?? inspected?.fileName ?? '';
+  const captureTitle = (mode === 'single' ? activeItem?.title?.trim() : '') || captureName;
+  const captureLabels: ChannelLabels | undefined = mode === 'single' ? activeItem?.channelLabels : undefined;
   const profileChoice: ProfileChoice = mode === 'single' ? activeItem?.profile ?? 'auto' : bodeProfile;
   const isUniversal =
     mode === 'single' &&
     (activeItem?.profile === 'universal-fallback' || activeItem?.result?.detection.profileId === 'universal-fallback');
-  const cropVisible = mode === 'single' && activeItem !== null && (cropOpen || (isUniversal && !activeItem.overrides.manualCrop));
+  const autoCrop =
+    isUniversal && activeItem !== null && !hasManualBox(activeItem.overrides) && !cropDismissed.has(activeItem.id);
+  const cropVisible = mode === 'single' && activeItem !== null && (cropOpen || autoCrop);
+  const cursorsShown = cursorsOn && mode === 'single' && view === 'clean' && !cropVisible && Boolean(activeItem?.result);
+  const cursors: PlotCursors | null =
+    cursorsShown && activeItem?.result ? resolveCursors(activeItem.result, activeItem.cursors) : null;
 
   const rejectedIds = useMemo(() => {
     const out = new Set<string>();
@@ -490,6 +591,17 @@ export function App() {
     return out;
   }, [bode, session]);
 
+  const dismissCrop = (resetProfile: boolean): void => {
+    setCropOpen(false);
+    setForceQuad(false);
+    if (!activeItem) return;
+    const id = activeItem.id;
+    setCropDismissed((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
+    if (resetProfile && activeItem.profile === 'universal-fallback' && !hasManualBox(activeItem.overrides)) {
+      updateItem(id, { profile: 'auto' });
+    }
+  };
+
   const toggleOverlay = useCallback(() => {
     setOverlay((o) => {
       if (!o) setView('original');
@@ -497,15 +609,83 @@ export function App() {
     });
   }, []);
 
+  const toggleCursors = useCallback(() => {
+    const item = itemsRef.current.find((i) => i.id === activeRef.current);
+    if (!item?.result) return;
+    if (cursorsShown) {
+      setCursorsOn(false);
+      return;
+    }
+    if (cropVisible) {
+      setCropDismissed((prev) => (prev.has(item.id) ? prev : new Set(prev).add(item.id)));
+    }
+    setView('clean');
+    setOverlay(false);
+    setCropOpen(false);
+    setForceQuad(false);
+    setCursorsOn(true);
+  }, [cursorsShown, cropVisible]);
+
   const extractActive = useCallback(() => {
     const item = itemsRef.current.find((i) => i.id === activeRef.current);
     if (item) runSingle(item, true);
   }, [runSingle]);
 
+  const exportSource: ExportSource | null = useMemo(() => {
+    if (showCapture && capture) {
+      const labels = captureLabels;
+      const svgCursors = cursors ?? undefined;
+      return {
+        baseName: baseName(captureName),
+        svg: () =>
+          renderWaveformSvg(capture, {
+            locale,
+            title: captureTitle,
+            ...(labels ? { channelLabels: labels } : {}),
+            ...(svgCursors ? { cursors: svgCursors } : {}),
+          }),
+        csv: () => renderWaveformCsv(capture, labels),
+        table: (f) => renderMeasurementsTable(capture, f, locale, labels),
+      };
+    }
+    if (mode === 'bode' && bode) {
+      return {
+        baseName: 'bode',
+        svg: () => renderBodeSvg(bode, { locale, title: 'Bode' }),
+        csv: () => renderBodeCsv(bode),
+        table: (f) => renderBodeTable(bode, f, locale),
+      };
+    }
+    return null;
+  }, [showCapture, capture, captureName, captureTitle, captureLabels, cursors, mode, bode, locale]);
+
+  const copyPlot = useCallback(
+    (src: ExportSource) => {
+      let png: Promise<Blob>;
+      try {
+        png = svgToPng(src.svg(), 2);
+      } catch {
+        flash(tx.copyFailed);
+        return;
+      }
+      copyImage(png).then(
+        () => flash(tx.plotCopied),
+        () => flash(tx.copyFailed),
+      );
+    },
+    [flash, tx.copyFailed, tx.plotCopied],
+  );
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && help) {
         setHelp(false);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'c') {
+        if (help || isTyping(e.target) || hasTextSelection() || !exportSource) return;
+        e.preventDefault();
+        copyPlot(exportSource);
         return;
       }
       if (isTyping(e.target) || e.altKey || e.ctrlKey || e.metaKey) return;
@@ -521,16 +701,19 @@ export function App() {
         openPicker(false);
       } else if (k === 'e') {
         e.preventDefault();
-        const first = exportsRef.current?.querySelector<HTMLButtonElement>('button:not(:disabled)');
+        const first = exportsRef.current?.querySelector<HTMLElement>('input:not(:disabled), button:not(:disabled)');
         (first ?? exportsRef.current)?.focus();
       } else if (k === 't' && showCapture && capture) {
         e.preventDefault();
         toggleOverlay();
+      } else if (k === 'c' && mode === 'single' && capture) {
+        e.preventDefault();
+        toggleCursors();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [help, openPicker, showCapture, capture, toggleOverlay]);
+  }, [help, openPicker, showCapture, capture, toggleOverlay, toggleCursors, mode, exportSource, copyPlot]);
 
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
@@ -549,32 +732,13 @@ export function App() {
   }, [addFiles]);
 
   const onDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
     setDragging(false);
+    if (!hasFiles(e.dataTransfer)) return;
+    e.preventDefault();
     replaceIdRef.current = null;
     const list = await filesFromDataTransfer(e.dataTransfer);
     await addFiles(list, 'pick');
   };
-
-  const exportSource: ExportSource | null = useMemo(() => {
-    if (showCapture && capture) {
-      return {
-        baseName: baseName(captureName),
-        svg: () => renderWaveformSvg(capture, { locale, title: captureName }),
-        csv: () => renderWaveformCsv(capture),
-        table: (f) => renderMeasurementsTable(capture, f, locale),
-      };
-    }
-    if (mode === 'bode' && bode) {
-      return {
-        baseName: 'bode',
-        svg: () => renderBodeSvg(bode, { locale, title: 'Bode' }),
-        csv: () => renderBodeCsv(bode),
-        table: (f) => renderBodeTable(bode, f, locale),
-      };
-    }
-    return null;
-  }, [showCapture, capture, captureName, mode, bode, locale]);
 
   const extracting = mode === 'single' ? activeItem?.state === 'extracting' : session?.state === 'extracting';
   const status =
@@ -598,10 +762,28 @@ export function App() {
 
   const quality = mode === 'single' ? activeItem?.quality ?? null : null;
 
+  const titleField: TitleField | null =
+    mode === 'single' && activeItem
+      ? {
+          value: activeItem.title ?? '',
+          placeholder: activeItem.name,
+          onCommit: (v) => updateMeta(activeItem.id, { title: v || undefined }),
+        }
+      : null;
+
+  const setLabel = (ch: ChannelId, label: string): void => {
+    if (!activeItem) return;
+    const next: Record<string, string> = { ...activeItem.channelLabels };
+    if (label) next[ch] = label;
+    else delete next[ch];
+    updateMeta(activeItem.id, { channelLabels: Object.keys(next).length ? (next as ChannelLabels) : undefined });
+  };
+
   return (
     <div
       className={`app${dragging ? ' dragging' : ''}`}
       onDragOver={(e) => {
+        if (!hasFiles(e.dataTransfer)) return;
         e.preventDefault();
         if (!dragging) setDragging(true);
       }}
@@ -618,6 +800,8 @@ export function App() {
         onLocale={setLocale}
         onTheme={toggleTheme}
         onShortcuts={() => setHelp((h) => !h)}
+        onAdd={() => openPicker(false)}
+        onCamera={canUseCamera ? () => openCamera() : undefined}
       />
       <input
         ref={fileInput}
@@ -690,6 +874,21 @@ export function App() {
               >
                 {canUseCamera ? tx.photoRetake : tx.photoChooseAnother}
               </button>
+              {quality.issues.includes('tilted') && (
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => {
+                    patchItem(activeItem.id, { quality: null });
+                    setView('original');
+                    setOverlay(false);
+                    setForceQuad(true);
+                    setCropOpen(true);
+                  }}
+                >
+                  {tx.photoStraighten}
+                </button>
+              )}
               <button type="button" className="btn" onClick={() => patchItem(activeItem.id, { quality: null })}>
                 {tx.photoUseAnyway}
               </button>
@@ -714,26 +913,50 @@ export function App() {
             dark={dark}
             url={captureItem.url}
             fileName={captureName}
+            title={captureTitle}
+            channelLabels={captureLabels}
             result={capture}
             extracting={mode === 'single' && activeItem?.state === 'extracting'}
             view={view}
             overlay={overlay}
             cropOpen={cropVisible}
             canCrop={mode === 'single'}
+            isPhoto={captureItem.isPhoto === true}
+            forceQuad={forceQuad}
             overrides={mode === 'single' ? activeItem?.overrides ?? {} : {}}
+            cursors={cursors}
             onExtract={mode === 'single' && !quality ? extractActive : null}
             onView={(v) => {
+              if (v === 'clean' && cropVisible) dismissCrop(false);
               setView(v);
               if (v === 'clean') setOverlay(false);
             }}
             onOverlay={toggleOverlay}
+            onCursors={mode === 'single' ? toggleCursors : null}
+            onCursorsChange={(c) => activeItem && updateMeta(activeItem.id, { cursors: c })}
             onCropOpen={(open) => {
-              setCropOpen(open);
-              if (!open && isUniversal && activeItem && !activeItem.overrides.manualCrop) updateItem(activeItem.id, { profile: 'auto' });
+              if (open) {
+                setCropOpen(true);
+                setCursorsOn(false);
+              } else {
+                dismissCrop(true);
+              }
             }}
             onApplyCrop={(crop: Rect, hDivs: number, vDivs: number) => {
-              if (activeItem) updateItem(activeItem.id, { overrides: { ...activeItem.overrides, manualCrop: crop, hDivs, vDivs } });
+              if (activeItem) {
+                const { manualQuad: _q, ...rest } = activeItem.overrides;
+                updateItem(activeItem.id, { overrides: { ...rest, manualCrop: crop, hDivs, vDivs } });
+              }
               setCropOpen(false);
+              setForceQuad(false);
+            }}
+            onApplyQuad={(quad: Quad, hDivs: number, vDivs: number) => {
+              if (activeItem) {
+                const { manualCrop: _c, ...rest } = activeItem.overrides;
+                updateItem(activeItem.id, { overrides: { ...rest, manualQuad: quad, hDivs, vDivs } });
+              }
+              setCropOpen(false);
+              setForceQuad(false);
             }}
           />
         )}
@@ -804,9 +1027,19 @@ export function App() {
           <ProfilePanel
             tx={tx}
             choice={profileChoice}
+            disabled={mode === 'empty'}
             result={mode === 'bode' ? inspected?.extraction ?? null : activeItem?.result ?? null}
             onChoice={(choice) => {
               if (mode === 'single' && activeItem) {
+                if (choice === 'universal-fallback') {
+                  const id = activeItem.id;
+                  setCropDismissed((prev) => {
+                    if (!prev.has(id)) return prev;
+                    const next = new Set(prev);
+                    next.delete(id);
+                    return next;
+                  });
+                }
                 updateItem(activeItem.id, { profile: choice });
               } else {
                 setBodeProfile(choice);
@@ -834,21 +1067,59 @@ export function App() {
               result={activeItem?.result ?? null}
               overrides={activeItem?.overrides ?? {}}
               disabled={false}
+              labels={activeItem?.channelLabels}
               onOverrides={(next) => activeItem && updateItem(activeItem.id, { overrides: next })}
+              onLabel={activeItem ? setLabel : undefined}
             />
           )}
-          {(mode !== 'bode' || inspected) && <MeasurementsPanel tx={tx} locale={locale} result={capture} />}
+          {(mode !== 'bode' || inspected) && <MeasurementsPanel tx={tx} locale={locale} result={capture} labels={captureLabels} />}
         </div>
         <ExportPanel
           ref={exportsRef}
           tx={tx}
           source={exportSource}
-          onSvg={(src) => downloadText(src.svg(), `${src.baseName}.svg`, 'image/svg+xml')}
-          onPng={async (src) => downloadBlob(await svgToPng(src.svg(), 2), `${src.baseName}_2x.png`)}
-          onCsv={(src) => downloadText(src.csv(), `${src.baseName}.csv`, 'text/csv')}
-          onCopy={async (src, f) => {
-            if (f === 'html') await copyRich(src.table('html'), src.table('tsv'));
-            else await copyPlain(src.table(f));
+          feedback={feedback}
+          title={titleField}
+          onSvg={(src) => {
+            try {
+              downloadText(src.svg(), `${src.baseName}.svg`, 'image/svg+xml');
+            } catch {
+              flash(tx.exportFailed);
+            }
+          }}
+          onPng={(src) => {
+            let png: Promise<Blob>;
+            try {
+              png = svgToPng(src.svg(), 2);
+            } catch {
+              flash(tx.exportFailed);
+              return;
+            }
+            png.then(
+              (blob) => downloadBlob(blob, `${src.baseName}_2x.png`),
+              () => flash(tx.exportFailed),
+            );
+          }}
+          onCsv={(src) => {
+            try {
+              downloadText(src.csv(), `${src.baseName}.csv`, 'text/csv');
+            } catch {
+              flash(tx.exportFailed);
+            }
+          }}
+          onCopyPlot={copyPlot}
+          onCopyTable={(src, f) => {
+            let job: Promise<void>;
+            try {
+              job = f === 'html' ? copyRich(src.table('html'), src.table('tsv')) : copyPlain(src.table(f));
+            } catch {
+              flash(tx.copyFailed);
+              return;
+            }
+            job.then(
+              () => flash(tx.copied),
+              () => flash(tx.copyFailed),
+            );
           }}
         />
       </aside>

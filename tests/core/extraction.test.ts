@@ -28,6 +28,15 @@ function plot(image: RgbaImage, ink: Rgb, fn: (column: number) => number | null,
 const traceById = (traces: readonly ChannelTrace[], channel: ChannelId) => traces.find(trace => trace.channel === channel)!;
 
 describe('column extraction and waveform measurements', () => {
+  test('classifies inverted trace colors in the universal fallback profile', () => {
+    const image = bitmap(421, 221, [255, 255, 255]);
+    plot(image, [0, 0, 198], col => zero - 33 * Math.sin(2 * Math.PI * col / 80));
+    const result = analyzeCapture(image, 'inverted-fallback.png', { ...overrides, profileId: 'universal-fallback' });
+    expect(result.detection.grid.inverted).toBe(true);
+    expect(result.traces.map(trace => trace.channel)).toEqual(['C1']);
+    expect(result.traces[0]!.validCount).toBe(401);
+    expect(result.measurements[0]!.frequencyHz).toBeCloseTo(1000, 2);
+  });
   test('recovers noisy, 3 px analog sinusoids, frequency and signed phase', () => {
     const image = bitmap(421, 221);
     const wave = (col: number) => zero - 45 * Math.cos(2 * Math.PI * col / 80);

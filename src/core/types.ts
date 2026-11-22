@@ -1,3 +1,11 @@
+export interface Point {
+  readonly x: number;
+  readonly y: number;
+}
+
+/** Corners in top-left, top-right, bottom-right, bottom-left order. */
+export type Quad = readonly [Point, Point, Point, Point];
+
 export interface RgbaImage {
   readonly width: number;
   readonly height: number;
@@ -6,11 +14,13 @@ export interface RgbaImage {
 }
 
 export type ProfileId = 'siglent-sds2000x-plus' | 'rigol-ds1054z' | 'siglent-sds1000x-e'
-  | 'rigol-dho924' | 'rohde-schwarz-rtb2004' | 'tektronix-dpo7104c' | 'universal-fallback';
+  | 'rigol-dho924' | 'rohde-schwarz-rtb2004' | 'tektronix-dpo7104c'
+  | 'siglent-sds800x-hd' | 'keysight-dsox1000' | 'universal-fallback';
 
 export type ChannelId = 'C1' | 'C2' | 'C3' | 'C4';
 
-export type LayoutVariant = 'no-measure' | 'measure-1row' | 'measure-2row' | 'measure-3row' | 'decode-table' | 'standard' | 'fft' | 'manual';
+export type LayoutVariant = 'no-measure' | 'measure-1row' | 'measure-2row' | 'measure-3row'
+  | 'measure-stats' | 'decode-table' | 'standard' | 'fft' | 'manual';
 
 export interface Rect {
   readonly x: number;
@@ -122,6 +132,11 @@ export interface ChannelMeasurements {
   readonly dutyCyclePct: number | null;
   readonly completeCycles: number;
   readonly clipped: boolean;
+  readonly riseTimeSec?: number | null;
+  readonly fallTimeSec?: number | null;
+  readonly overshootPct?: number | null;
+  readonly riseLimited?: boolean;
+  readonly fallLimited?: boolean;
 }
 
 export interface ScopeComparisonRow {
@@ -148,6 +163,7 @@ export interface PhaseMeasurement {
 export interface ExtractionOverrides {
   readonly profileId?: ProfileId;
   readonly manualCrop?: Rect;
+  readonly manualQuad?: Quad;
   readonly hDivs?: number;
   readonly vDivs?: number;
   readonly secPerDiv?: number;
@@ -164,6 +180,9 @@ export interface ExtractionResult {
   readonly fileName: string;
   readonly imageWidth: number;
   readonly imageHeight: number;
+  readonly sourceWidth?: number;
+  readonly sourceHeight?: number;
+  readonly sourceQuad?: Quad;
   readonly detection: ProfileDetection;
   readonly timebase: TimebaseSettings;
   readonly topFrequencyHz: number | null;
@@ -223,6 +242,8 @@ export interface BodeResult {
   readonly points: readonly BodePoint[];
   readonly passbandGainDb: number | null;
   readonly cutoffHz: number | null;
+  readonly cutoffLowHz?: number | null;
+  readonly cutoffHighHz?: number | null;
   readonly cutoffTargetDb: number | null;
   readonly acceptedCount: number;
   readonly rejectedCount: number;
@@ -234,6 +255,15 @@ export type Locale = 'en' | 'fr';
 
 export type PlotTheme = 'light' | 'dark';
 
+/** Fractions measured from the left and top edges of the plot. */
+export interface PlotCursors {
+  readonly x1: number;
+  readonly x2: number;
+  readonly y1: number;
+  readonly y2: number;
+  readonly channel: ChannelId;
+}
+
 export interface SvgExportOptions {
   readonly title?: string;
   readonly locale?: Locale;
@@ -242,4 +272,6 @@ export interface SvgExportOptions {
   readonly showGrid?: boolean;
   readonly showLegend?: boolean;
   readonly theme?: PlotTheme;
+  readonly cursors?: PlotCursors;
+  readonly channelLabels?: Partial<Record<ChannelId, string>>;
 }

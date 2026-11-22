@@ -39,6 +39,18 @@ function markerYs(image: RgbaImage, detection: ProfileDetection, colors: readonl
   const { x, y, width, height } = profile.zeroMarkerStrip;
   const { bottom, centerY, inverted } = detection.grid;
   const lastRow = profile.raster ? Math.min(bottom, y + height - 1) : bottom;
+  if (profile.id === 'keysight-dsox1000') {
+    const arrows: (number | null)[] = CHANNELS.map(() => null);
+    for (let row = Math.max(y, detection.grid.top + 2); row <= lastRow; row++) {
+      const i = at(image, x + width - 1, row);
+      const j = at(image, x + width - 9, row);
+      const channel = classifyPixel(image.data[i]!, image.data[i + 1]!, image.data[i + 2]!, colors, false);
+      if (channel >= 0 && channel === classifyPixel(image.data[j]!, image.data[j + 1]!, image.data[j + 2]!, colors, false)) {
+        arrows[channel] = row;
+      }
+    }
+    return arrows;
+  }
   if (profile.id === 'rohde-schwarz-rtb2004') {
     const tips = CHANNELS.map((): number[] => []);
     for (let row = y; row <= lastRow; row++) {
@@ -171,7 +183,7 @@ interface TraceColumns {
 function plotAnnotations(image: RgbaImage, detection: ProfileDetection, markers: readonly (number | null)[]): Uint8Array | null {
   const { profileId, grid } = detection;
   const { left, right, top, bottom, hLines } = grid;
-  if (profileId !== 'rigol-dho924' && profileId !== 'rohde-schwarz-rtb2004') return null;
+  if (profileId !== 'rigol-dho924' && profileId !== 'rohde-schwarz-rtb2004' && profileId !== 'siglent-sds800x-hd') return null;
   const pixels = new Uint8Array(image.width * image.height);
   const fill = (x1: number, y1: number, x2: number, y2: number) => {
     for (let y = Math.max(top, y1); y <= Math.min(bottom, y2); y++) {
@@ -182,6 +194,23 @@ function plotAnnotations(image: RgbaImage, detection: ProfileDetection, markers:
     for (const y of hLines.slice(1, -1)) fill(left + 8, Math.round(y) - 9, left + 36, Math.round(y) + 8);
     const zero = markers[0];
     if (zero != null) fill(left, Math.round(zero) - 13, left + 34, Math.round(zero) + 13);
+    return pixels;
+  }
+  if (profileId === 'siglent-sds800x-hd') {
+    for (const y of hLines.slice(1)) fill(left, Math.round(y) - 12, left + 65, Math.round(y) + 1);
+    for (const x of grid.vLines.slice(1, -1)) fill(x - 32, bottom - 17, x + 32, bottom - 3);
+    // A trigger level arrow can obscure samples along the last few columns.
+    let first = -1;
+    for (let y = top; y <= bottom + 1; y++) {
+      const i = at(image, right - 1, Math.min(y, bottom));
+      const c = image.data.subarray(i, i + 3);
+      const pureInk = y <= bottom && Math.max(...c) === 255 && Math.min(...c) === 0;
+      if (pureInk && first < 0) first = y;
+      if (!pureInk && first >= 0) {
+        if (y - first >= 7) fill(right - 9, first, right, y - 1);
+        first = -1;
+      }
+    }
     return pixels;
   }
   for (const y of hLines.slice(1)) fill(left + 1, Math.round(y) - 18, left + 58, Math.round(y) - 4);
@@ -231,7 +260,7 @@ export function extractTraces(image: RgbaImage, detection: ProfileDetection, met
   const annotations = plotAnnotations(image, detection, markers);
   const plotMask = annotations ? { ...mask, pixels: mask.pixels.map((bits, index) => bits | annotations[index]!) } : mask;
   const native = getNativeProfile(detection.profileId);
-  const inverted = native?.supportsInverted === true && grid.inverted;
+  const inverted = grid.inverted;
   const active = CHANNELS.map((channel, i) => !metadata.unsupportedChannels?.has(channel)
     && (overrides.channels?.[channel]?.enabled ?? (!native || metadata.cards.has(channel) || markers[i] !== null)));
   const columns = CHANNELS.map((): (Cluster | null)[] => []);
