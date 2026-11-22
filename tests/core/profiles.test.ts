@@ -11,16 +11,37 @@ import { bitmap, paint, pixel, sample, yellow } from './fixtures.js';
 
 describe('native capture profiles', () => {
   test('checks profile version, required fields, geometry and bounds at startup', () => {
-    expect(validateProfiles(configuration).map(p => p.id)).toEqual(['siglent-sds2000x-plus', 'rigol-ds1054z']);
+    expect(validateProfiles(configuration).map(p => p.id)).toEqual([
+      'siglent-sds2000x-plus', 'rigol-ds1054z', 'siglent-sds1000x-e', 'rigol-dho924',
+      'rohde-schwarz-rtb2004', 'tektronix-dpo7104c',
+    ]);
     expect(() => validateProfiles({ ...configuration, version: 2 })).toThrow('Invalid oscilloscope profile configuration');
-    expect(() => validateProfiles({ ...configuration, profiles: [configuration.profiles[0], configuration.profiles[0]] })).toThrow();
+    expect(() => validateProfiles({ ...configuration, profiles: [configuration.profiles[0], configuration.profiles[0],
+      ...configuration.profiles.slice(2)] })).toThrow();
     for (const change of [
       { channels: {} },
       { zeroMarkerStrip: { x: -1, y: 0, width: 1, height: 1 } },
       { graticule: { ...configuration.profiles[0]!.graticule, pxPerHDiv: NaN } },
       { graticule: { ...configuration.profiles[0]!.graticule, vDivs: 7 } },
     ]) {
-      expect(() => validateProfiles({ ...configuration, profiles: [{ ...configuration.profiles[0], ...change }, configuration.profiles[1]] })).toThrow();
+      expect(() => validateProfiles({ ...configuration, profiles: [{ ...configuration.profiles[0], ...change },
+        ...configuration.profiles.slice(1)] })).toThrow();
+    }
+  });
+
+  test.each(configuration.profiles.slice(2))('rejects blank and noisy screens at the $id resolution', profile => {
+    const white = bitmap(profile.width, profile.height, [255, 255, 255]);
+    const black = bitmap(profile.width, profile.height);
+    const noise = bitmap(profile.width, profile.height);
+    let value = 2026;
+    for (let i = 0; i < noise.data.length; i += 4) {
+      value = (Math.imul(value, 1664525) + 1013904223) >>> 0;
+      noise.data[i] = value >>> 24;
+      noise.data[i + 1] = (value >>> 16) & 255;
+      noise.data[i + 2] = (value >>> 8) & 255;
+    }
+    for (const image of [white, black, noise]) {
+      expect(detectProfile(image)).toMatchObject({ profileId: 'universal-fallback', matchedAnchors: [] });
     }
   });
 
@@ -99,6 +120,60 @@ describe('native capture profiles', () => {
       fallbackReason: 'manual_crop', grid: { left: 50, right: 350, top: 55, bottom: 247, pxPerHDiv: 25, pxPerVDiv: 32 },
     });
     expect(analyzeCapture(bitmap(1, 1), 'tiny.png').detection.profileId).toBe('universal-fallback');
+  });
+});
+
+const newScopeRoot = process.env.GRATICULE_NEW_SCOPE_FIXTURES;
+const measuredCaptures = [
+  { file: 'siglent-mcp-pixels.png', id: 'siglent-sds1000x-e', bounds: [12, 18, 712, 418], pitch: [50, 50],
+    divisions: [14, 8], scale: 200e-6, delay: 0, channels: [['C1', 1, 292]], referenceFrequency: 1000 },
+  { file: 'rigol-dho924.png', id: 'rigol-dho924', bounds: [12, 93, 508, 507], pitch: [49.6, 51.75],
+    divisions: [10, 8], scale: 200e-9, delay: 0, channels: [['C1', 2, 300]], referenceFrequency: 5.2083e6 },
+  { file: 'rtb-timing-a.png', id: 'rohde-schwarz-rtb2004', bounds: [39, 100, 1203, 742], pitch: [100, 64.2],
+    divisions: [12, 10], scale: 5e-9, delay: 0, channels: [['C1', 2, 436], ['C2', 10, 419]] },
+  { file: 'rtb-timing-b.png', id: 'rohde-schwarz-rtb2004', bounds: [39, 100, 1239, 780], pitch: [100, 68],
+    divisions: [12, 10], scale: 10e-9, delay: 0, channels: [['C1', 2, 456], ['C2', 2, 485]] },
+  { file: 'rtb-timing-c.png', id: 'rohde-schwarz-rtb2004', bounds: [39, 100, 1239, 780], pitch: [100, 68],
+    divisions: [12, 10], scale: 20e-9, delay: 49.96e-6, channels: [['C1', 2, 456], ['C2', 2, 485]] },
+  { file: 'tektronix-dpo7104c.png', id: 'tektronix-dpo7104c', bounds: [16, 35, 1016, 455], pitch: [100, 42],
+    divisions: [10, 10], scale: 2e-3, delay: 0, channels: [['C4', 0.4, 245]], referenceFrequency: 1000 },
+] as const;
+
+describe.skipIf(!newScopeRoot)('downloaded native captures for the additional profiles', () => {
+  const load = (name: string) => decodePng(readFileSync(join(newScopeRoot!, name)));
+
+  test.each(measuredCaptures)('matches $file and reads its displayed scales', fixture => {
+    const { file, id, bounds, pitch, divisions, scale, delay, channels } = fixture;
+    const image = load(file);
+    const result = analyzeCapture(image, file);
+    const { grid } = result.detection;
+    expect(result.detection.profileId).toBe(id);
+    expect([grid.left, grid.top, grid.right, grid.bottom]).toEqual(bounds);
+    expect([grid.pxPerHDiv, grid.pxPerVDiv]).toEqual(pitch);
+    expect([grid.hDivs, grid.vDivs]).toEqual(divisions);
+    expect(grid.fitErrorPx).toBeLessThan(0.5);
+    expect(result.timebase).toMatchObject({ source: 'ocr', secPerDiv: expect.closeTo(scale, 14), triggerOffsetSec: expect.closeTo(delay, 14) });
+    expect(result.traces.map(trace => [trace.channel, trace.settings.voltsPerDiv, Math.round(trace.settings.zeroY)])).toEqual(channels);
+    expect(result.traces.every(trace => trace.settings.scaleSource === 'ocr' && trace.validCount >= grid.width * 0.94)).toBe(true);
+    if ('referenceFrequency' in fixture) {
+      const measured = result.measurements[0]?.frequencyHz ?? 0;
+      expect(Math.abs(measured - fixture.referenceFrequency) / fixture.referenceFrequency).toBeLessThan(0.001);
+    }
+    for (const other of validateProfiles(configuration)) {
+      if (other.id !== id) expect(detectProfile(image, { profileId: other.id }).profileId).toBe('universal-fallback');
+    }
+
+    const profile = validateProfiles(configuration).find(candidate => candidate.id === id)!;
+    const withoutLogo = { ...image, data: image.data.slice() };
+    paint(withoutLogo, profile.anchors.logoRoi, [0, 0, 0]);
+    expect(detectProfile(withoutLogo).profileId).toBe('universal-fallback');
+    const withoutGrid = { ...image, data: image.data.slice() };
+    paint(withoutGrid, { x: grid.left, y: grid.top, width: grid.width + 1, height: grid.height + 1 }, [0, 0, 0]);
+    expect(detectProfile(withoutGrid).profileId).toBe('universal-fallback');
+  });
+
+  test.each(['dsox.png', 'rtb.png', 'rigol-oos.png', 'tektronix-dpo4104b.png', 'visa-keysight.png'])('rejects nonmatching layouts in %s', name => {
+    expect(detectProfile(load(name))).toMatchObject({ profileId: 'universal-fallback', matchedAnchors: [] });
   });
 });
 

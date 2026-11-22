@@ -4,7 +4,11 @@ Graticule turns oscilloscope screenshots into clean plots and real data.
 
 Try it live at [sunsind.github.io/Graticule](https://sunsind.github.io/Graticule/).
 
-Drop a PNG from your scope and you get a print ready plot, a CSV of every trace, and a measurement table you can paste into Word. Everything runs in your browser, so your files never leave your computer.
+![Original screenshot next to the clean plot](docs/preview-before-after.png)
+
+Drop a screenshot from your scope or take a photo of the screen, click Extract, and you get a print ready plot, a CSV of every trace, and a measurement table you can paste into Word. Everything runs in your browser, so your files never leave your computer.
+
+![The Graticule app](docs/preview-app.png)
 
 ## What it does
 
@@ -19,20 +23,39 @@ Drop a PNG from your scope and you get a print ready plot, a CSV of every trace,
 ## How to use it
 
 1. Open the app
-2. Drop a screenshot, paste one with Ctrl+V, or press O
-3. Look at the clean plot right away, or switch to Original to see your screenshot
-4. Check the scales on the right and fix them if needed
-5. Export with the buttons at the bottom right
+2. Drop a screenshot, paste one with Ctrl+V, press O, or click Add
+3. Click Extract when you are ready. Nothing runs before that
+4. Check the scales on the right and fix them if needed. The plot updates by itself
+5. Zoom with the slider or with Ctrl and the mouse wheel
+6. Export with the buttons at the bottom right
 
-Drop several files or a whole folder to make a Bode plot. You can also start with one of the three samples.
+Add several files or a whole folder, or tick two or more captures in the history, then click Extract Bode to make a Bode plot.
+
+## History
+
+Every capture you add stays in the history on the left, with its scales and its result. Click one to open it again. The history is saved in your browser, so it is still there after a refresh. It keeps your last 50 captures.
+
+Turn off Keep history at the bottom of the left panel to stop saving. Your saved captures are deleted right away, and the ones from this visit stay open until you close the tab.
+
+## Phone photos
+
+Tap the camera button to take a photo of the scope screen. Big photos are scaled down to 1920 px and turned the right way up. Graticule then checks the photo, and if it is blurry, tilted, too dark, too small or has glare, it tells you what to fix. You can retake the photo or use it anyway.
+
+A real screenshot from the scope always gives better results than a photo.
 
 ## Supported scopes
 
 | Scope | Support |
 | --- | --- |
-| Siglent SDS2000X Plus | Full |
-| Rigol DS1054Z | Full |
+| Siglent SDS2000X Plus | Native |
+| Siglent SDS1000X E | Native |
+| Rigol DS1054Z | Native |
+| Rigol DHO924 | Native |
+| Rohde & Schwarz RTB2004 | Native |
+| Tektronix DPO7104C | Native |
 | Anything else | Universal mode with a crop box |
+
+Native scopes are found by themselves. You can also pick one by hand in the Profile menu.
 
 In universal mode you drag the crop box onto the edge of the grid, then type the time scale and the volts per division.
 
@@ -48,11 +71,18 @@ Graticule never guesses what it cannot see. When a trace is clipped, hidden by a
 
 | Key | Action |
 | --- | --- |
-| O | Open a file |
+| O | Add images |
 | Ctrl+V | Paste a screenshot |
 | E | Go to exports |
 | T | Show or hide the 1:1 overlay |
+| Ctrl and wheel | Zoom the plot |
 | ? | Show or hide the shortcuts |
+
+## Offline
+
+Graticule works without internet. After your first visit the website keeps working offline, and you can install it like an app from your browser.
+
+You can also download `graticule-portable.html` from the latest release. It is one file that opens in any browser, with no install and no internet.
 
 ## Command line
 
@@ -86,6 +116,7 @@ npm install
 npm run dev
 npm test
 npm run build
+npm run build:portable
 ```
 
 Built with Vite and React. The engine in `src/core` has no browser or Node dependencies and runs in a Web Worker.

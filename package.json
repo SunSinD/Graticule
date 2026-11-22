@@ -18,6 +18,7 @@
     "test:e2e": "playwright test",
     "check:prose": "node scripts/check-prose.mjs",
     "verify:parity": "node scripts/verify-parity.mjs",
+    "build:portable": "node scripts/build-portable.mjs",
     "cli": "tsx src/cli/index.ts"
   },
   "dependencies": {

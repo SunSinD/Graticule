@@ -1,8 +1,12 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import type { CSSProperties } from 'react';
 import type { BodePoint, BodePointOverride, BodeResult, Locale } from '../../core/types';
 import { renderBodeSvg } from '../../core/export/svg';
 import { formatDb, formatDeg, formatHertz, formatVolts, parseNumber, reasonLabel } from '../i18n';
 import type { Dict } from '../i18n';
+import { svgRatio, useCtrlWheelZoom, ZoomControl } from './ZoomControl';
+
+const ZOOM_MAX = 250;
 
 type EditKey = 'frequencyHz' | 'vinVpp' | 'voutVpp' | 'gainDb' | 'phaseDeg';
 
@@ -74,6 +78,9 @@ function plainNumber(text: string): string {
 export function BodeView({ tx, locale, result, overrides, inspectedId, onEdit, onExclude, onInspect, onReset }: Props) {
   const svg = useMemo(() => renderBodeSvg(result, { locale, title: 'Bode' }), [result, locale]);
   const hasEdits = Object.keys(overrides).length > 0;
+  const [zoom, setZoom] = useState(100);
+  const viewport = useRef<HTMLDivElement>(null);
+  useCtrlWheelZoom(viewport, zoom, ZOOM_MAX, setZoom);
 
   const row = (p: BodePoint) => {
     const excluded = overrides[p.id]?.excluded === true;
@@ -130,7 +137,17 @@ export function BodeView({ tx, locale, result, overrides, inspectedId, onEdit, o
 
   return (
     <div className="bode">
-      <div className="paper" dangerouslySetInnerHTML={{ __html: svg }} />
+      <div className="toolbar">
+        <span className="grow" />
+        <ZoomControl tx={tx} value={zoom} max={ZOOM_MAX} onChange={setZoom} />
+      </div>
+      <div ref={viewport} className="viewport paper">
+        <div
+          className="canvas plot"
+          style={{ '--ar': svgRatio(svg, 4 / 3), '--z': zoom / 100 } as CSSProperties}
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
+      </div>
       <div className="toolbar">
         <span className="muted small grow">{tx.tableHint}</span>
         {hasEdits && (

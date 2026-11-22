@@ -6,6 +6,15 @@ export type ProfileChoice = ProfileId | 'auto';
 
 const CHANNELS: readonly ChannelId[] = ['C1', 'C2', 'C3', 'C4'];
 
+export const PROFILE_OPTIONS: readonly (readonly [ProfileId, string])[] = [
+  ['siglent-sds2000x-plus', 'Siglent SDS2000X Plus'],
+  ['siglent-sds1000x-e', 'Siglent SDS1000X-E'],
+  ['rigol-ds1054z', 'Rigol DS1054Z'],
+  ['rigol-dho924', 'Rigol DHO924'],
+  ['rohde-schwarz-rtb2004', 'Rohde & Schwarz RTB2004'],
+  ['tektronix-dpo7104c', 'Tektronix DPO7104C'],
+];
+
 interface ProfileProps {
   readonly tx: Dict;
   readonly choice: ProfileChoice;
@@ -25,11 +34,14 @@ export function ProfilePanel({ tx, choice, result, onChoice }: ProfileProps) {
           <span className="num muted">{Math.round(d.confidence * 100)}%</span>
         </p>
       )}
-      <select aria-label="Profile" value={choice} onChange={(e) => onChoice(e.target.value as ProfileChoice)}>
+      <select aria-label={tx.profile} value={choice} onChange={(e) => onChoice(e.target.value as ProfileChoice)}>
         <option value="auto">{tx.profileAuto}</option>
-        <option value="siglent-sds2000x-plus">Siglent SDS2000X Plus</option>
-        <option value="rigol-ds1054z">Rigol DS1054Z</option>
-        <option value="universal-fallback">Universal</option>
+        {PROFILE_OPTIONS.map(([id, name]) => (
+          <option key={id} value={id}>
+            {name}
+          </option>
+        ))}
+        <option value="universal-fallback">{tx.profileUniversal}</option>
       </select>
       {notes.map((n) => (
         <p key={n} className="note">

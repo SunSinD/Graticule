@@ -36,10 +36,29 @@ export function makeTimebase(metadata: ScopeMetadata, overrides: ExtractionOverr
 function markerYs(image: RgbaImage, detection: ProfileDetection, colors: readonly ChannelColor[]): (number | null)[] {
   const profile = getNativeProfile(detection.profileId);
   if (!profile) return [null, null, null, null];
-  const { x, y, width } = profile.zeroMarkerStrip;
-  const { bottom, inverted } = detection.grid;
-  const counts = CHANNELS.map(() => new Uint8Array(bottom - y + 1));
-  for (let row = y; row <= bottom; row++) {
+  const { x, y, width, height } = profile.zeroMarkerStrip;
+  const { bottom, centerY, inverted } = detection.grid;
+  const lastRow = profile.raster ? Math.min(bottom, y + height - 1) : bottom;
+  if (profile.id === 'rohde-schwarz-rtb2004') {
+    const tips = CHANNELS.map((): number[] => []);
+    for (let row = y; row <= lastRow; row++) {
+      const i = at(image, x + width - 1, row);
+      const channel = classifyPixel(image.data[i]!, image.data[i + 1]!, image.data[i + 2]!, colors, false);
+      if (channel >= 0) tips[channel]!.push(row);
+    }
+    return tips.map(rows => {
+      const ends = rows.slice(1).findIndex((row, index) => row - rows[index]! > 4);
+      const last = rows.at(-1);
+      if (last === undefined) return null;
+      const center = (from: number, to: number) => (from + to) / 2;
+      if (ends < 0) return center(rows[0]!, last);
+      const firstBadge = center(rows[0]!, rows[ends]!);
+      const lastBadge = center(rows[ends + 1]!, last);
+      return Math.abs(firstBadge - centerY) > Math.abs(lastBadge - centerY) ? firstBadge : lastBadge;
+    });
+  }
+  const counts = CHANNELS.map(() => new Uint16Array(Math.max(0, lastRow - y + 1)));
+  for (let row = y; row <= lastRow; row++) {
     for (let col = x; col < x + width; col++) {
       const i = at(image, col, row);
       const channel = classifyPixel(image.data[i]!, image.data[i + 1]!, image.data[i + 2]!, colors, inverted);
@@ -149,6 +168,41 @@ interface TraceColumns {
   readonly thickness: number;
 }
 
+function plotAnnotations(image: RgbaImage, detection: ProfileDetection, markers: readonly (number | null)[]): Uint8Array | null {
+  const { profileId, grid } = detection;
+  const { left, right, top, bottom, hLines } = grid;
+  if (profileId !== 'rigol-dho924' && profileId !== 'rohde-schwarz-rtb2004') return null;
+  const pixels = new Uint8Array(image.width * image.height);
+  const fill = (x1: number, y1: number, x2: number, y2: number) => {
+    for (let y = Math.max(top, y1); y <= Math.min(bottom, y2); y++) {
+      pixels.fill(OVERLAY, y * image.width + Math.max(left, x1), y * image.width + Math.min(right, x2) + 1);
+    }
+  };
+  if (profileId === 'rigol-dho924') {
+    for (const y of hLines.slice(1, -1)) fill(left + 8, Math.round(y) - 9, left + 36, Math.round(y) + 8);
+    const zero = markers[0];
+    if (zero != null) fill(left, Math.round(zero) - 13, left + 34, Math.round(zero) + 13);
+    return pixels;
+  }
+  for (const y of hLines.slice(1)) fill(left + 1, Math.round(y) - 18, left + 58, Math.round(y) - 4);
+  fill(left + 1, bottom - 18, right - 1, bottom - 4);
+  for (let x = left + 1; x < right; x++) {
+    const i = at(image, x, top + 2);
+    if (image.data[i] === 244 && image.data[i + 1] === 244 && image.data[i + 2] === 0) {
+      fill(x - 4, top, x + 4, top + 30);
+    }
+  }
+  for (let y = top; y < bottom; y++) {
+    let badge = 0;
+    for (let x = right - 40; x < right; x++) {
+      const i = at(image, x, y);
+      if (image.data[i] === 255 && image.data[i + 1] === 255 && image.data[i + 2] === 0) badge++;
+    }
+    if (badge >= 12) fill(right - 40, y - 3, right - 1, y + 3);
+  }
+  return pixels;
+}
+
 function nearbyObserved(clusters: TraceColumns['clusters'], x: number, limit: number): number | null {
   let before = x - 1;
   let after = x + 1;
@@ -174,6 +228,8 @@ export function extractTraces(image: RgbaImage, detection: ProfileDetection, met
   const grid = detection.grid;
   const colors = metadata.colors ?? colorsFor(detection.profileId);
   const markers = markerYs(image, detection, colors);
+  const annotations = plotAnnotations(image, detection, markers);
+  const plotMask = annotations ? { ...mask, pixels: mask.pixels.map((bits, index) => bits | annotations[index]!) } : mask;
   const native = getNativeProfile(detection.profileId);
   const inverted = native?.supportsInverted === true && grid.inverted;
   const active = CHANNELS.map((channel, i) => !metadata.unsupportedChannels?.has(channel)
@@ -185,7 +241,7 @@ export function extractTraces(image: RgbaImage, detection: ProfileDetection, met
     for (let y = grid.top; y <= grid.bottom; y++) {
       const pixel = y * image.width + x;
       const i = pixel * 4;
-      if (mask.pixels[pixel] || image.data[i + 3]! < 128) continue;
+      if (plotMask.pixels[pixel] || image.data[i + 3]! < 128) continue;
       const r = image.data[i]!;
       const g = image.data[i + 1]!;
       const b = image.data[i + 2]!;
@@ -226,7 +282,7 @@ export function extractTraces(image: RgbaImage, detection: ProfileDetection, met
         else status = 'ok';
       } else {
         const expected = nearbyObserved(trace.clusters, col, 52);
-        const maskBits = expected === null ? 0 : maskedAt(image, mask, grid, xPx, expected, tolerance + 1);
+        const maskBits = expected === null ? 0 : maskedAt(image, plotMask, grid, xPx, expected, tolerance + 1);
         if (maskBits & OVERLAY) status = 'masked_overlay';
         else if (maskBits & CURSOR) status = 'masked_cursor';
         else if (expected !== null && traces.some(other => {

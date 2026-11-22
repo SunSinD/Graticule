@@ -1,92 +1,108 @@
-import { FilePlus, FolderPlus } from 'lucide-react';
-import type { BodeResult } from '../../core/types';
-import type { LoadedFile } from '../files';
+import { Camera, FolderPlus, Plus, X } from 'lucide-react';
+import type { HistoryItem } from '../history';
 import type { Dict } from '../i18n';
-import { SAMPLE_IDS, sampleLabel } from './EmptyState';
-import type { SampleId } from './EmptyState';
-import type { AppMode } from './TopBar';
 
 interface Props {
   readonly tx: Dict;
-  readonly mode: AppMode;
-  readonly files: readonly LoadedFile[];
-  readonly bode: BodeResult | null;
-  readonly activeName: string | null;
-  readonly onAddFiles: () => void;
+  readonly items: readonly HistoryItem[];
+  readonly activeId: string | null;
+  readonly selected: ReadonlySet<string>;
+  readonly rejected: ReadonlySet<string>;
+  readonly keepHistory: boolean;
+  readonly onAdd: () => void;
   readonly onAddFolder: () => void;
-  readonly onSelect: (file: LoadedFile) => void;
-  readonly activeSample: SampleId | null;
-  readonly onSample: (id: SampleId) => void;
+  readonly onCamera: () => void;
+  readonly onOpen: (id: string) => void;
+  readonly onToggle: (id: string) => void;
+  readonly onRemove: (id: string) => void;
   readonly onClear: () => void;
+  readonly onKeepHistory: (keep: boolean) => void;
 }
 
-export function FilePanel({ tx, mode, files, bode, activeName, onAddFiles, onAddFolder, onSelect, activeSample, onSample, onClear }: Props) {
-  const statusFor = (name: string): boolean | null => {
-    if (!bode) return null;
-    const p = bode.points.find((pt) => pt.fileName === name);
-    return p ? p.accepted : null;
-  };
+function StateMark({ item, rejected, tx }: { item: HistoryItem; rejected: boolean; tx: Dict }) {
+  if (item.state === 'extracting') return <span className="muted small">{tx.stateExtracting}</span>;
+  if (item.state === 'error') return <span className="muted small">{tx.stateError}</span>;
+  if (rejected) return <span className="muted small">{tx.rejected}</span>;
   return (
-    <aside className="zone left" aria-label={tx.files}>
+    <span
+      className={item.state === 'extracted' ? 'dot on' : 'dot'}
+      title={item.state === 'extracted' ? tx.stateExtracted : tx.stateStaged}
+      aria-label={item.state === 'extracted' ? tx.stateExtracted : tx.stateStaged}
+    />
+  );
+}
+
+export function FilePanel(props: Props) {
+  const { tx, items, activeId, selected, rejected, keepHistory } = props;
+  return (
+    <aside className="zone left" aria-label={tx.history}>
       <section className="left-scroll">
+        <div className="add-bar">
+          <button type="button" className="btn grow" onClick={props.onAdd} title={tx.addTitle}>
+            <Plus size={16} aria-hidden="true" />
+            <span>{tx.add}</span>
+          </button>
+          <button type="button" className="btn icon" onClick={props.onAddFolder} aria-label={tx.addFolder} title={tx.addFolder}>
+            <FolderPlus size={16} aria-hidden="true" />
+          </button>
+          <button type="button" className="btn icon" onClick={props.onCamera} aria-label={tx.takePhoto} title={tx.takePhoto}>
+            <Camera size={16} aria-hidden="true" />
+          </button>
+        </div>
         <div className="section-head">
-          <h2>{tx.files}</h2>
-          {files.length > 0 && (
-            <button type="button" className="btn chip" onClick={onClear}>
+          <h2>{tx.history}</h2>
+          {items.length > 0 && (
+            <button type="button" className="btn chip" onClick={props.onClear}>
               {tx.clear}
             </button>
           )}
         </div>
-        {files.length > 0 && (
+        {items.length === 0 ? (
+          <p className="muted small">{tx.historyEmpty}</p>
+        ) : (
           <ul className="files">
-            {files.map((f) => {
-              const s = mode === 'bode' ? statusFor(f.name) : null;
+            {items.map((item) => {
+              const isSel = selected.has(item.id);
               return (
-                <li key={f.id}>
+                <li key={item.id} className={`file-item${activeId === item.id ? ' sel' : ''}${isSel ? ' checked' : ''}`}>
+                  <input
+                    type="checkbox"
+                    checked={isSel}
+                    aria-label={`${tx.selectForBode} ${item.name}`}
+                    title={tx.selectForBode}
+                    onChange={() => props.onToggle(item.id)}
+                  />
                   <button
                     type="button"
-                    className={`file-row${activeName === f.name ? ' sel' : ''}`}
-                    onClick={() => onSelect(f)}
-                    title={s === null ? f.name : `${f.name} ${s ? tx.accepted : tx.rejected}`}
+                    className="file-row"
+                    aria-current={activeId === item.id ? 'true' : undefined}
+                    onClick={() => props.onOpen(item.id)}
+                    title={item.name}
                   >
-                    {s !== null && <span className={s ? 'dot on' : 'dot'} aria-hidden="true" />}
-                    <span className="name">{f.name}</span>
-                    {s === false && <span className="muted small">{tx.rejected}</span>}
+                    <span className="name">{item.name}</span>
+                    <StateMark item={item} rejected={rejected.has(item.id)} tx={tx} />
+                  </button>
+                  <button
+                    type="button"
+                    className="btn icon ghost remove"
+                    aria-label={`${tx.remove} ${item.name}`}
+                    title={tx.remove}
+                    onClick={() => props.onRemove(item.id)}
+                  >
+                    <X size={14} aria-hidden="true" />
                   </button>
                 </li>
               );
             })}
           </ul>
         )}
-        <div className="stack">
-          <button type="button" className="btn" onClick={onAddFiles}>
-            <FilePlus size={16} aria-hidden="true" />
-            <span>{tx.addFiles}</span>
-          </button>
-          <button type="button" className="btn" onClick={onAddFolder}>
-            <FolderPlus size={16} aria-hidden="true" />
-            <span>{tx.addFolder}</span>
-          </button>
-        </div>
       </section>
-      {mode !== 'empty' && (
-        <section className="samples">
-          <h2>{tx.samples}</h2>
-          <div className="sample-list">
-            {SAMPLE_IDS.map((id) => (
-              <button
-                key={id}
-                type="button"
-                className={`sample-item${activeSample === id ? ' sel' : ''}`}
-                aria-current={activeSample === id ? 'true' : undefined}
-                onClick={() => onSample(id)}
-              >
-                {sampleLabel(tx, id)}
-              </button>
-            ))}
-          </div>
-        </section>
-      )}
+      <section className="keep-history">
+        <label className="inline" title={tx.keepHistoryHint}>
+          <input type="checkbox" checked={keepHistory} onChange={(e) => props.onKeepHistory(e.target.checked)} />
+          <span>{tx.keepHistory}</span>
+        </label>
+      </section>
     </aside>
   );
 }

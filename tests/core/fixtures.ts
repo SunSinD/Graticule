@@ -29,5 +29,5 @@ export function paint(image: RgbaImage, area: Rect, color: Rgb): void {
 }
 
 export function sample(name: string): Uint8Array {
-  return readFileSync(fileURLToPath(new URL(`../../public/samples/${name}`, import.meta.url)));
+  return readFileSync(fileURLToPath(new URL(`../fixtures/samples/${name}`, import.meta.url)));
 }

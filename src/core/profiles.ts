@@ -2,15 +2,30 @@ import data from './profiles.json' with { type: 'json' };
 import { matchBitmap, readBitmap } from './font/matcher.js';
 import { compactBadgeGlyphs, logo as siglentLogo } from './font/siglentFont.js';
 import { logo as rigolLogo } from './font/rigolFont.js';
+import { rasterFonts } from './font/rasterFonts.js';
 import { at, CHANNELS, channelColor, hueDegrees, pixelMatches } from './pixels.js';
 import type { ChannelColor, PixelPredicate } from './pixels.js';
 import type { ChannelId, ExtractionOverrides, GridGeometry, LayoutVariant, ProfileDetection, ProfileId, Rect, RgbaImage } from './types.js';
 
 interface NativeVariant {
   readonly id: Exclude<LayoutVariant, 'manual'>;
+  readonly right?: number;
   readonly bottom: number;
   readonly pxPerVDiv: number;
   readonly measureBar: (Rect & { readonly rows: number }) | null;
+}
+
+type Rgb = readonly [number, number, number];
+
+interface RasterAnchors {
+  readonly logoInk: Rgb;
+  readonly headerInk: Rgb;
+  readonly footerInk: Rgb;
+  readonly topEdgeInk: Rgb;
+  readonly bottomEdgeInk: Rgb;
+  readonly sideEdgeInk: Rgb;
+  readonly lineInk: readonly Rgb[];
+  readonly lineFill: number;
 }
 
 interface NativeProfile {
@@ -29,20 +44,45 @@ interface NativeProfile {
   readonly topFrequencyRoi: Rect | null;
   readonly timebaseCard: { readonly box: Rect; readonly scaleRoi: Rect; readonly delayRoi: Rect };
   readonly channelCardSlots: readonly (Rect & { readonly slot: number })[];
-  readonly channels: Readonly<Record<ChannelId, ChannelColor>>;
+  readonly channels: Readonly<Partial<Record<ChannelId, ChannelColor>>>;
+  readonly raster?: RasterAnchors;
+}
+
+const profileVariants = {
+  'siglent-sds2000x-plus': ['no-measure', 'measure-1row', 'measure-2row'],
+  'rigol-ds1054z': ['standard', 'measure-1row', 'fft'],
+  'siglent-sds1000x-e': ['standard'],
+  'rigol-dho924': ['fft'],
+  'rohde-schwarz-rtb2004': ['standard', 'measure-1row'],
+  'tektronix-dpo7104c': ['standard'],
+} satisfies Record<NativeProfile['id'], readonly NativeVariant['id'][]>;
+
+type RasterProfileId = keyof typeof rasterFonts;
+
+export function isRasterProfile(id: ProfileId): id is RasterProfileId {
+  return Object.hasOwn(rasterFonts, id);
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const int = (v: unknown): v is number => finite(v) && Number.isInteger(v);
 const positive = (v: unknown): v is number => finite(v) && v > 0;
+const isRgb = (v: unknown): v is Rgb => Array.isArray(v) && v.length === 3 && v.every(level => int(level) && level >= 0 && level <= 255);
+const isNativeId = (id: unknown): id is NativeProfile['id'] => typeof id === 'string' && Object.hasOwn(profileVariants, id);
 
 export function validateProfiles(value: unknown): readonly NativeProfile[] {
   function validProfile(p: unknown): p is NativeProfile {
-    if (!isRecord(p) || (p.id !== 'siglent-sds2000x-plus' && p.id !== 'rigol-ds1054z')
+    if (!isRecord(p) || !isNativeId(p.id)
         || typeof p.name !== 'string' || !p.name.trim() || !int(p.width) || p.width < 1
         || !int(p.height) || p.height < 1 || typeof p.supportsInverted !== 'boolean') return false;
-    const { width, height } = p;
+    const { width, height, raster } = p;
+    const measuredRaster = isRasterProfile(p.id);
+    if (measuredRaster) {
+      if (!isRecord(raster) || !isRgb(raster.logoInk) || !isRgb(raster.headerInk) || !isRgb(raster.footerInk)
+          || !isRgb(raster.topEdgeInk) || !isRgb(raster.bottomEdgeInk) || !isRgb(raster.sideEdgeInk)
+          || !Array.isArray(raster.lineInk) || !raster.lineInk.length || !raster.lineInk.every(isRgb)
+          || !positive(raster.lineFill) || raster.lineFill > 1 || p.supportsInverted) return false;
+    } else if (raster !== undefined) return false;
     function rect(r: unknown): r is Rect {
       return isRecord(r) && int(r.x) && int(r.y) && int(r.width) && int(r.height)
         && r.x >= 0 && r.y >= 0 && r.width > 0 && r.height > 0
@@ -52,29 +92,40 @@ export function validateProfiles(value: unknown): readonly NativeProfile[] {
     if (!isRecord(anchors) || !rect(anchors.logoRoi) || !rect(anchors.topBarRoi) || !rect(anchors.bottomBarRoi)
         || !rect(p.zeroMarkerStrip) || (p.topFrequencyRoi !== null && !rect(p.topFrequencyRoi))
         || !isRecord(t) || !rect(t.box) || !rect(t.scaleRoi) || !rect(t.delayRoi)
-        || !isRecord(channels) || !Array.isArray(p.channelCardSlots) || p.channelCardSlots.length !== 4
-        || !p.channelCardSlots.every((s: unknown, i) => isRecord(s) && s.slot === i && rect(s))) return false;
+        || !isRecord(channels) || !Array.isArray(p.channelCardSlots)
+        || (!measuredRaster && p.channelCardSlots.length !== 4)
+        || !p.channelCardSlots.every((s: unknown, i) => isRecord(s) && int(s.slot) && s.slot >= 0 && s.slot < CHANNELS.length
+          && (measuredRaster || s.slot === i) && rect(s))
+        || new Set(p.channelCardSlots.map(s => s.slot)).size !== p.channelCardSlots.length) return false;
+    if (isRasterProfile(p.id)) {
+      const { logo } = rasterFonts[p.id];
+      const { width: logoWidth, height: logoHeight } = anchors.logoRoi;
+      if (logo.length !== logoHeight || logo.some(row => row.length !== logoWidth)) return false;
+    }
     if (!isRecord(g) || !int(g.left) || !int(g.right) || !int(g.top) || g.left < 0 || g.right <= g.left
         || g.right >= width || g.top < 0 || g.top >= height || !int(g.hDivs) || g.hDivs < 1
         || !int(g.vDivs) || g.vDivs < 1 || !positive(g.pxPerHDiv)
         || g.pxPerHDiv * g.hDivs !== g.right - g.left || !Array.isArray(g.variants)) return false;
-    const variants = p.id === 'rigol-ds1054z' ? ['standard', 'measure-1row', 'fft'] : ['no-measure', 'measure-1row', 'measure-2row'];
+    const variants = profileVariants[p.id];
     const { top, vDivs } = g;
     if (g.variants.length !== variants.length || !g.variants.every((v: unknown, i) =>
       isRecord(v) && v.id === variants[i] && int(v.bottom) && v.bottom > top && v.bottom < height
       && positive(v.pxPerVDiv) && v.pxPerVDiv * vDivs === v.bottom - top
-      && (v.id === 'no-measure' || v.id === 'fft' ? v.measureBar === null
+      && (v.right === undefined || (measuredRaster && int(v.right) && int(g.left) && int(g.right) && v.right > g.left && v.right < g.right))
+      && (v.id === 'no-measure' || v.id === 'fft' || (measuredRaster && v.id === 'standard') ? v.measureBar === null
         : isRecord(v.measureBar) && v.measureBar.rows === (v.id === 'measure-2row' ? 2 : 1) && rect(v.measureBar)))) return false;
-    return CHANNELS.every(id => {
+    const coveredSlots = new Set(p.channelCardSlots.map(slot => slot.slot));
+    return CHANNELS.every((id, index) => {
       const c = channels[id];
-      return isRecord(c) && Array.isArray(c.rgb) && c.rgb.length === 3
-        && c.rgb.every((level: unknown) => int(level) && level >= 0 && level <= 255)
+      if (measuredRaster && !coveredSlots.has(index)) return c === undefined;
+      return isRecord(c) && isRgb(c.rgb)
         && finite(c.hueMin) && finite(c.hueMax) && c.hueMin >= 0 && c.hueMax <= 360 && c.hueMin <= c.hueMax
         && positive(c.satMin) && c.satMin <= 1 && positive(c.valMin) && c.valMin <= 1;
     });
   }
-  if (!isRecord(value) || value.version !== 1 || !Array.isArray(value.profiles) || value.profiles.length !== 2
-      || !value.profiles.every(validProfile) || new Set(value.profiles.map(p => p.id)).size !== 2) {
+  const count = Object.keys(profileVariants).length;
+  if (!isRecord(value) || value.version !== 1 || !Array.isArray(value.profiles) || value.profiles.length !== count
+      || !value.profiles.every(validProfile) || new Set(value.profiles.map(p => p.id)).size !== count) {
     throw new Error('Invalid oscilloscope profile configuration');
   }
   return value.profiles;
@@ -82,7 +133,15 @@ export function validateProfiles(value: unknown): readonly NativeProfile[] {
 
 const profiles = validateProfiles(data);
 export const getNativeProfile = (id: ProfileId) => profiles.find(p => p.id === id);
-export const colorsFor = (id: ProfileId) => CHANNELS.map(channel => (getNativeProfile(id) ?? profiles[0]!).channels[channel]);
+const unmeasuredColor: ChannelColor = { rgb: [0, 0, 0], hueMin: 0, hueMax: 360, satMin: 1, valMin: 2 };
+export function colorsFor(id: ProfileId): ChannelColor[] {
+  const { channels } = getNativeProfile(id) ?? profiles[0]!;
+  return CHANNELS.map(channel => channels[channel] ?? unmeasuredColor);
+}
+
+function rgbNear([r, g, b]: Rgb, tolerance = 6): PixelPredicate {
+  return (red, green, blue) => Math.abs(red - r) <= tolerance && Math.abs(green - g) <= tolerance && Math.abs(blue - b) <= tolerance;
+}
 
 export function makeGrid(left: number, top: number, right: number, bottom: number, hDivs: number, vDivs: number,
   layoutVariant: LayoutVariant, inverted: boolean, fitErrorPx = 0): GridGeometry {
@@ -137,10 +196,43 @@ export function hasCompactSiglentHeader(image: RgbaImage, inverted: boolean): bo
 
 function logoMatch(image: RgbaImage, p: NativeProfile, inverted: boolean): boolean {
   const roi = p.anchors.logoRoi;
+  if (p.raster && isRasterProfile(p.id)) return logoOverlap(image, roi, rasterFonts[p.id].logo, rgbNear(p.raster.logoInk, 36)) >= 0.82;
   if (p.id === 'siglent-sds2000x-plus') return logoOverlap(image, roi, siglentLogo, siglentLogoInk(inverted)) >= 0.78;
   return logoOverlap(image, roi, rigolLogo, (r, g, b) => Math.min(r, g) - b >= 52) >= 0.78
     || logoOverlap(image, { ...roi, x: roi.x - 1, y: roi.y + 1 }, rigolLogo,
       (r, g, b) => b - Math.max(r, g) >= 65) >= 0.65;
+}
+
+function findRasterPlot(image: RgbaImage, profile: NativeProfile, raster: RasterAnchors): GridGeometry | null {
+  const { left, right, top, hDivs, vDivs, variants } = profile.graticule;
+  const topEdge = rgbNear(raster.topEdgeInk);
+  const bottomEdge = rgbNear(raster.bottomEdgeInk);
+  const sideEdge = rgbNear(raster.sideEdgeInk);
+  const lineColors = raster.lineInk.map(ink => rgbNear(ink, 2));
+  const lineInk: PixelPredicate = (r, g, b) => lineColors.some(ink => ink(r, g, b));
+  for (const variant of variants) {
+    const visibleRight = variant.right ?? right;
+    const { bottom } = variant;
+    const plan = makeGrid(left, top, right, bottom, hDivs, vDivs, variant.id, false);
+    const span = (y: number, ink: PixelPredicate) => proportion(image, { x: left + 4, y, width: visibleRight - left - 7, height: 1 }, ink);
+    const column = (x: number, ink: PixelPredicate) => proportion(image, { x, y: top + 4, width: 1, height: bottom - top - 7 }, ink);
+    if (span(top, topEdge) < 0.70 || span(bottom, bottomEdge) < 0.70
+        || column(left, sideEdge) < 0.62 || column(visibleRight, sideEdge) < 0.62) continue;
+
+    const rows = plan.hLines.slice(1, -1);
+    const cols = plan.vLines.slice(1, -1).filter(x => x < visibleRight);
+    const fit = (lines: readonly number[], hasInk: (line: number) => number) => lines.flatMap(line => {
+      const nominal = Math.round(line);
+      const found = [nominal, nominal - 1, nominal + 1].find(candidate => hasInk(candidate) >= raster.lineFill);
+      return found === undefined ? [] : [Math.abs(found - line)];
+    });
+    const errors = fit(rows, y => span(y, lineInk));
+    if (errors.length < rows.length - 2 || fit(cols, x => column(x, lineInk)).length < cols.length - 2) continue;
+
+    return { ...plan, right: visibleRight, width: visibleRight - left,
+      vLines: plan.vLines.filter(x => x <= visibleRight), fitErrorPx: errors.reduce((sum, error) => sum + error, 0) / errors.length };
+  }
+  return null;
 }
 
 function findPlot(image: RgbaImage, p: NativeProfile, inverted: boolean, compact: boolean): GridGeometry | null {
@@ -238,6 +330,13 @@ export function findNativeCards(image: RgbaImage, profile: NativeProfile, invert
   const analog = new Map<ChannelId, Rect>();
   let digital = false;
   const colors = colorsFor(profile.id);
+  if (profile.raster) {
+    for (const slot of profile.channelCardSlots) {
+      const active = proportion(image, slot, (r, g, b) => channelColor(r, g, b, colors) === slot.slot);
+      if (active > 0.12) analog.set(CHANNELS[slot.slot]!, slot);
+    }
+    return { analog, digital };
+  }
   for (const [i, slot] of profile.channelCardSlots.entries()) {
     if (profile.id === 'rigol-ds1054z') {
       const color = colors[i]!;
@@ -320,9 +419,9 @@ export function detectProfile(image: RgbaImage, overrides: ExtractionOverrides =
       if (!compact && !logoMatch(image, p, inverted)) continue;
       const barBackground: PixelPredicate = (r, g, b) => siglent
         ? (inverted ? grayscale(r, g, b, 180, 245) : grayscale(r, g, b, 12, 74)) : luminance(r, g, b) < 46;
-      if (proportion(image, p.anchors.topBarRoi, barBackground, 4) < 0.5
-          || proportion(image, p.anchors.bottomBarRoi, barBackground, 4) < 0.5) continue;
-      const grid = findPlot(image, p, inverted, compact);
+      if (proportion(image, p.anchors.topBarRoi, p.raster ? rgbNear(p.raster.headerInk) : barBackground, 4) < 0.5
+          || proportion(image, p.anchors.bottomBarRoi, p.raster ? rgbNear(p.raster.footerInk) : barBackground, 4) < 0.5) continue;
+      const grid = p.raster ? findRasterPlot(image, p, p.raster) : findPlot(image, p, inverted, compact);
       if (!grid) continue;
       const cards = findNativeCards(image, p, inverted, compact);
       const digitalOnly = cards.digital && !cards.analog.size;

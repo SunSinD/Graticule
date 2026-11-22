@@ -1,12 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { Crop } from 'lucide-react';
 import type { ExtractionOverrides, ExtractionResult, Locale, Rect } from '../../core/types';
 import { renderOverlaySvg, renderWaveformSvg } from '../../core/export/svg';
 import type { Dict } from '../i18n';
 import { CropBox } from './CropBox';
+import { svgRatio, useCtrlWheelZoom, ZoomControl } from './ZoomControl';
 
 export type CaptureMode = 'original' | 'clean';
+
+const ZOOM_MAX = 300;
 
 interface Props {
   readonly tx: Dict;
@@ -14,11 +17,13 @@ interface Props {
   readonly url: string;
   readonly fileName: string;
   readonly result: ExtractionResult | null;
+  readonly extracting: boolean;
   readonly view: CaptureMode;
   readonly overlay: boolean;
   readonly cropOpen: boolean;
   readonly canCrop: boolean;
   readonly overrides: ExtractionOverrides;
+  readonly onExtract: (() => void) | null;
   readonly onView: (view: CaptureMode) => void;
   readonly onOverlay: () => void;
   readonly onCropOpen: (open: boolean) => void;
@@ -45,13 +50,16 @@ function intOr(text: string, fallback: number): number {
 }
 
 export function CaptureView(props: Props) {
-  const { tx, locale, url, fileName, result, view, overlay, cropOpen, canCrop, overrides } = props;
+  const { tx, locale, url, fileName, result, extracting, view, overlay, cropOpen, canCrop, overrides, onExtract } = props;
   const [size, setSize] = useState<Size | null>(
     result ? { width: result.imageWidth, height: result.imageHeight } : null,
   );
   const [rect, setRect] = useState<Rect | null>(null);
   const [hText, setHText] = useState('10');
   const [vText, setVText] = useState('8');
+  const [zoom, setZoom] = useState(100);
+  const viewport = useRef<HTMLDivElement>(null);
+  useCtrlWheelZoom(viewport, zoom, ZOOM_MAX, setZoom);
 
   useEffect(() => {
     if (result) setSize({ width: result.imageWidth, height: result.imageHeight });
@@ -75,12 +83,19 @@ export function CaptureView(props: Props) {
 
   const showClean = view === 'clean' && !cropOpen && result !== null;
   const ratio = size && size.width > 0 && size.height > 0 ? size.width / size.height : 5 / 3;
+  const cleanRatio = svgRatio(cleanSvg, 5 / 3);
   const hDivs = intOr(hText, 10);
   const vDivs = intOr(vText, 8);
+  const z = zoom / 100;
 
   return (
     <div className="capture">
       <div className="toolbar">
+        {onExtract && !result && (
+          <button type="button" className="btn primary" disabled={extracting} onClick={onExtract}>
+            {extracting ? tx.working : tx.extract}
+          </button>
+        )}
         <div className="seg" role="group" aria-label={tx.cleanPlot}>
           <button type="button" className="btn" aria-pressed={showClean} disabled={!result} onClick={() => props.onView('clean')}>
             {tx.cleanPlot}
@@ -106,6 +121,8 @@ export function CaptureView(props: Props) {
             <span>{tx.crop}</span>
           </button>
         )}
+        <span className="grow" />
+        <ZoomControl tx={tx} value={zoom} max={ZOOM_MAX} onChange={setZoom} />
       </div>
 
       {cropOpen && (
@@ -133,11 +150,15 @@ export function CaptureView(props: Props) {
         </div>
       )}
 
-      {showClean ? (
-        <div className="paper" dangerouslySetInnerHTML={{ __html: cleanSvg }} />
-      ) : (
-        <div className="stage-wrap">
-          <div className="stage" style={{ '--ar': ratio } as CSSProperties}>
+      <div ref={viewport} className={`viewport${showClean ? ' paper' : ' stage-wrap'}`}>
+        {showClean ? (
+          <div
+            className="canvas plot"
+            style={{ '--ar': cleanRatio, '--z': z } as CSSProperties}
+            dangerouslySetInnerHTML={{ __html: cleanSvg }}
+          />
+        ) : (
+          <div className="canvas stage" style={{ '--ar': ratio, '--z': z } as CSSProperties}>
             <img
               src={url}
               alt={fileName}
@@ -152,8 +173,8 @@ export function CaptureView(props: Props) {
               <CropBox rect={rect} imageWidth={size.width} imageHeight={size.height} hDivs={hDivs} vDivs={vDivs} onChange={setRect} />
             )}
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

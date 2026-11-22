@@ -24,10 +24,10 @@ const pipelineMod = await import(pathToFileURL(resolve(root, 'dist-cli/core/pipe
 const csvMod = await import(pathToFileURL(resolve(root, 'dist-cli/core/export/csv.js')).href);
 
 const samples = [
-  'public/samples/sine_schmitt.png',
-  'public/samples/zener_clip.png',
-  'public/samples/sweep_01.png',
-  'public/samples/sweep_05.png',
+  'tests/fixtures/samples/sine_schmitt.png',
+  'tests/fixtures/samples/zener_clip.png',
+  'tests/fixtures/samples/sweep_01.png',
+  'tests/fixtures/samples/sweep_05.png',
 ];
 
 for (const sample of samples) {
@@ -44,7 +44,7 @@ for (const sample of samples) {
 }
 
 // Verify Bode batch CLI vs direct core parity on the 10-capture sweep
-const sweepDir = resolve(root, 'public/samples');
+const sweepDir = resolve(root, 'tests/fixtures/samples');
 const sweepFiles = Array.from({ length: 10 }, (_, i) => `sweep_${String(i + 1).padStart(2, '0')}.png`);
 const sweepInputs = await Promise.all(
   sweepFiles.map(async (fileName) => ({

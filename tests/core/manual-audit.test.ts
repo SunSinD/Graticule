@@ -44,7 +44,7 @@ function relError(actual: number, expected: number): number {
 
 describe('independent manual graticule audit agreement (<= 3%)', () => {
   it('matches sine_schmitt.png manual graticule values within 3%', () => {
-    const bytes = new Uint8Array(readFileSync(resolve(root, 'public/samples/sine_schmitt.png')));
+    const bytes = new Uint8Array(readFileSync(resolve(root, 'tests/fixtures/samples/sine_schmitt.png')));
     const res = analyzePngBytes(bytes, 'sine_schmitt.png');
     for (const ch of ['C1', 'C2'] as const) {
       const m = res.measurements.find((x) => x.channel === ch);
@@ -59,7 +59,7 @@ describe('independent manual graticule audit agreement (<= 3%)', () => {
   });
 
   it('matches zener_clip.png manual graticule values within 3%', () => {
-    const bytes = new Uint8Array(readFileSync(resolve(root, 'public/samples/zener_clip.png')));
+    const bytes = new Uint8Array(readFileSync(resolve(root, 'tests/fixtures/samples/zener_clip.png')));
     const res = analyzePngBytes(bytes, 'zener_clip.png');
     const c1 = res.measurements.find((x) => x.channel === 'C1');
     const c2 = res.measurements.find((x) => x.channel === 'C2');
@@ -73,7 +73,7 @@ describe('independent manual graticule audit agreement (<= 3%)', () => {
   it('matches all 10 sweep captures gain, phase, passband, and -3 dB cutoff within 3%', () => {
     const inputs = audit.bodeSweep.points.map((p) => ({
       fileName: p.fileName,
-      bytes: new Uint8Array(readFileSync(resolve(root, 'public/samples', p.fileName))),
+      bytes: new Uint8Array(readFileSync(resolve(root, 'tests/fixtures/samples', p.fileName))),
     }));
     const bode = analyzeBodeBatch(inputs);
     expect(bode.acceptedCount).toBe(10);

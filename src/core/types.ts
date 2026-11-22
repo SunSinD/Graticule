@@ -5,7 +5,8 @@ export interface RgbaImage {
   readonly data: Uint8ClampedArray;
 }
 
-export type ProfileId = 'siglent-sds2000x-plus' | 'rigol-ds1054z' | 'universal-fallback';
+export type ProfileId = 'siglent-sds2000x-plus' | 'rigol-ds1054z' | 'siglent-sds1000x-e'
+  | 'rigol-dho924' | 'rohde-schwarz-rtb2004' | 'tektronix-dpo7104c' | 'universal-fallback';
 
 export type ChannelId = 'C1' | 'C2' | 'C3' | 'C4';
 

@@ -1,6 +1,7 @@
 node_modules/
 dist/
 dist-cli/
+dist-portable/
 playwright-report/
 test-results/
 .DS_Store
