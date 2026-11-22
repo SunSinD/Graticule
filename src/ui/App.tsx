@@ -96,7 +96,8 @@ export function App() {
 
   const [overrides, setOverrides] = useState<ExtractionOverrides>({});
   const [single, setSingle] = useState<ExtractionResult | null>(null);
-  const [view, setView] = useState<CaptureMode>('original');
+  const [view, setView] = useState<CaptureMode>('clean');
+  const [activeSample, setActiveSample] = useState<SampleId | null>(null);
   const [overlay, setOverlay] = useState(false);
   const [cropOpen, setCropOpen] = useState(false);
 
@@ -208,8 +209,20 @@ export function App() {
     setInspectedId(null);
     setOverlay(false);
     setCropOpen(false);
-    setView('original');
+    setView('clean');
     setError(null);
+  };
+
+  const clearFiles = (): void => {
+    reqId.current++;
+    releaseFiles(filesRef.current);
+    filesRef.current = [];
+    resetView();
+    setFiles([]);
+    setActiveSample(null);
+    setProfile('auto');
+    setBusy(false);
+    setMode('empty');
   };
 
   const loadFiles = useCallback(async (list: readonly LoadedFile[]) => {
@@ -228,11 +241,26 @@ export function App() {
         if (raw.length > 0) setError(tx.unsupportedFile);
         return;
       }
+      const id = ++reqId.current;
       setBusy(true);
+      const seen = new Map<string, number>();
+      const uniqueName = (rawName: string): string => {
+        const count = seen.get(rawName) ?? 0;
+        seen.set(rawName, count + 1);
+        if (count === 0) return rawName;
+        const dot = rawName.lastIndexOf('.');
+        return dot > 0 ? `${rawName.slice(0, dot)} (${count + 1})${rawName.slice(dot)}` : `${rawName} (${count + 1})`;
+      };
       try {
-        const loaded = await Promise.all(images.map((f) => loadFile(f, f.name)));
+        const loaded = await Promise.all(images.map((f) => loadFile(f, uniqueName(f.name))));
+        if (id !== reqId.current) {
+          releaseFiles(loaded);
+          return;
+        }
         await loadFiles(loaded);
+        setActiveSample(null);
       } catch (e) {
+        if (id !== reqId.current) return;
         setError(message(e));
         setBusy(false);
       }
@@ -242,11 +270,18 @@ export function App() {
 
   const loadSample = useCallback(
     async (id: SampleId) => {
+      const req = ++reqId.current;
       setBusy(true);
       try {
         const loaded = await Promise.all(SAMPLE_FILES[id].map((n) => fetchSample(n)));
+        if (req !== reqId.current) {
+          releaseFiles(loaded);
+          return;
+        }
         await loadFiles(loaded);
+        setActiveSample(id);
       } catch (e) {
+        if (req !== reqId.current) return;
         setError(message(e));
         setBusy(false);
       }
@@ -412,10 +447,12 @@ export function App() {
           const p = bode.points.find((pt) => pt.fileName === f.name);
           if (p) setInspectedId(p.id);
         }}
+        activeSample={activeSample}
         onSample={(id) => void loadSample(id)}
+        onClear={clearFiles}
       />
 
-      <main className="zone center">
+      <main className={`zone center${showCapture ? ' fit' : ''}`}>
         {mode === 'empty' && !busy && <EmptyState tx={tx} onSample={(id) => void loadSample(id)} onOpen={() => openPicker(false)} />}
         {mode === 'empty' && busy && <p className="muted center-msg">{tx.working}</p>}
 
@@ -505,23 +542,25 @@ export function App() {
       </main>
 
       <aside className="zone right" aria-label={tx.profile}>
-        <ProfilePanel tx={tx} choice={profile} result={mode === 'bode' ? inspected?.extraction ?? null : single} onChoice={setProfile} />
-        {mode === 'bode' && (
-          <BodeSummary
-            tx={tx}
-            locale={locale}
-            result={bode}
-            gate={gate}
-            onGate={(g) => {
-              setGate(g);
-              recompute(g, pointOverrides);
-            }}
-          />
-        )}
-        {mode !== 'bode' && (
-          <ScaleControls tx={tx} locale={locale} result={single} overrides={overrides} disabled={busy && !single} onOverrides={setOverrides} />
-        )}
-        {(mode !== 'bode' || inspected) && <MeasurementsPanel tx={tx} locale={locale} result={capture} />}
+        <div className="right-scroll">
+          <ProfilePanel tx={tx} choice={profile} result={mode === 'bode' ? inspected?.extraction ?? null : single} onChoice={setProfile} />
+          {mode === 'bode' && (
+            <BodeSummary
+              tx={tx}
+              locale={locale}
+              result={bode}
+              gate={gate}
+              onGate={(g) => {
+                setGate(g);
+                recompute(g, pointOverrides);
+              }}
+            />
+          )}
+          {mode !== 'bode' && (
+            <ScaleControls tx={tx} locale={locale} result={single} overrides={overrides} disabled={busy && !single} onOverrides={setOverrides} />
+          )}
+          {(mode !== 'bode' || inspected) && <MeasurementsPanel tx={tx} locale={locale} result={capture} />}
+        </div>
         <ExportPanel
           ref={exportsRef}
           tx={tx}

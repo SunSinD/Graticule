@@ -1,9 +1,9 @@
 import { matchBitmap, parseQuantity, readBitmap } from './font/matcher.js';
-import { glyphs as siglentFont, labels as siglentLabels } from './font/siglentFont.js';
+import { compactGlyphs, glyphs as siglentFont, labels as siglentLabels } from './font/siglentFont.js';
 import { glyphs as rigolFont } from './font/rigolFont.js';
 import { CHANNELS } from './pixels.js';
-import { findNativeCards, getNativeProfile } from './profiles.js';
-import type { PixelPredicate } from './pixels.js';
+import { findNativeCards, getNativeProfile, hasCompactSiglentHeader, rigolCardInk, rigolScaleRoi } from './profiles.js';
+import type { ChannelColor, PixelPredicate } from './pixels.js';
 import type { ChannelId, ChannelSettings, ProfileDetection, Rect, RgbaImage, ScopeMeasureReading } from './types.js';
 
 interface CardReading {
@@ -23,6 +23,8 @@ export interface ScopeMetadata {
   readonly topFrequencyHz: number | null;
   readonly topFrequencyRaw: string | null;
   readonly scopeReadings: readonly ScopeMeasureReading[];
+  readonly colors?: readonly ChannelColor[];
+  readonly unsupportedChannels?: ReadonlySet<ChannelId>;
 }
 
 const measureMetrics: Readonly<Record<string, ScopeMeasureReading['metric']>> = {
@@ -31,7 +33,7 @@ const measureMetrics: Readonly<Record<string, ScopeMeasureReading['metric']>> = 
 };
 
 const color: PixelPredicate = (r, g, b) => Math.max(r, g, b) - Math.min(r, g, b) > 85;
-const rigolWhite: PixelPredicate = (r, g, b) => r === 248 && g === 252 && b === 248;
+const rigolWhite: PixelPredicate = (r, g, b) => r >= 235 && g >= 240 && b >= 235;
 const box = (x: number, y: number, width: number, height: number): Rect => ({ x, y, width, height });
 
 function parseScale(text: string | null, unit: 'V' | 's'): number | null {
@@ -68,20 +70,35 @@ export function readScopeMetadata(image: RgbaImage, detection: ProfileDetection)
   if (!profile) {
     return { cards, secPerDiv: null, triggerOffsetSec: null, rawTimebase: null, topFrequencyHz: null, topFrequencyRaw: null, scopeReadings: [] };
   }
-  const native = findNativeCards(image, profile);
   const { layoutVariant, inverted } = detection.grid;
   const siglent = profile.id === 'siglent-sds2000x-plus';
+  const compact = siglent && hasCompactSiglentHeader(image, inverted);
+  const native = findNativeCards(image, profile, inverted, compact);
+  const unsupportedChannels = new Set<ChannelId>();
   const ink: PixelPredicate = siglent
-    ? (r, g, b) => inverted ? Math.max(r, g, b) < 5 : Math.min(r, g, b) > 249
+    ? (r, g, b) => inverted ? 255 - Math.max(r, g, b) >= (compact ? 158 : 250)
+      : Math.min(r, g, b) >= (compact ? 158 : 250)
     : rigolWhite;
-  const font = siglent ? siglentFont : rigolFont;
+  const font = compact ? compactGlyphs : siglent ? siglentFont : rigolFont;
   const read = (area: Rect, foreground: PixelPredicate = ink) => matchBitmap(readBitmap(image, area, foreground), font) || null;
   for (const [channel, slot] of native.analog) {
-    if (siglent) {
+    if (compact) {
+      const rawScaleText = read(box(slot.x + 48, 559, 52, 17));
+      const rawOffsetText = read(box(slot.x + 48, 577, 52, 17));
+      if (rawScaleText?.endsWith('A/') || rawOffsetText?.endsWith('A')) {
+        unsupportedChannels.add(channel);
+        continue;
+      }
+      cards.set(channel, {
+        voltsPerDiv: parseScale(rawScaleText, 'V'), offsetVolts: parseQuantity(rawOffsetText ?? '')?.value ?? null,
+        rawScaleText, rawOffsetText, probeAttenuation: 1, coupling: 'UNKNOWN',
+      });
+    } else if (siglent) {
       const rawScaleText = read(box(slot.x + 55, 560, 65, 13));
       const rawOffsetText = read(box(slot.x + 55, 577, 65, 15));
       const probeText = read(box(slot.x + 1, 560, 39, 13));
-      const couplingText = read(box(slot.x + 65, 543, 54, 13), (r, g, b) => analogColor(channel, r, g, b));
+      const couplingText = read(box(slot.x + 65, 543, 54, 13), (r, g, b) => inverted
+        ? analogColor(channel, 255 - r, 255 - g, 255 - b) : analogColor(channel, r, g, b));
       const attenuation = /^(\d+(?:\.\d+)?)X$/.exec(probeText ?? '');
       cards.set(channel, {
         voltsPerDiv: parseScale(rawScaleText, 'V'), offsetVolts: parseQuantity(rawOffsetText ?? '')?.value ?? null,
@@ -89,23 +106,23 @@ export function readScopeMetadata(image: RgbaImage, detection: ProfileDetection)
         coupling: /^(DC|AC|GND)/.exec(couplingText ?? '')?.[1] as ChannelSettings['coupling'] ?? 'UNKNOWN',
       });
     } else {
-      const rgb = profile.channels[channel].rgb;
-      const rawScaleText = read(box(slot.x + 45, 461, 51, 12),
-        (r, g, b) => Math.abs(r - rgb[0]!) < 12 && Math.abs(g - rgb[1]!) < 12 && Math.abs(b - rgb[2]!) < 12);
+      const rawScaleText = read(rigolScaleRoi(slot), rigolCardInk(profile.channels[channel]));
       cards.set(channel, {
         voltsPerDiv: parseScale(rawScaleText, 'V'), offsetVolts: null, rawScaleText, rawOffsetText: null,
         probeAttenuation: 1, coupling: 'UNKNOWN',
       });
     }
   }
-  const rawTimebase = siglent ? read(box(727, 560, 77, 13)) : read(profile.timebaseCard.scaleRoi);
-  const delay = read(siglent ? box(664, 560, 62, 13) : profile.timebaseCard.delayRoi);
-  const topFrequencyRaw = profile.topFrequencyRoi ? read(profile.topFrequencyRoi, color) : null;
+  const rawTimebase = compact ? read(box(753, 559, 73, 17))
+    : siglent ? read(box(727, 560, 77, 13)) : read(profile.timebaseCard.scaleRoi);
+  const delay = read(compact ? box(697, 559, 51, 17)
+    : siglent ? box(664, 560, 62, 13) : profile.timebaseCard.delayRoi);
+  const topFrequencyRaw = !compact && profile.topFrequencyRoi ? read(profile.topFrequencyRoi, color) : null;
   const top = /^f\((C[1-4])\)=([\d.,]+(?:[kM]?Hz))$/.exec(topFrequencyRaw ?? '');
   const topFrequencyHz = top ? parseQuantity(top[2]!)?.value ?? null : null;
   const scopeReadings: ScopeMeasureReading[] = [];
 
-  if (siglent && (layoutVariant === 'measure-1row' || layoutVariant === 'measure-2row')) {
+  if (siglent && !compact && (layoutVariant === 'measure-1row' || layoutVariant === 'measure-2row')) {
     const twoRows = layoutVariant === 'measure-2row';
     for (let i = 0; i < (twoRows ? 5 : 4); i++) {
       const x = twoRows ? 181 + i * 163 : 10 + i * 246;
@@ -126,6 +143,6 @@ export function readScopeMetadata(image: RgbaImage, detection: ProfileDetection)
 
   return {
     cards, secPerDiv: parseScale(rawTimebase, 's'), triggerOffsetSec: parseQuantity(delay ?? '')?.value ?? null,
-    rawTimebase, topFrequencyHz, topFrequencyRaw, scopeReadings,
+    rawTimebase, topFrequencyHz, topFrequencyRaw, scopeReadings, colors: native.colors, unsupportedChannels,
   };
 }

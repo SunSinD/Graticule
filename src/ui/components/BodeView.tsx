@@ -22,10 +22,11 @@ interface CellProps {
   readonly label: string;
   readonly display: string;
   readonly allowNegative: boolean;
+  readonly commitOnBlurOnly?: boolean;
   readonly onCommit: (value: number | null) => void;
 }
 
-function EditCell({ label, display, allowNegative, onCommit }: CellProps) {
+function EditCell({ label, display, allowNegative, commitOnBlurOnly, onCommit }: CellProps) {
   const [draft, setDraft] = useState<string | null>(null);
   const shown = display === '—' ? '' : display;
   const push = (text: string): void => {
@@ -49,11 +50,17 @@ function EditCell({ label, display, allowNegative, onCommit }: CellProps) {
       onFocus={() => setDraft(shown)}
       onChange={(e) => {
         setDraft(e.target.value);
-        push(e.target.value);
+        if (!commitOnBlurOnly) push(e.target.value);
       }}
-      onBlur={() => setDraft(null)}
+      onBlur={() => {
+        if (commitOnBlurOnly && draft !== null) push(draft);
+        setDraft(null);
+      }}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') e.currentTarget.blur();
+        if (e.key === 'Enter') {
+          if (commitOnBlurOnly && draft !== null) push(draft);
+          e.currentTarget.blur();
+        }
         if (e.key === 'Escape') setDraft(null);
       }}
     />
@@ -78,6 +85,7 @@ export function BodeView({ tx, locale, result, overrides, inspectedId, onEdit, o
           label={`${p.fileName} ${key}`}
           display={display}
           allowNegative={allowNegative}
+          commitOnBlurOnly={key === 'frequencyHz'}
           onCommit={(v) => onEdit(p.id, key, v)}
         />
       </td>

@@ -92,43 +92,7 @@ interface LinearFit {
   readonly b: number;
 }
 
-function fitLinear(xs: readonly number[], ys: readonly number[]): LinearFit | null {
-  const len = Math.min(xs.length, ys.length);
-  if (len < 2) return null;
-  let sx = 0;
-  let sy = 0;
-  for (let i = 0; i < len; i++) {
-    sx += xs[i] ?? 0;
-    sy += ys[i] ?? 0;
-  }
-  const mx = sx / len;
-  const my = sy / len;
-  let sxx = 0;
-  let sxy = 0;
-  for (let i = 0; i < len; i++) {
-    const dx = (xs[i] ?? 0) - mx;
-    sxx += dx * dx;
-    sxy += dx * ((ys[i] ?? 0) - my);
-  }
-  if (sxx <= 1e-12) return null;
-  const b = sxy / sxx;
-  return { a: my - b * mx, b };
-}
-
 function timeFit(result: ExtractionResult): LinearFit {
-  const xs: number[] = [];
-  const ts: number[] = [];
-  for (const tr of result.traces) {
-    for (const s of tr.samples) {
-      if (Number.isFinite(s.xPx) && Number.isFinite(s.timeSec)) {
-        xs.push(s.xPx);
-        ts.push(s.timeSec);
-      }
-    }
-    if (xs.length > 1) break;
-  }
-  const fit = fitLinear(xs, ts);
-  if (fit) return fit;
   const g = result.detection.grid;
   const spd = result.timebase.secPerDiv;
   const b = spd / Math.max(1e-9, g.pxPerHDiv);
@@ -136,16 +100,6 @@ function timeFit(result: ExtractionResult): LinearFit {
 }
 
 function voltFit(trace: ChannelTrace, pxPerVDiv: number): LinearFit {
-  const ys: number[] = [];
-  const vs: number[] = [];
-  for (const s of trace.samples) {
-    if (s.status === 'ok' && s.yPx !== null && s.voltage !== null && Number.isFinite(s.voltage)) {
-      ys.push(s.yPx);
-      vs.push(s.voltage);
-    }
-  }
-  const fit = fitLinear(ys, vs);
-  if (fit && fit.b < 0) return fit;
   const st = trace.settings;
   const b = -st.voltsPerDiv / Math.max(1e-9, pxPerVDiv);
   return { a: -b * st.zeroY, b };
@@ -252,12 +206,19 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
       const clean = Math.abs(v) < tr.settings.voltsPerDiv * 1e-6 ? 0 : v;
       ticks.push(line(ax, yy, left ? ax - 4 : ax + 4, yy, INK, 1));
       ticks.push(
-        text(left ? ax - 7 : ax + 7, yy + 3.5, svgMinus(formatEng(clean, 'V', locale, { sig: 3, trim: true })), {
+        text(left ? ax - 7 : ax + 7, yy + 3.5, svgMinus(formatEng(clean, 'V', locale, { sig: 4, trim: true })), {
           anchor: left ? 'end' : 'start',
           size: 10,
           mono: true,
         }),
       );
+    }
+    if (Math.abs(tr.settings.offsetVolts) > tr.settings.voltsPerDiv * 1e-4 && tr.settings.zeroY >= grid.top && tr.settings.zeroY <= grid.bottom) {
+      const zy = mapY(tr.settings.zeroY);
+      const pts = left
+        ? `${n(ax)},${n(zy)} ${n(ax - 5)},${n(zy - 3.5)} ${n(ax - 5)},${n(zy + 3.5)}`
+        : `${n(ax)},${n(zy)} ${n(ax + 5)},${n(zy - 3.5)} ${n(ax + 5)},${n(zy + 3.5)}`;
+      ticks.push(`<polygon points="${pts}" fill="${INK}"/>`);
     }
     ticks.push(text(left ? ax - 7 : ax + 7, y0 - 8, tr.channel, { anchor: left ? 'end' : 'start', size: 10, weight: 600 }));
   });

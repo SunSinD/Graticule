@@ -3,6 +3,10 @@ import type { RgbaImage } from './types.js';
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
+export function hasPngSignature(bytes: Uint8Array): boolean {
+  return PNG_SIGNATURE.every((byte, index) => bytes[index] === byte);
+}
+
 function readU32BE(buf: Uint8Array, offset: number): number {
   return (
     (((buf[offset] ?? 0) << 24) |
@@ -32,11 +36,7 @@ export function decodePng(bytes: Uint8Array): RgbaImage {
   if (bytes.length < 33) {
     throw new Error('Invalid PNG: buffer too short');
   }
-  for (let i = 0; i < PNG_SIGNATURE.length; i++) {
-    if (bytes[i] !== PNG_SIGNATURE[i]) {
-      throw new Error('Invalid PNG: bad signature');
-    }
-  }
+  if (!hasPngSignature(bytes)) throw new Error('Invalid PNG: bad signature');
 
   let pos = 8;
   let width = 0;

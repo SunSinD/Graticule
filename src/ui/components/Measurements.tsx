@@ -2,10 +2,10 @@ import type { BodeGateOptions, BodeResult, ChannelId, ExtractionResult, GapStatu
 import { formatMetric, metricValue } from '../../core/export/table';
 import { metricLabel, toMetricKey } from '../../core/export/labels';
 import type { MetricKey } from '../../core/export/labels';
-import { EMPTY_CELL, METRIC_LABELS, formatEng, formatPercent, gapLabel } from '../i18n';
+import { EMPTY_CELL, METRIC_LABELS, ROW_LABELS, formatEng, formatPercent, gapLabel } from '../i18n';
 import type { Dict } from '../i18n';
 
-const ROWS: readonly MetricKey[] = ['vpp', 'vmax', 'vmin', 'vavg', 'vrms', 'period', 'freq', 'duty'];
+const ROWS: readonly (keyof (typeof ROW_LABELS)['en'])[] = ['vpp', 'vmax', 'vmin', 'vavg', 'vrms', 'period', 'freq', 'duty'];
 const GAP_KINDS: readonly Exclude<GapStatus, 'ok'>[] = [
   'clipped_high',
   'clipped_low',
@@ -31,7 +31,7 @@ export function MeasurementsPanel({ tx, locale, result }: Props) {
     <section>
       <h2>{tx.results}</h2>
       <div data-testid="measurement-summary" className="table-wrap">
-        <table className="grid-table compact">
+        <table className="grid-table compact values">
           <thead>
             <tr>
               <th>{tx.quantity}</th>
@@ -41,7 +41,7 @@ export function MeasurementsPanel({ tx, locale, result }: Props) {
           <tbody>
             {ROWS.map((key) => (
               <tr key={key}>
-                <th scope="row">{METRIC_LABELS[locale][key]}</th>
+                <th scope="row">{ROW_LABELS[locale][key]}</th>
                 {ms.length === 0 ? (
                   <td className="r num">{EMPTY_CELL}</td>
                 ) : (

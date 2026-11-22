@@ -9,7 +9,7 @@ export type ProfileId = 'siglent-sds2000x-plus' | 'rigol-ds1054z' | 'universal-f
 
 export type ChannelId = 'C1' | 'C2' | 'C3' | 'C4';
 
-export type LayoutVariant = 'no-measure' | 'measure-1row' | 'measure-2row' | 'standard' | 'manual';
+export type LayoutVariant = 'no-measure' | 'measure-1row' | 'measure-2row' | 'measure-3row' | 'decode-table' | 'standard' | 'fft' | 'manual';
 
 export interface Rect {
   readonly x: number;

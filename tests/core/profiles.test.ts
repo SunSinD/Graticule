@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import configuration from '../../src/core/profiles.json';
-import { logo as rigolLogo } from '../../src/core/font/rigolFont.js';
+import { glyphs as rigolGlyphs, logo as rigolLogo } from '../../src/core/font/rigolFont.js';
 import { parseQuantity } from '../../src/core/font/matcher.js';
 import { analyzeCapture, analyzePngBytes } from '../../src/core/pipeline.js';
 import { decodePng } from '../../src/core/png.js';
@@ -69,6 +70,25 @@ describe('native capture profiles', () => {
     expect(detectProfile(image)).toMatchObject({
       profileId: 'rigol-ds1054z', grid: { left: 84, right: 684, top: 38, bottom: 438, hDivs: 12, vDivs: 8, pxPerHDiv: 50, pxPerVDiv: 50 },
     });
+
+    const slots = [0, 116, 233, 350];
+    const colors = [[248, 252, 0], [0, 252, 248], [248, 0, 248], [0, 128, 248]] as const;
+    for (const [i, ink] of colors.entries()) {
+      const y = 105 + i * 70;
+      paint(image, { x: 70, y: y - 3, width: 12, height: 7 }, ink);
+      paint(image, { x: 84, y: y - 10, width: 600, height: 1 }, ink);
+      let x = slots[i]! + 53;
+      for (const value of '2.00V') {
+        const glyph = Object.keys(rigolGlyphs).find(key => rigolGlyphs[key] === value)!.split('/');
+        glyph.forEach((row, dy) => [...row].forEach((bit, dx) => {
+          if (bit === '#') pixel(image, x + dx, 463 + dy, ink);
+        }));
+        x += glyph[0]!.length + 1;
+      }
+    }
+    expect(analyzeCapture(image, 'rigol-four-channels.png').traces.map(t => [
+      t.channel, t.settings.voltsPerDiv, t.settings.zeroY, t.validCount,
+    ])).toEqual([['C1', 2, 105, 600], ['C2', 2, 175, 600], ['C3', 2, 245, 600], ['C4', 2, 315, 600]]);
   });
 
   test('finds a rectangular dark plot and honors crop and division overrides', () => {
@@ -93,8 +113,58 @@ test.skipIf(!rigolPath || !existsSync(rigolPath))('reads the real local Rigol ca
   ]);
 });
 
+const publicRoot = process.env.GRATICULE_WEB_FIXTURES;
+describe.skipIf(!publicRoot)('downloaded public oscilloscope captures', () => {
+  const capture = (name: string) => analyzePngBytes(readFileSync(join(publicRoot!, name)), name);
+
+  test.each([
+    ['rigol-pklaus.png', 'standard', 200e-6, 0, [['C1', 1]]],
+    ['rigol-quickprint2.png', 'measure-1row', 2e-6, 50.1e-6, [['C1', 2], ['C2', 2]]],
+    ['rigol-quickprint3.png', 'measure-1row', 20e-6, 312e-6, [['C1', 2], ['C2', 2]]],
+    ['rigol-quickprint4.png', 'measure-1row', 200e-6, 1.272e-3, [['C1', 2], ['C2', 2]]],
+    ['rigol-rogeorge-1.png', 'standard', 0.5, 1, [['C1', 2]]],
+    ['rigol-rogeorge-2.png', 'standard', 0.5, 2.74, [['C1', 2]]],
+    ['rigol-rogeorge-3.png', 'fft', 5e-3, 0, [['C1', 2], ['C4', 1]]],
+    ['rigol-simple-grab.png', 'standard', 1e-6, 0, [['C1', 0.02]]],
+    ['wavebin-rigol.png', 'standard', 1, 5.02, [['C1', 1]]],
+  ] as const)('reads the Rigol layout, channels and timebase in %s', (name, layoutVariant, seconds, delay, channels) => {
+    const result = capture(name);
+    expect(result.detection).toMatchObject({ profileId: 'rigol-ds1054z', grid: { layoutVariant } });
+    expect(result.timebase).toMatchObject({ source: 'ocr', secPerDiv: expect.closeTo(seconds, 12), triggerOffsetSec: expect.closeTo(delay, 12) });
+    expect(result.traces.map(t => [t.channel, t.settings.voltsPerDiv])).toEqual(channels);
+    expect(result.traces.every(t => t.settings.scaleSource === 'ocr' && t.settings.zeroSource === 'marker')).toBe(true);
+    if (name === 'rigol-rogeorge-1.png') expect(result.traces[0]?.validCount).toBe(0);
+    if (name === 'rigol-rogeorge-3.png') expect(result.measurements.map(m => m.frequencyHz)).toEqual([
+      expect.closeTo(1000, 5), expect.closeTo(1000, 5),
+    ]);
+  });
+
+  test('reads both compact Siglent layouts and omits current channels from the voltage results', () => {
+    const mixed = capture('rudi-siglent.png');
+    expect(mixed.detection).toMatchObject({
+      profileId: 'siglent-sds2000x-plus', grid: { layoutVariant: 'measure-3row', bottom: 459 },
+      warnings: ['unsupported_channel_unit:C2', 'unsupported_channel_unit:C4'],
+    });
+    expect(mixed.timebase).toMatchObject({ source: 'ocr', secPerDiv: 0.002 });
+    expect(mixed.traces.map(t => [t.channel, t.settings.voltsPerDiv, t.settings.offsetVolts])).toEqual([
+      ['C1', 20, 59], ['C3', 25, -1.25],
+    ]);
+    const decode = capture('siglent-pyftdi-373.png');
+    expect(decode.detection).toMatchObject({
+      profileId: 'siglent-sds2000x-plus', grid: { layoutVariant: 'decode-table', right: 872, bottom: 380 },
+    });
+    expect(decode.timebase).toMatchObject({ source: 'ocr', secPerDiv: expect.closeTo(20e-6, 12) });
+    expect(decode.measurements.map(m => m.frequencyHz)).toEqual([null, null]);
+    expect(decode.measurements[0]?.vpp).toBeCloseTo(3.47, 2);
+  });
+
+  test.each(['rudi-keysight.png', 'rudi-rohde.png'])('uses Universal Fallback for %s', name => {
+    expect(capture(name).detection).toMatchObject({ profileId: 'universal-fallback', matchedAnchors: [] });
+  });
+});
+
 test.each([
-  ['-7.357mV', -7.357e-3], ['509uV', 509e-6], ['8µV', 8e-6], ['4V', 4], ['25ns', 25e-9],
+  ['-7.357mV', -7.357e-3], ['509uV', 509e-6], ['8µV', 8e-6], ['4V', 4], ['25ns', 25e-9], ['-300ps', -3e-10],
   ['500us', 5e-4], ['1,5ms', 1.5e-3], ['2s', 2], ['21Hz', 21], ['1.2kHz', 1200], ['10MHz', 1e7], ['50%', 50],
 ])('parses %s as an SI or percentage value', (text, value) => {
   expect(parseQuantity(text)?.value).toBeCloseTo(value, 13);

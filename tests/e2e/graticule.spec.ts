@@ -128,3 +128,45 @@ test('SVG and CSV exports are valid and non-empty', async ({ page }) => {
   const csvPath = await csv.path();
   expect(csvPath).not.toBeNull();
 });
+
+test('single capture defaults to Clean Plot, fits desktop viewport without scrolling, and prevents French sidebar overflow', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await loadSample(page, 'Sine and Schmitt trigger');
+
+  await expect(page.getByRole('button', { name: /Clean Plot/i })).toHaveAttribute('aria-pressed', 'true');
+
+  const layout = await page.evaluate(() => {
+    const center = document.querySelector('.zone.center') as HTMLElement | null;
+    const exportsEl = document.querySelector('.exports') as HTMLElement | null;
+    const exportRect = exportsEl?.getBoundingClientRect();
+    return {
+      centerScrollOverflow: center ? center.scrollHeight - center.clientHeight : 999,
+      exportsVisible: Boolean(exportRect && exportRect.bottom <= window.innerHeight + 1 && exportRect.top >= 0),
+    };
+  });
+  expect(layout.centerScrollOverflow).toBeLessThanOrEqual(2);
+  expect(layout.exportsVisible).toBe(true);
+
+  // Unchecking C1 should allow re-enabling C1 via its chip
+  const c1Box = page.getByRole('checkbox', { name: 'C1' });
+  await c1Box.click();
+  const enableC1 = page.getByRole('button', { name: /Enable C1/i });
+  await expect(enableC1).toBeEnabled();
+  await enableC1.click();
+  await expect(page.getByRole('checkbox', { name: 'C1' })).toBeChecked();
+
+  // Switch to FR and ensure sample buttons do not overflow the left sidebar
+  await page.getByRole('button', { name: 'FR', exact: true }).click();
+  const sampleOverflow = await page.evaluate(() => {
+    const left = document.querySelector('.zone.left') as HTMLElement | null;
+    if (!left) return 999;
+    const leftRight = left.getBoundingClientRect().right;
+    const btns = Array.from(left.querySelectorAll('button'));
+    return Math.max(0, ...btns.map((b) => Math.ceil(b.scrollWidth - b.clientWidth)), ...btns.map((b) => Math.ceil(b.getBoundingClientRect().right - leftRight)));
+  });
+  expect(sampleOverflow).toBeLessThanOrEqual(1);
+
+  // Clear button returns to drop screen
+  await page.getByRole('button', { name: /Vider/i }).click();
+  await expect(page.getByText(/Déposez une capture/i)).toBeVisible();
+});

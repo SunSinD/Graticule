@@ -1,3 +1,5 @@
+import { hasPngSignature } from '../core/png.js';
+
 export interface LoadedFile {
   readonly id: string;
   readonly name: string;
@@ -16,24 +18,24 @@ export function isImageFile(file: File): boolean {
 async function toPngBytes(file: Blob): Promise<Uint8Array> {
   const bitmap = await createImageBitmap(file);
   const canvas = document.createElement('canvas');
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('Canvas is not available');
-  ctx.drawImage(bitmap, 0, 0);
-  bitmap.close();
+  try {
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('Canvas is not available');
+    ctx.drawImage(bitmap, 0, 0);
+  } finally {
+    bitmap.close();
+  }
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'));
   if (!blob) throw new Error('Could not convert image to PNG');
   return new Uint8Array(await blob.arrayBuffer());
 }
 
-function looksLikePng(bytes: Uint8Array): boolean {
-  return bytes.length > 8 && bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47;
-}
-
 export async function loadFile(file: Blob, name: string): Promise<LoadedFile> {
   let bytes: Uint8Array = new Uint8Array(await file.arrayBuffer());
-  if (!looksLikePng(bytes)) bytes = await toPngBytes(file);
+  const nonInterlacedPng = hasPngSignature(bytes) && bytes.length >= 29 && bytes[28] === 0;
+  if (!nonInterlacedPng) bytes = await toPngBytes(file);
   const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'image/png' }));
   counter += 1;
   return { id: `f${counter}`, name, bytes, url };

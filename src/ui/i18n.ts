@@ -242,6 +242,31 @@ const fr: Dict = {
 
 export const DICTS: Readonly<Record<Locale, Dict>> = { en, fr };
 
+type RowKey = 'vpp' | 'vmax' | 'vmin' | 'vavg' | 'vrms' | 'period' | 'freq' | 'duty';
+
+export const ROW_LABELS: Readonly<Record<Locale, Readonly<Record<RowKey, string>>>> = {
+  en: {
+    vpp: 'Vpp (peak to peak)',
+    vmax: 'Vmax',
+    vmin: 'Vmin',
+    vavg: 'Average (Vavg)',
+    vrms: 'RMS (Vrms)',
+    period: 'Period (T)',
+    freq: 'Frequency (f)',
+    duty: 'Duty cycle',
+  },
+  fr: {
+    vpp: 'Vpp (crête à crête)',
+    vmax: 'Vmax',
+    vmin: 'Vmin',
+    vavg: 'Moyenne (Vavg)',
+    vrms: 'Efficace (Vrms)',
+    period: 'Période (T)',
+    freq: 'Fréquence (f)',
+    duty: 'Rapport cyclique',
+  },
+};
+
 export function t(locale: Locale): Dict {
   return DICTS[locale];
 }

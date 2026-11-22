@@ -15,10 +15,12 @@ interface Props {
   readonly onAddFiles: () => void;
   readonly onAddFolder: () => void;
   readonly onSelect: (file: LoadedFile) => void;
+  readonly activeSample: SampleId | null;
   readonly onSample: (id: SampleId) => void;
+  readonly onClear: () => void;
 }
 
-export function FilePanel({ tx, mode, files, bode, activeName, onAddFiles, onAddFolder, onSelect, onSample }: Props) {
+export function FilePanel({ tx, mode, files, bode, activeName, onAddFiles, onAddFolder, onSelect, activeSample, onSample, onClear }: Props) {
   const statusFor = (name: string): boolean | null => {
     if (!bode) return null;
     const p = bode.points.find((pt) => pt.fileName === name);
@@ -26,8 +28,15 @@ export function FilePanel({ tx, mode, files, bode, activeName, onAddFiles, onAdd
   };
   return (
     <aside className="zone left" aria-label={tx.files}>
-      <section>
-        <h2>{tx.files}</h2>
+      <section className="left-scroll">
+        <div className="section-head">
+          <h2>{tx.files}</h2>
+          {files.length > 0 && (
+            <button type="button" className="btn chip" onClick={onClear}>
+              {tx.clear}
+            </button>
+          )}
+        </div>
         {files.length > 0 && (
           <ul className="files">
             {files.map((f) => {
@@ -61,11 +70,17 @@ export function FilePanel({ tx, mode, files, bode, activeName, onAddFiles, onAdd
         </div>
       </section>
       {mode !== 'empty' && (
-        <section>
+        <section className="samples">
           <h2>{tx.samples}</h2>
-          <div className="stack">
+          <div className="sample-list">
             {SAMPLE_IDS.map((id) => (
-              <button key={id} type="button" className="btn ghost" onClick={() => onSample(id)}>
+              <button
+                key={id}
+                type="button"
+                className={`sample-item${activeSample === id ? ' sel' : ''}`}
+                aria-current={activeSample === id ? 'true' : undefined}
+                onClick={() => onSample(id)}
+              >
                 {sampleLabel(tx, id)}
               </button>
             ))}

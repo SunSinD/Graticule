@@ -2,6 +2,7 @@ import { CURSOR, OVERLAY } from './mask.js';
 import type { OverlayMask } from './mask.js';
 import type { ScopeMetadata } from './ocr.js';
 import { at, CHANNELS, channelColor } from './pixels.js';
+import type { ChannelColor } from './pixels.js';
 import { colorsFor, getNativeProfile } from './profiles.js';
 import type { ChannelId, ChannelSettings, ChannelTrace, ExtractionOverrides, GapStatus, GridGeometry, ProfileDetection,
   RgbaImage, TimebaseSettings, TraceSample } from './types.js';
@@ -17,6 +18,10 @@ interface Cluster {
 const finite = (value: number | undefined | null): value is number => typeof value === 'number' && Number.isFinite(value);
 const positive = (value: number | undefined | null): value is number => finite(value) && value > 0;
 
+function classifyPixel(r: number, g: number, b: number, colors: readonly ChannelColor[], inverted: boolean): number {
+  return inverted ? channelColor(255 - r, 255 - g, 255 - b, colors) : channelColor(r, g, b, colors);
+}
+
 export function makeTimebase(metadata: ScopeMetadata, overrides: ExtractionOverrides): TimebaseSettings {
   const manualScale = positive(overrides.secPerDiv) ? overrides.secPerDiv : null;
   const manualOffset = finite(overrides.triggerOffsetSec) ? overrides.triggerOffsetSec : null;
@@ -28,17 +33,16 @@ export function makeTimebase(metadata: ScopeMetadata, overrides: ExtractionOverr
   };
 }
 
-function markerYs(image: RgbaImage, detection: ProfileDetection): (number | null)[] {
+function markerYs(image: RgbaImage, detection: ProfileDetection, colors: readonly ChannelColor[]): (number | null)[] {
   const profile = getNativeProfile(detection.profileId);
   if (!profile) return [null, null, null, null];
   const { x, y, width } = profile.zeroMarkerStrip;
-  const { bottom } = detection.grid;
-  const colors = colorsFor(profile.id);
+  const { bottom, inverted } = detection.grid;
   const counts = CHANNELS.map(() => new Uint8Array(bottom - y + 1));
   for (let row = y; row <= bottom; row++) {
     for (let col = x; col < x + width; col++) {
       const i = at(image, col, row);
-      const channel = channelColor(image.data[i]!, image.data[i + 1]!, image.data[i + 2]!, colors);
+      const channel = classifyPixel(image.data[i]!, image.data[i + 1]!, image.data[i + 2]!, colors, inverted);
       if (channel < 0) continue;
       const bins = counts[channel]!;
       bins[row - y] = bins[row - y]! + 1;
@@ -73,6 +77,7 @@ function markerYs(image: RgbaImage, detection: ProfileDetection): (number | null
 function pickSettings(channel: ChannelId, index: number, metadata: ScopeMetadata, overrides: ExtractionOverrides,
   detection: ProfileDetection, markers: (number | null)[], points: number): ChannelSettings | null {
   const manual = overrides.channels?.[channel];
+  if (metadata.unsupportedChannels?.has(channel)) return null;
   const card = metadata.cards.get(channel);
   const marker = markers[index] ?? null;
   const fallback = detection.profileId === 'universal-fallback';
@@ -167,11 +172,12 @@ export function extractTraces(image: RgbaImage, detection: ProfileDetection, met
   timebase: TimebaseSettings, overrides: ExtractionOverrides): { traces: ChannelTrace[]; warnings: string[] } {
   if (detection.digitalOnly) return { traces: [], warnings: [] };
   const grid = detection.grid;
-  const colors = colorsFor(detection.profileId);
-  const markers = markerYs(image, detection);
+  const colors = metadata.colors ?? colorsFor(detection.profileId);
+  const markers = markerYs(image, detection, colors);
   const native = getNativeProfile(detection.profileId);
-  const active = CHANNELS.map((channel, i) => overrides.channels?.[channel]?.enabled
-    ?? (!native || metadata.cards.has(channel) || markers[i] !== null));
+  const inverted = native?.supportsInverted === true && grid.inverted;
+  const active = CHANNELS.map((channel, i) => !metadata.unsupportedChannels?.has(channel)
+    && (overrides.channels?.[channel]?.enabled ?? (!native || metadata.cards.has(channel) || markers[i] !== null)));
   const columns = CHANNELS.map((): (Cluster | null)[] => []);
 
   for (let x = grid.left; x <= grid.right; x++) {
@@ -183,9 +189,9 @@ export function extractTraces(image: RgbaImage, detection: ProfileDetection, met
       const r = image.data[i]!;
       const g = image.data[i + 1]!;
       const b = image.data[i + 2]!;
-      const channel = channelColor(r, g, b, colors);
+      const channel = classifyPixel(r, g, b, colors, inverted);
       if (channel < 0 || !active[channel]) continue;
-      const peak = Math.max(r, g, b);
+      const peak = inverted ? 255 - Math.min(r, g, b) : Math.max(r, g, b);
       const weight = (peak / 255) ** 4;
       visible[channel]!.push({ y, weight });
     }
@@ -203,9 +209,11 @@ export function extractTraces(image: RgbaImage, detection: ProfileDetection, met
 
   const warnings = traces.flatMap(({ channel, settings }) => {
     const marker = markers[CHANNELS.indexOf(channel)];
-    return settings.zeroSource === 'card-offset' && marker !== null && marker !== undefined && Math.abs(marker - settings.zeroY) > 4
+    const markerInBounds = settings.zeroY >= grid.top + 8 && settings.zeroY <= grid.bottom - 8;
+    return settings.zeroSource === 'card-offset' && markerInBounds && marker !== null && marker !== undefined && Math.abs(marker - settings.zeroY) > 4
       ? [`zero_marker_mismatch:${channel}`] : [];
   });
+  for (const channel of metadata.unsupportedChannels ?? []) warnings.push(`unsupported_channel_unit:${channel}`);
   const extracted = traces.map(trace => {
     const tolerance = Math.min(8, Math.max(2, Math.ceil(trace.thickness / 2)));
     const samples = trace.clusters.map((cluster, col): TraceSample => {

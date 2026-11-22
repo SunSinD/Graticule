@@ -1,7 +1,8 @@
 import data from './profiles.json' with { type: 'json' };
-import { logo as siglentLogo } from './font/siglentFont.js';
+import { matchBitmap, readBitmap } from './font/matcher.js';
+import { compactBadgeGlyphs, logo as siglentLogo } from './font/siglentFont.js';
 import { logo as rigolLogo } from './font/rigolFont.js';
-import { CHANNELS, channelColor, pixelMatches } from './pixels.js';
+import { at, CHANNELS, channelColor, hueDegrees, pixelMatches } from './pixels.js';
 import type { ChannelColor, PixelPredicate } from './pixels.js';
 import type { ChannelId, ExtractionOverrides, GridGeometry, LayoutVariant, ProfileDetection, ProfileId, Rect, RgbaImage } from './types.js';
 
@@ -57,12 +58,12 @@ export function validateProfiles(value: unknown): readonly NativeProfile[] {
         || g.right >= width || g.top < 0 || g.top >= height || !int(g.hDivs) || g.hDivs < 1
         || !int(g.vDivs) || g.vDivs < 1 || !positive(g.pxPerHDiv)
         || g.pxPerHDiv * g.hDivs !== g.right - g.left || !Array.isArray(g.variants)) return false;
-    const variants = p.id === 'rigol-ds1054z' ? ['standard'] : ['no-measure', 'measure-1row', 'measure-2row'];
+    const variants = p.id === 'rigol-ds1054z' ? ['standard', 'measure-1row', 'fft'] : ['no-measure', 'measure-1row', 'measure-2row'];
     const { top, vDivs } = g;
     if (g.variants.length !== variants.length || !g.variants.every((v: unknown, i) =>
       isRecord(v) && v.id === variants[i] && int(v.bottom) && v.bottom > top && v.bottom < height
       && positive(v.pxPerVDiv) && v.pxPerVDiv * vDivs === v.bottom - top
-      && (v.id === 'no-measure' ? v.measureBar === null
+      && (v.id === 'no-measure' || v.id === 'fft' ? v.measureBar === null
         : isRecord(v.measureBar) && v.measureBar.rows === (v.id === 'measure-2row' ? 2 : 1) && rect(v.measureBar)))) return false;
     return CHANNELS.every(id => {
       const c = channels[id];
@@ -112,13 +113,8 @@ function proportion(image: RgbaImage, roi: Rect, predicate: PixelPredicate, step
   return matches / total;
 }
 
-function logoMatch(image: RgbaImage, p: NativeProfile, inverted: boolean): boolean {
-  const siglent = p.id === 'siglent-sds2000x-plus';
-  const stencil = siglent ? siglentLogo : rigolLogo;
-  const { x, y, width, height } = p.anchors.logoRoi;
-  const predicate: PixelPredicate = siglent
-    ? (r, g, b) => inverted ? Math.max(r, g, b) < 155 : Math.min(r, g, b) > 100
-    : (r, g, b) => r > 140 && g > 100 && b < 80;
+function logoOverlap(image: RgbaImage, roi: Rect, stencil: readonly string[], predicate: PixelPredicate): number {
+  const { x, y, width, height } = roi;
   let intersection = 0;
   let union = 0;
   for (let row = 0; row < height; row++) {
@@ -129,32 +125,58 @@ function logoMatch(image: RgbaImage, p: NativeProfile, inverted: boolean): boole
       if (expected && actual) intersection++;
     }
   }
-  return union > 0 && intersection / union >= 0.78;
+  return union > 0 ? intersection / union : 0;
 }
 
-function findPlot(image: RgbaImage, p: NativeProfile, inverted: boolean): GridGeometry | null {
+const siglentLogoInk = (inverted: boolean): PixelPredicate =>
+  (r, g, b) => inverted ? Math.max(r, g, b) < 155 : Math.min(r, g, b) > 100;
+
+export function hasCompactSiglentHeader(image: RgbaImage, inverted: boolean): boolean {
+  return logoOverlap(image, { x: 736, y: 3, width: 74, height: 14 }, siglentLogo, siglentLogoInk(inverted)) >= 0.78;
+}
+
+function logoMatch(image: RgbaImage, p: NativeProfile, inverted: boolean): boolean {
+  const roi = p.anchors.logoRoi;
+  if (p.id === 'siglent-sds2000x-plus') return logoOverlap(image, roi, siglentLogo, siglentLogoInk(inverted)) >= 0.78;
+  return logoOverlap(image, roi, rigolLogo, (r, g, b) => Math.min(r, g) - b >= 52) >= 0.78
+    || logoOverlap(image, { ...roi, x: roi.x - 1, y: roi.y + 1 }, rigolLogo,
+      (r, g, b) => b - Math.max(r, g) >= 65) >= 0.65;
+}
+
+function findPlot(image: RgbaImage, p: NativeProfile, inverted: boolean, compact: boolean): GridGeometry | null {
   const g = p.graticule;
   const siglent = p.id === 'siglent-sds2000x-plus';
   const border: PixelPredicate = (r, gr, b) => inverted ? grayscale(r, gr, b, 220, 232)
     : grayscale(r, gr, b, siglent ? 28 : 44, siglent ? 34 : 53);
-  const gridInk: PixelPredicate = (r, gr, b) => inverted ? grayscale(r, gr, b, 162, 188)
-    : grayscale(r, gr, b, siglent ? 74 : 43, siglent ? 87 : 53);
-  const { left, right, top, hDivs, vDivs } = g;
-  const width = right - left;
-  const span = (y: number, ink: PixelPredicate) => proportion(image, { x: left + 5, y, width: width - 10, height: 1 }, ink);
-  if (span(top, border) < 0.78) return null;
+  const gridInk: PixelPredicate = (r, gr, b) => inverted ? grayscale(r, gr, b, 162, compact ? 206 : 188)
+    : grayscale(r, gr, b, compact ? 49 : siglent ? 74 : 43, siglent ? 87 : 53);
+  const { left, top, hDivs, vDivs } = g;
 
-  for (const variant of g.variants) {
-    const { bottom } = variant;
-    const bottomInk: PixelPredicate = siglent ? border : (r, gr, b) => grayscale(r, gr, b, 88, 108);
-    if (span(bottom + (siglent ? 1 : 0), bottomInk) < 0.58) continue;
+  const standard = g.variants.map(variant => ({ id: variant.id, bottom: variant.bottom, right: g.right }));
+  const variants = compact ? [
+    ...standard,
+    { id: 'measure-3row', bottom: 459, right: g.right },
+    { id: 'decode-table', bottom: 380, right: 872 },
+  ] as const : siglent ? standard : standard.reverse();
+  for (const variant of variants) {
+    const { bottom, right } = variant;
+    const span = (y: number, ink: PixelPredicate) => proportion(image, { x: left + 5, y, width: right - left - 10, height: 1 }, ink);
+    if (span(top, border) < 0.78) continue;
+    const bottomEdge = siglent ? span(bottom + 1, border) >= 0.58
+      : span(bottom - 1, border) >= 0.78
+        || span(bottom, (r, gr, b) => grayscale(r, gr, b, 88, 108)) >= 0.58;
+    if (!bottomEdge) continue;
     const grid = makeGrid(left, top, right, bottom, hDivs, vDivs, variant.id, inverted);
+    if (variant.id === 'fft') {
+      if (span(bottom + 20, border) >= 0.78) return grid;
+      continue;
+    }
     const horizontalOffsets: number[] = [];
     let vertical = 0;
     for (const y of grid.hLines.slice(1, -1)) {
       const nominal = Math.round(y);
       const rows = [nominal, nominal - 1, nominal + 1];
-      const row = rows.find(candidate => span(candidate, gridInk) >= (siglent ? 0.16 : 0.22));
+      const row = rows.find(candidate => span(candidate, gridInk) >= 0.16);
       if (row !== undefined) horizontalOffsets.push(Math.abs(row - y));
     }
     for (const x of grid.vLines.slice(1, -1)) {
@@ -171,29 +193,69 @@ function findPlot(image: RgbaImage, p: NativeProfile, inverted: boolean): GridGe
 export interface NativeCards {
   readonly digital: boolean;
   readonly analog: ReadonlyMap<ChannelId, Rect>;
+  readonly colors?: readonly ChannelColor[];
 }
 
-export function findNativeCards(image: RgbaImage, profile: NativeProfile): NativeCards {
+function findCompactSiglentCards(image: RgbaImage, inverted: boolean): NativeCards {
+  const analog = new Map<ChannelId, Rect>();
+  const colors = colorsFor('siglent-sds2000x-plus').map(color => ({ ...color, valMin: 2 }));
+  let digital = false;
+  for (let x = 4; x <= 420; x += 104) {
+    const index = at(image, x + 32, 550);
+    const rgb = Array.from(image.data.subarray(index, index + 3), value => inverted ? 255 - value : value);
+    const high = Math.max(...rgb);
+    const spread = high - Math.min(...rgb);
+    if (high < 140 || spread < 90) continue;
+    const component = rgb.indexOf(high);
+    const label = matchBitmap(readBitmap(image, { x: x + 3, y: 544, width: 31, height: 12 },
+      (...levels) => (inverted ? 255 - levels[component]! : levels[component]!) < high * 0.7), compactBadgeGlyphs);
+    if (label === 'D') {
+      digital = true;
+      continue;
+    }
+    const channel = CHANNELS.find(id => id === label);
+    if (!channel) continue;
+    analog.set(channel, { x, y: 540, width: 100, height: 56 });
+    const hue = hueDegrees(rgb[0]!, rgb[1]!, rgb[2]!, high, spread);
+    colors[CHANNELS.indexOf(channel)] = {
+      rgb, hueMin: (hue + 345) % 360, hueMax: (hue + 15) % 360, satMin: 0.4, valMin: 0.32,
+    };
+  }
+  return { analog, digital, colors };
+}
+
+export function rigolScaleRoi(slot: Rect): Rect {
+  return { x: slot.x + 46, y: 461, width: 54, height: 12 };
+}
+
+export function rigolCardInk(color: ChannelColor): PixelPredicate {
+  const [red, green, blue] = color.rgb;
+  return (r, g, b) => Math.abs(r - red!) < 12 && Math.abs(g - green!) < 12 && Math.abs(b - blue!) < 12;
+}
+
+export function findNativeCards(image: RgbaImage, profile: NativeProfile, inverted: boolean, compact = false): NativeCards {
+  if (compact) return findCompactSiglentCards(image, inverted);
   const analog = new Map<ChannelId, Rect>();
   let digital = false;
   const colors = colorsFor(profile.id);
   for (const [i, slot] of profile.channelCardSlots.entries()) {
     if (profile.id === 'rigol-ds1054z') {
       const color = colors[i]!;
-      const active = proportion(image, { ...slot, y: 460, height: 14 },
-        (r, g, b) => Math.abs(r - color.rgb[0]!) < 12 && Math.abs(g - color.rgb[1]!) < 12 && Math.abs(b - color.rgb[2]!) < 12);
-      if (active > 0.018) analog.set(CHANNELS[i]!, slot);
+      const active = proportion(image, rigolScaleRoi(slot), rigolCardInk(color));
+      if (active > 0.035) analog.set(CHANNELS[i]!, slot);
       continue;
     }
     const badge = { x: slot.x + 1, y: slot.y + 2, width: 42, height: 12 };
-    const blue: PixelPredicate = (r, g, b) => (b > 193 && g > 57 && g < 94 && r < 45)
-      || (r > 210 && g > 159 && g < 201 && b > 17 && b < 61);
+    const blue: PixelPredicate = (r, g, b) => inverted
+      ? r > 210 && g > 159 && g < 201 && b > 17 && b < 62
+      : b > 193 && g > 57 && g < 94 && r < 45;
     if (proportion(image, badge, blue) > 0.65) {
       digital = true;
       continue;
     }
     for (const [index, id] of CHANNELS.entries()) {
-      if (proportion(image, badge, (r, g, b) => channelColor(r, g, b, colors) === index) > 0.65) {
+      if (proportion(image, badge, (r, g, b) => (inverted
+        ? channelColor(255 - r, 255 - g, 255 - b, colors) : channelColor(r, g, b, colors)) === index) > 0.65) {
         analog.set(id, slot);
         break;
       }
@@ -253,15 +315,16 @@ export function detectProfile(image: RgbaImage, overrides: ExtractionOverrides =
       if (p.width !== image.width || p.height !== image.height || (overrides.profileId && overrides.profileId !== p.id)) continue;
       const inverted = p.supportsInverted && proportion(image, p.anchors.topBarRoi, (r, g, b) => luminance(r, g, b) > 175, 4) > 0.5;
       fallbackReason = 'native_anchors_mismatch';
-      if (!logoMatch(image, p, inverted)) continue;
       const siglent = p.id === 'siglent-sds2000x-plus';
+      const compact = siglent && hasCompactSiglentHeader(image, inverted);
+      if (!compact && !logoMatch(image, p, inverted)) continue;
       const barBackground: PixelPredicate = (r, g, b) => siglent
         ? (inverted ? grayscale(r, g, b, 180, 245) : grayscale(r, g, b, 12, 74)) : luminance(r, g, b) < 46;
       if (proportion(image, p.anchors.topBarRoi, barBackground, 4) < 0.5
           || proportion(image, p.anchors.bottomBarRoi, barBackground, 4) < 0.5) continue;
-      const grid = findPlot(image, p, inverted);
+      const grid = findPlot(image, p, inverted, compact);
       if (!grid) continue;
-      const cards = findNativeCards(image, p);
+      const cards = findNativeCards(image, p, inverted, compact);
       const digitalOnly = cards.digital && !cards.analog.size;
       return {
         profileId: p.id, profileName: p.name, matchedAnchors: ['dimensions', 'logo', 'header', 'bottom_bar', 'graticule'],

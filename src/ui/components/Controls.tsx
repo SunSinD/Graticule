@@ -57,6 +57,15 @@ export function ScaleControls({ tx, locale, result, overrides, disabled, onOverr
     const prev = overrides.channels?.[ch] ?? {};
     onOverrides({ ...overrides, channels: { ...overrides.channels, [ch]: { ...prev, ...patch } } });
   };
+  const rows = CHANNELS.map((ch) => {
+    const trace = result?.traces.find((tr) => tr.channel === ch);
+    const o = overrides.channels?.[ch];
+    const enabled = o?.enabled ?? trace?.settings.enabled ?? false;
+    const canToggle = !disabled && Boolean(result);
+    return { ch, trace, o, enabled, canToggle, locked: disabled || !result };
+  });
+  const active = rows.filter((r) => r.enabled);
+  const inactive = rows.filter((r) => !r.enabled);
   return (
     <section>
       <ScaleInput
@@ -72,50 +81,67 @@ export function ScaleControls({ tx, locale, result, overrides, disabled, onOverr
         hint={result && !overrides.secPerDiv && result.timebase.source === 'default' ? tx.scaleDefault : null}
         onChange={(v) => onOverrides({ ...overrides, secPerDiv: v })}
       />
-      <h2>{tx.channels}</h2>
-      <div className="channels">
-        {CHANNELS.map((ch) => {
-          const trace = result?.traces.find((t) => t.channel === ch);
-          const o = overrides.channels?.[ch];
-          const enabled = o?.enabled ?? trace?.settings.enabled ?? false;
-          const vdiv = o?.voltsPerDiv ?? trace?.settings.voltsPerDiv ?? null;
-          const off = o?.offsetVolts ?? trace?.settings.offsetVolts ?? null;
-          const off_ = disabled || !result || !trace;
-          return (
-            <fieldset key={ch} className={`channel${enabled ? '' : ' off'}`} disabled={off_}>
-              <legend>
-                <label className="inline">
-                  <input type="checkbox" checked={enabled} onChange={(e) => patchChannel(ch, { enabled: e.target.checked })} />
-                  <span className="ch">{ch}</span>
-                </label>
-              </legend>
-              <ScaleInput
-                id={`vdiv-${ch}`}
-                label={tx.voltsPerDiv}
-                value={vdiv}
-                unit="V"
-                locale={locale}
-                stepper
-                disabled={off_ || !enabled}
-                decLabel={tx.decreaseScale(ch)}
-                incLabel={tx.increaseScale(ch)}
-                hint={trace && enabled && !o?.voltsPerDiv && trace.settings.scaleSource === 'default' ? tx.scaleDefault : null}
-                onChange={(v) => patchChannel(ch, { voltsPerDiv: v })}
-              />
-              <ScaleInput
-                id={`off-${ch}`}
-                label={tx.offset}
-                value={off}
-                unit="V"
-                locale={locale}
-                allowZero
-                disabled={off_ || !enabled}
-                onChange={(v) => patchChannel(ch, { offsetVolts: v })}
-              />
-            </fieldset>
-          );
-        })}
+      <div className="section-head">
+        <h2>{tx.channels}</h2>
+        {inactive.length > 0 && (
+          <div className="chips">
+            {inactive.map((c) => (
+              <button
+                key={c.ch}
+                type="button"
+                className="btn chip"
+                disabled={!c.canToggle}
+                aria-label={`${tx.enable} ${c.ch}`}
+                title={`${tx.enable} ${c.ch}`}
+                onClick={() => patchChannel(c.ch, { enabled: true })}
+              >
+                + {c.ch}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
+      {active.length > 0 && (
+        <div className="channels">
+          {active.map(({ ch, trace, o, locked }) => {
+            const vdiv = o?.voltsPerDiv ?? trace?.settings.voltsPerDiv ?? 1;
+            const off = o?.offsetVolts ?? trace?.settings.offsetVolts ?? 0;
+            return (
+              <fieldset key={ch} className="channel" disabled={locked}>
+                <legend>
+                  <label className="inline">
+                    <input type="checkbox" checked onChange={(e) => patchChannel(ch, { enabled: e.target.checked })} />
+                    <span className="ch">{ch}</span>
+                  </label>
+                </legend>
+                <ScaleInput
+                  id={`vdiv-${ch}`}
+                  label={tx.voltsPerDiv}
+                  value={vdiv}
+                  unit="V"
+                  locale={locale}
+                  stepper
+                  disabled={locked}
+                  decLabel={tx.decreaseScale(ch)}
+                  incLabel={tx.increaseScale(ch)}
+                  hint={trace && !o?.voltsPerDiv && trace.settings.scaleSource === 'default' ? tx.scaleDefault : null}
+                  onChange={(v) => patchChannel(ch, { voltsPerDiv: v })}
+                />
+                <ScaleInput
+                  id={`off-${ch}`}
+                  label={tx.offset}
+                  value={off}
+                  unit="V"
+                  locale={locale}
+                  allowZero
+                  disabled={locked}
+                  onChange={(v) => patchChannel(ch, { offsetVolts: v })}
+                />
+              </fieldset>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }

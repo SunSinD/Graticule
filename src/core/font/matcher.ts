@@ -40,12 +40,12 @@ export function matchBitmap(glyphs: readonly string[], font: BitmapFont): string
 
 const unitFactors: Readonly<Record<string, number>> = {
   uV: 1e-6, mV: 1e-3, V: 1,
-  ns: 1e-9, us: 1e-6, ms: 1e-3, s: 1,
+  ps: 1e-12, ns: 1e-9, us: 1e-6, ms: 1e-3, s: 1,
   Hz: 1, kHz: 1e3, MHz: 1e6, '%': 1,
 };
 
 export function parseQuantity(text: string): { readonly value: number; readonly unit: string } | null {
-  const match = /^([+-]?(?:\d+(?:[.,]\d+)?|[.,]\d+))(uV|mV|V|ns|us|ms|s|Hz|kHz|MHz|%)$/
+  const match = /^([+-]?(?:\d+(?:[.,]\d+)?|[.,]\d+))(uV|mV|V|ps|ns|us|ms|s|Hz|kHz|MHz|%)$/
     .exec(text.replace(/\s+/g, '').replace(/[µμ]/g, 'u').replace(/−/g, '-'));
   if (!match) return null;
   const unit = match[2]!;

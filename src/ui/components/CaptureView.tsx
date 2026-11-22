@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { CSSProperties } from 'react';
 import { Crop } from 'lucide-react';
 import type { ExtractionOverrides, ExtractionResult, Locale, Rect } from '../../core/types';
 import { renderOverlaySvg, renderWaveformSvg } from '../../core/export/svg';
@@ -73,18 +74,19 @@ export function CaptureView(props: Props) {
   );
 
   const showClean = view === 'clean' && !cropOpen && result !== null;
+  const ratio = size && size.width > 0 && size.height > 0 ? size.width / size.height : 5 / 3;
   const hDivs = intOr(hText, 10);
   const vDivs = intOr(vText, 8);
 
   return (
     <div className="capture">
       <div className="toolbar">
-        <div className="seg" role="group" aria-label={tx.original}>
-          <button type="button" className="btn" aria-pressed={view === 'original'} onClick={() => props.onView('original')}>
-            {tx.original}
-          </button>
-          <button type="button" className="btn" aria-pressed={view === 'clean'} disabled={!result} onClick={() => props.onView('clean')}>
+        <div className="seg" role="group" aria-label={tx.cleanPlot}>
+          <button type="button" className="btn" aria-pressed={showClean} disabled={!result} onClick={() => props.onView('clean')}>
             {tx.cleanPlot}
+          </button>
+          <button type="button" className="btn" aria-pressed={!showClean} onClick={() => props.onView('original')}>
+            {tx.original}
           </button>
         </div>
         <button
@@ -135,7 +137,7 @@ export function CaptureView(props: Props) {
         <div className="paper" dangerouslySetInnerHTML={{ __html: cleanSvg }} />
       ) : (
         <div className="stage-wrap">
-          <div className="stage">
+          <div className="stage" style={{ '--ar': ratio } as CSSProperties}>
             <img
               src={url}
               alt={fileName}

@@ -40,9 +40,14 @@ export const ExportPanel = forwardRef<HTMLElement, Props>(function ExportPanel({
   const off = source === null;
   return (
     <section ref={ref} className="exports" tabIndex={-1} aria-labelledby="exports-title">
-      <h2 id="exports-title">
-        {tx.export} <kbd>E</kbd>
-      </h2>
+      <div className="section-head">
+        <h2 id="exports-title">
+          {tx.export} <kbd>E</kbd>
+        </h2>
+        <span className="feedback small" role="status" aria-live="polite">
+          {feedback}
+        </span>
+      </div>
       <div className="btn-row">
         <button type="button" className="btn" disabled={off} onClick={() => source && onSvg(source)}>
           <Download size={16} aria-hidden="true" />
@@ -70,9 +75,6 @@ export const ExportPanel = forwardRef<HTMLElement, Props>(function ExportPanel({
           {tx.copyTsv}
         </button>
       </div>
-      <p className="feedback small" role="status" aria-live="polite">
-        {feedback}
-      </p>
     </section>
   );
 });

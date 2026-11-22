@@ -118,7 +118,36 @@ export function buildOverlayMask(image: RgbaImage, grid: GridGeometry, profile: 
     }
   }
 
+  if (profile === 'rigol-ds1054z') {
+    const sameColor = (x: number, y: number, r: number, g: number, b: number) => {
+      const i = at(image, x, y);
+      return data[i] === r && data[i + 1] === g && data[i + 2] === b;
+    };
+    if ([545, 590, 640, 665].every(x => sameColor(x, 40, 152, 152, 152) && sameColor(x, 64, 152, 152, 152))) {
+      fill(530, 40, 679, 64, OVERLAY);
+    }
+    if ([197, 300, 470, 582].every(x => sameColor(x, 102, 96, 100, 96) && sameColor(x, 361, 24, 24, 24))
+        && [104, 150, 250, 356].every(y => sameColor(190, y, 32, 36, 32) && sameColor(589, y, 32, 36, 32))) {
+      fill(190, 102, 589, 361, OVERLAY);
+    }
+  }
+
   if (siglent) {
+    if (grid.layoutVariant === 'decode-table') {
+      const whiteSpan = (y: number) => {
+        let count = 0;
+        for (let x = left; x <= right; x++) {
+          const i = at(image, x, y);
+          const ink = inverted ? 0 : 255;
+          if (data[i] === ink && data[i + 1] === ink && data[i + 2] === ink) count++;
+        }
+        return count > grid.width * 0.4;
+      };
+      for (let y = bottom - 30; y + 18 <= bottom; y++) {
+        if (whiteSpan(y) && whiteSpan(y + 18)) fill(left, y, right, y + 18, OVERLAY);
+      }
+    }
+
     // A Siglent trigger level badge is a triangle with its long edge at the right border.
     const packed = (x: number, y: number) => {
       const i = at(image, x, y);

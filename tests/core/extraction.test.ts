@@ -58,6 +58,26 @@ describe('column extraction and waveform measurements', () => {
     expect(analyzeCapture(short, 'single-pulse.png', overrides).measurements[0]!.dutyCyclePct).toBeNull();
   });
 
+  test('reports a narrow repeating pulse but withholds a frequency for isolated and irregular bursts', () => {
+    const periodic = bitmap(421, 221);
+    plot(periodic, yellow, col => col % 80 < 16 ? 74 : 146);
+    expect(analyzeCapture(periodic, 'low-duty.png', overrides).measurements[0]).toMatchObject({
+      frequencyHz: expect.closeTo(1000, 5), dutyCyclePct: expect.closeTo(20, 5),
+    });
+
+    const burst = bitmap(421, 221);
+    plot(burst, yellow, col => col >= 172 && col < 268 && (col - 172) % 24 < 9 ? 74 : 146);
+    expect(analyzeCapture(burst, 'isolated-burst.png', overrides).measurements[0]).toMatchObject({
+      vpp: 2.88, frequencyHz: null, periodSec: null, dutyCyclePct: null,
+    });
+
+    const irregular = bitmap(421, 221);
+    plot(irregular, yellow, col => col % 80 < (Math.floor(col / 80) % 2 ? 40 : 12) ? 74 : 146);
+    expect(analyzeCapture(irregular, 'variable-width.png', overrides).measurements[0]).toMatchObject({
+      frequencyHz: null, periodSec: null, dutyCyclePct: null,
+    });
+  });
+
   test('marks clipping in both directions and exposes unknown gaps without a voltage', () => {
     const image = bitmap(421, 221);
     plot(image, yellow, col => col >= 153 && col <= 173 ? null : zero - 135 * Math.sin(2 * Math.PI * col / 120));
@@ -125,6 +145,7 @@ test.each(['sine_schmitt.png', 'sweep_04.png'])('keeps scope readings in inverse
   const image = decodePng(sample(fileName));
   const dark = detectProfile(image);
   const expected = readScopeMetadata(image, dark);
+  const darkTraces = analyzeCapture(image, fileName).traces;
   for (let i = 0; i < image.data.length; i += 4) {
     image.data[i] = 255 - image.data[i]!;
     image.data[i + 1] = 255 - image.data[i + 1]!;
@@ -136,4 +157,12 @@ test.each(['sine_schmitt.png', 'sweep_04.png'])('keeps scope readings in inverse
   expect(inverted.scopeReadings).toEqual(expected.scopeReadings);
   expect(inverted.topFrequencyRaw).toEqual(expected.topFrequencyRaw);
   expect(inverted.rawTimebase).toBe(expected.rawTimebase);
+  const invertedTraces = analyzeCapture(image, fileName).traces;
+  expect(invertedTraces.map(trace => trace.channel)).toEqual(darkTraces.map(trace => trace.channel));
+  for (const trace of invertedTraces) {
+    const expected = traceById(darkTraces, trace.channel);
+    expect(trace.settings.voltsPerDiv).toBe(expected.settings.voltsPerDiv);
+    expect(trace.validCount).toBeGreaterThan(expected.validCount * 0.98);
+    expect(trace.samples[50]?.voltage).toEqual(expected.samples[50]?.voltage);
+  }
 });
