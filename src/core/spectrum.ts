@@ -329,6 +329,7 @@ export function computeSpectrum(result: ExtractionResult, options: SpectrumOptio
   // A flat-top window can shift the apparent peak by more than one resolution bin.
   const detected = strongest && coverage >= 0.25 ? refine(strongest, window === 'flattop' ? 2.25 : 1.25, true) : null;
   let fundamental = detected && detected.frequencyHz / resolutionBandwidthHz >= 2 ? refine(detected, 0.35) : null;
+  const quantization = pixelStep(result, options);
   if (detected && fundamental) {
     for (let order = 6; order >= 2; order--) {
       const frequencyHz = detected.frequencyHz / order;
@@ -337,12 +338,16 @@ export function computeSpectrum(result: ExtractionResult, options: SpectrumOptio
       if (count < order) continue;
       // Fit the two lines together so leakage from the dominant harmonic
       // cannot pass for energy at its subharmonic.
-      const amps = harmonicFit(centered, scale, frequencyHz, count)?.amps;
-      const dominantRms = amps?.[order - 1] ?? 0;
-      const vrms = amps?.[0] ?? 0;
-      if (dominantRms >= 0.5 * detected.vrms && vrms >= 0.05 * dominantRms) {
+      const fit = harmonicFit(centered, scale, frequencyHz, count);
+      if (!fit) continue;
+      const dominantRms = fit.amps[order - 1]!;
+      const vrms = fit.amps[0]!;
+      const residual = scale * Math.sqrt(fit.error / centered.length);
+      const lineFloor = 5 * Math.max(residual, quantization / Math.sqrt(12)) / Math.sqrt(centered.length);
+      const minimum = Math.max(lineFloor, dominantRms * 10 ** (noiseFloorDbc / 20));
+      if (dominantRms >= 0.5 * detected.vrms && vrms >= minimum) {
         const candidate = refine({ frequencyHz, vrms, dbv: db(vrms) }, 0.45 / order);
-        if (candidate.vrms >= 0.05 * dominantRms) {
+        if (candidate.vrms >= minimum) {
           fundamental = candidate;
           break;
         }
@@ -357,7 +362,7 @@ export function computeSpectrum(result: ExtractionResult, options: SpectrumOptio
     : !fundamental ? strongest ? 'insufficient_cycles' : 'no_fundamental'
     : hz / resolutionBandwidthHz < 3 - 1e-2 ? 'insufficient_cycles'
       : sampleRateHz / hz < 16 - resTolerance ? 'insufficient_resolution'
-        : (max / 2 - min / 2) < 20 * pixelStep(result, options) ? 'insufficient_swing' : null;
+        : (max / 2 - min / 2) < 20 * quantization ? 'insufficient_swing' : null;
   const fit = thdReason === null ? harmonicFit(centered, scale, hz, maxHarmonic(sampleRateHz, hz)) : null;
   const firstRms = fit?.amps[0] ?? 0;
   if (!thdReason && !(firstRms > 0)) thdReason = 'fit_failed';

@@ -3,7 +3,7 @@ import { matchBitmap, readBitmap } from './font/matcher.js';
 import { compactBadgeGlyphs, logo as siglentLogo } from './font/siglentFont.js';
 import { logo as rigolLogo } from './font/rigolFont.js';
 import { rasterFonts } from './font/rasterFonts.js';
-import { at, CHANNELS, channelColor, hueDegrees, pixelMatches } from './pixels.js';
+import { at, CHANNELS, channelColor, hueDegrees, MIN_VISIBLE_ALPHA, pixelMatches } from './pixels.js';
 import type { ChannelColor, PixelPredicate } from './pixels.js';
 import type { ChannelId, ExtractionOverrides, GridGeometry, LayoutVariant, ProfileDetection, ProfileId, Rect, RgbaImage } from './types.js';
 
@@ -304,6 +304,7 @@ export function invertTraceColors(image: RgbaImage, profileId: ProfileId, invert
   // complements them, which can happen when a capture was inverted after saving.
   for (const x of [36, 163, 290, 417, 544, 140, 244, 348, 452]) {
     const i = at(image, x, 550);
+    if (image.data[i + 3]! < MIN_VISIBLE_ALPHA) continue;
     const r = image.data[i]!, g = image.data[i + 1]!, b = image.data[i + 2]!;
     const high = Math.max(r, g, b);
     if (high >= 175 && high <= 182 && Math.min(r, g, b) <= 4) return false;
@@ -317,6 +318,7 @@ function findCompactSiglentCards(image: RgbaImage, invertColors: boolean, invert
   let digital = false;
   for (let x = 4; x <= 420; x += 104) {
     const index = at(image, x + 32, 550);
+    if (image.data[index + 3]! < MIN_VISIBLE_ALPHA) continue;
     const rgb = Array.from(image.data.subarray(index, index + 3), value => invertColors ? 255 - value : value);
     const high = Math.max(...rgb);
     const spread = high - Math.min(...rgb);

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import configuration from '../../src/core/profiles.json';
+import { renderWaveformSvg, waveformFrame } from '../../src/core/export/svg.js';
 import { glyphs as rigolGlyphs, logo as rigolLogo } from '../../src/core/font/rigolFont.js';
 import { rasterFonts } from '../../src/core/font/rasterFonts.js';
 import { parseQuantity } from '../../src/core/font/matcher.js';
@@ -112,6 +113,30 @@ describe('native capture profiles', () => {
     expect(analyzeCapture(image, 'rigol-four-channels.png').traces.map(t => [
       t.channel, t.settings.voltsPerDiv, t.settings.zeroY, t.validCount,
     ])).toEqual([['C1', 2, 105, 600], ['C2', 2, 175, 600], ['C3', 2, 245, 600], ['C4', 2, 315, 600]]);
+
+    for (let y = 172; y < 179; y++) {
+      for (let x = 70; x < 82; x++) image.data[4 * (y * image.width + x) + 3] = 64;
+    }
+    const c2 = analyzeCapture(image, 'rigol-transparent-marker.png').traces.find(trace => trace.channel === 'C2');
+    expect(c2?.settings).toMatchObject({ zeroSource: 'default', zeroY: 238, voltsPerDiv: 2 });
+  });
+
+  test('ignores transparent RGB retained in otherwise matching native profile anchors', () => {
+    const image = decodePng(sample('sine_schmitt.png'));
+    expect(detectProfile(image).profileId).toBe('siglent-sds2000x-plus');
+    for (let index = 3; index < image.data.length; index += 4) image.data[index] = 0;
+    expect(detectProfile(image).profileId).toBe('universal-fallback');
+  });
+
+  test('keeps the explicitly selected Rigol cyan channel through manual crop and deskew', () => {
+    const image = bitmap(211, 91);
+    paint(image, { x: 5, y: 40, width: 201, height: 1 }, [0, 252, 248]);
+    const profileId = 'rigol-ds1054z';
+    const crop = analyzeCapture(image, 'cropped.png', { profileId, manualCrop: { x: 5, y: 5, width: 200, height: 80 } });
+    const deskew = analyzeCapture(image, 'deskewed.png', { profileId, manualQuad: [
+      { x: 5, y: 5 }, { x: 205, y: 5 }, { x: 205, y: 85 }, { x: 5, y: 85 },
+    ] });
+    for (const result of [crop, deskew]) expect(result.traces).toMatchObject([{ channel: 'C2', validCount: 201 }]);
   });
 
   test('finds a rectangular dark plot and honors crop and division overrides', () => {
@@ -158,6 +183,21 @@ describe('native capture profiles', () => {
     const rows = result.traces[0]!.samples.map(sample => `${sample.timeSec},${sample.voltage ?? ''}`);
     const comparison = compareWithScopeCsv(result, parseScopeCsv(['Time (s),C1', ...rows].join('\n')));
     expect(comparison).toMatchObject({ totalCount: 1165, usableCount: 1165, unaligned: { matchedCount: 1165, rmseV: 0 } });
+    const { x0, y0, y1, plotW } = waveformFrame(result);
+    const firstTickX = Number((x0 + plotW * pxPerHDiv / (width - 1)).toFixed(2));
+    const svg = renderWaveformSvg(result);
+    expect(svg).toContain(`x1="${firstTickX}" y1="${y0}" x2="${firstTickX}"`);
+    expect(svg).toContain(`x1="${firstTickX}" y1="${Number(y1.toFixed(2))}" x2="${firstTickX}"`);
+
+    paint(image, { x: left, y: 400, width, height: 1 }, [0, 0, 0]);
+    const traceY = bottom - 10;
+    paint(image, { x: left, y: traceY, width, height: 1 }, [255, 255, 0]);
+    const bottomTrace = analyze().traces[0]!;
+    expect(bottomTrace.validCount).toBe(width);
+    expect(bottomTrace.samples.every(sample => sample.yPx === traceY)).toBe(true);
+    paint(image, { x: left + pxPerHDiv - 2, y: traceY, width: 12, height: 1 }, [0, 0, 0]);
+    paint(image, { x: left + pxPerHDiv, y: bottom - 17, width: 8, height: 12 }, [252, 252, 0]);
+    expect(analyze().traces[0]!.samples[pxPerHDiv]?.status).toBe('masked_overlay');
   });
 });
 

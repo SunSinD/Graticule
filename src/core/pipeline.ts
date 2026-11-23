@@ -28,7 +28,7 @@ export function analyzeCapture(source: RgbaImage, fileName: string, overrides: E
   const image = quad ? rectifyGrid(source, quad) : source;
   const nativeGrid = quad && overrides.profileId ? getNativeProfile(overrides.profileId)?.graticule : undefined;
   const detection = detectProfile(image, quad ? {
-    ...overrides, profileId: 'universal-fallback',
+    ...overrides,
     hDivs: overrides.hDivs ?? nativeGrid?.hDivs, vDivs: overrides.vDivs ?? nativeGrid?.vDivs,
     manualCrop: { x: 0, y: 0, width: image.width - 1, height: image.height - 1 },
   } : overrides);
@@ -37,7 +37,7 @@ export function analyzeCapture(source: RgbaImage, fileName: string, overrides: E
   const { scopeReadings, topFrequencyHz, topFrequencyRaw } = metadata;
   const mask = buildOverlayMask(image, detection.grid, detection.profileId, metadata.digital);
   const sourceProfile = quad && detection.grid.inverted
-    ? nativeGrid ? overrides.profileId : detectProfile(source).profileId : undefined;
+    ? overrides.profileId ?? detectProfile(source).profileId : undefined;
   const inverted = sourceProfile === undefined ? undefined : invertTraceColors(source, sourceProfile, true);
   const { traces, warnings } = extractTraces(image, detection, metadata, mask, timebase, overrides, inverted);
   const measurements = traces.map(trace => measureChannel(trace, detection.grid.pxPerVDiv));

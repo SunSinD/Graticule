@@ -2,7 +2,7 @@ import { matchBitmap, parseQuantity, readBitmap } from './font/matcher.js';
 import { compactGlyphs, glyphs as siglentFont, labels as siglentLabels } from './font/siglentFont.js';
 import { glyphs as rigolFont } from './font/rigolFont.js';
 import { rasterFonts } from './font/rasterFonts.js';
-import { at, CHANNELS } from './pixels.js';
+import { CHANNELS, pixelMatches } from './pixels.js';
 import { findNativeCards, getNativeProfile, hasCompactSiglentHeader, invertTraceColors, isRasterProfile, rigolCardInk, rigolScaleRoi } from './profiles.js';
 import type { ChannelColor, PixelPredicate } from './pixels.js';
 import type { ChannelId, ChannelSettings, ProfileDetection, Rect, RgbaImage, ScopeMeasureReading } from './types.js';
@@ -31,7 +31,7 @@ export interface ScopeMetadata {
 
 const measureMetrics: Readonly<Record<string, ScopeMeasureReading['metric']>> = {
   'pk-pk': 'vpp', vpp: 'vpp', max: 'vmax', min: 'vmin', mean: 'vavg', avg: 'vavg', rms: 'vrms',
-  amplitude: 'amplitude', freq: 'freq', period: 'period', duty: 'duty', '+duty': 'duty', '-duty': 'duty',
+  amplitude: 'amplitude', freq: 'freq', period: 'period', duty: 'duty', '+duty': 'duty', '-duty': '-duty',
 };
 
 const color: PixelPredicate = (r, g, b) => Math.max(r, g, b) - Math.min(r, g, b) > 85;
@@ -131,8 +131,7 @@ function readNewRasterMetadata(image: RgbaImage, profile: NonNullable<ReturnType
     const row = profile.graticule.top + 1;
     const marks: number[] = [];
     for (let x = profile.graticule.left; x <= profile.graticule.right; x++) {
-      const i = at(image, x, row);
-      if (image.data[i] === 128 && image.data[i + 1] === 128 && image.data[i + 2] === 255) marks.push(x);
+      if (pixelMatches(image, x, row, (r, g, b) => r === 128 && g === 128 && b === 255)) marks.push(x);
     }
     if (marks.length >= 5 && marks.at(-1)! - marks[0]! < 24) {
       const markerX = Math.round((marks[0]! + marks.at(-1)!) / 2);

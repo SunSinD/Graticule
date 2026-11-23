@@ -2,7 +2,7 @@ import { scaleOffset } from './dsp.js';
 import { CURSOR, OVERLAY } from './mask.js';
 import type { OverlayMask } from './mask.js';
 import type { ScopeMetadata } from './ocr.js';
-import { at, CHANNELS, channelColor } from './pixels.js';
+import { at, CHANNELS, channelColor, MIN_VISIBLE_ALPHA, pixelMatches } from './pixels.js';
 import type { ChannelColor } from './pixels.js';
 import { colorsFor, getNativeProfile, invertTraceColors, makeGrid } from './profiles.js';
 import type { ChannelId, ChannelSettings, ChannelTrace, ExtractionOverrides, GapStatus, GridGeometry, ProfileDetection,
@@ -47,13 +47,16 @@ function markerYs(image: RgbaImage, detection: ProfileDetection, colors: readonl
   const { x, y, width, height } = profile.zeroMarkerStrip;
   const { bottom, centerY } = detection.grid;
   const lastRow = profile.raster ? Math.min(bottom, y + height - 1) : bottom;
+  const colorAt = (col: number, row: number, invert: boolean) => {
+    const i = at(image, col, row);
+    const data = image.data;
+    return data[i + 3]! >= MIN_VISIBLE_ALPHA ? classifyPixel(data[i]!, data[i + 1]!, data[i + 2]!, colors, invert) : -1;
+  };
   if (profile.id === 'keysight-dsox1000') {
     const arrows: (number | null)[] = CHANNELS.map(() => null);
     for (let row = Math.max(y, detection.grid.top + 2); row <= lastRow; row++) {
-      const i = at(image, x + width - 1, row);
-      const j = at(image, x + width - 9, row);
-      const channel = classifyPixel(image.data[i]!, image.data[i + 1]!, image.data[i + 2]!, colors, false);
-      if (channel >= 0 && channel === classifyPixel(image.data[j]!, image.data[j + 1]!, image.data[j + 2]!, colors, false)) {
+      const channel = colorAt(x + width - 1, row, false);
+      if (channel >= 0 && channel === colorAt(x + width - 9, row, false)) {
         arrows[channel] = row;
       }
     }
@@ -62,8 +65,7 @@ function markerYs(image: RgbaImage, detection: ProfileDetection, colors: readonl
   if (profile.id === 'rohde-schwarz-rtb2004') {
     const tips = CHANNELS.map((): number[] => []);
     for (let row = y; row <= lastRow; row++) {
-      const i = at(image, x + width - 1, row);
-      const channel = classifyPixel(image.data[i]!, image.data[i + 1]!, image.data[i + 2]!, colors, false);
+      const channel = colorAt(x + width - 1, row, false);
       if (channel >= 0) tips[channel]!.push(row);
     }
     return tips.map(rows => {
@@ -80,8 +82,7 @@ function markerYs(image: RgbaImage, detection: ProfileDetection, colors: readonl
   const counts = CHANNELS.map(() => new Uint16Array(Math.max(0, lastRow - y + 1)));
   for (let row = y; row <= lastRow; row++) {
     for (let col = x; col < x + width; col++) {
-      const i = at(image, col, row);
-      const channel = classifyPixel(image.data[i]!, image.data[i + 1]!, image.data[i + 2]!, colors, inverted);
+      const channel = colorAt(col, row, inverted);
       if (channel < 0) continue;
       const bins = counts[channel]!;
       bins[row - y] = bins[row - y]! + 1;
@@ -191,6 +192,40 @@ interface TraceColumns {
   readonly thickness: number;
 }
 
+function rtbBottomLabels(image: RgbaImage, grid: GridGeometry, fill: (x1: number, y1: number, x2: number, y2: number) => void): void {
+  const left = grid.left + 1, top = grid.bottom - 20;
+  const width = grid.width - 1, height = 19;
+  const ink = new Uint8Array(width * height);
+  for (let row = 0; row < height; row++) {
+    for (let col = 0; col < width; col++) {
+      if (pixelMatches(image, left + col, top + row, (r, g, b) => Math.max(r, g, b) >= 128)) ink[row * width + col] = 1;
+    }
+  }
+  for (let start = 0; start < ink.length; start++) {
+    if (!ink[start]) continue;
+    const queue = [start];
+    ink[start] = 0;
+    let minX = width, maxX = 0, minY = height, maxY = 0;
+    for (let i = 0; i < queue.length; i++) {
+      const col = queue[i]! % width, row = Math.floor(queue[i]! / width);
+      minX = Math.min(minX, col); maxX = Math.max(maxX, col);
+      minY = Math.min(minY, row); maxY = Math.max(maxY, row);
+      for (let y = Math.max(0, row - 1); y <= Math.min(height - 1, row + 1); y++) {
+        for (let x = Math.max(0, col - 1); x <= Math.min(width - 1, col + 1); x++) {
+          const next = y * width + x;
+          if (!ink[next]) continue;
+          ink[next] = 0;
+          queue.push(next);
+        }
+      }
+    }
+    // The labels are made of small glyphs. Waveforms can run across the band or cross its edges.
+    if (maxX - minX < 20 && maxY - minY >= 4 && maxY - minY < 15 && minY > 0 && maxY < height - 1) {
+      fill(left + minX, top + minY, left + maxX, top + maxY);
+    }
+  }
+}
+
 function plotAnnotations(image: RgbaImage, detection: ProfileDetection, markers: readonly (number | null)[]): Uint8Array | null {
   const { profileId, grid } = detection;
   const { left, right, top, bottom } = grid;
@@ -217,6 +252,7 @@ function plotAnnotations(image: RgbaImage, detection: ProfileDetection, markers:
     const base = right - 1;
     const packed = (x: number, y: number) => {
       const i = at(image, x, y);
+      if (image.data[i + 3]! < MIN_VISIBLE_ALPHA) return -1;
       return (image.data[i]! << 16) | (image.data[i + 1]! << 8) | image.data[i + 2]!;
     };
     for (let y = top + 3; y <= bottom - 3; y++) {
@@ -238,21 +274,22 @@ function plotAnnotations(image: RgbaImage, detection: ProfileDetection, markers:
     }
     return pixels;
   }
-  for (const y of hLines.slice(1)) fill(left + 1, Math.round(y) - 18, left + 58, Math.round(y) - 4);
-  fill(left + 1, bottom - 18, right - 1, bottom - 4);
+  for (const y of hLines.slice(1, -1)) fill(left + 1, Math.round(y) - 18, left + 58, Math.round(y) - 4);
+  rtbBottomLabels(image, grid, fill);
   for (let x = left + 1; x < right; x++) {
-    const i = at(image, x, top + 2);
-    if (image.data[i] === 244 && image.data[i + 1] === 244 && image.data[i + 2] === 0) {
+    if (pixelMatches(image, x, top + 2, (r, g, b) => r === 244 && g === 244 && b === 0)) {
       fill(x - 4, top, x + 4, top + 30);
     }
   }
+  const badgeInk = (r: number, g: number, b: number) => r === 255 && g === 255 && b === 0;
+  let badgeRows = 0;
   for (let y = top; y < bottom; y++) {
     let badge = 0;
     for (let x = right - 40; x < right; x++) {
-      const i = at(image, x, y);
-      if (image.data[i] === 255 && image.data[i + 1] === 255 && image.data[i + 2] === 0) badge++;
+      if (pixelMatches(image, x, y, badgeInk)) badge++;
     }
-    if (badge >= 12) fill(right - 40, y - 3, right - 1, y + 3);
+    badgeRows = badge >= 12 && !pixelMatches(image, right - 41, y, badgeInk) ? badgeRows + 1 : 0;
+    if (badgeRows >= 3) fill(right - 40, y - 5, right - 1, y + 3);
   }
   return pixels;
 }
@@ -278,7 +315,7 @@ function maskedAt(image: RgbaImage, mask: OverlayMask, grid: GridGeometry, x: nu
 
 export function extractTraces(image: RgbaImage, detection: ProfileDetection, metadata: ScopeMetadata, mask: OverlayMask,
   timebase: TimebaseSettings, overrides: ExtractionOverrides,
-  inverted = invertTraceColors(image, detection.profileId, detection.grid.inverted)): { traces: ChannelTrace[]; warnings: string[] } {
+  inverted = invertTraceColors(image, overrides.profileId ?? detection.profileId, detection.grid.inverted)): { traces: ChannelTrace[]; warnings: string[] } {
   const grid = detection.grid;
   const times = Array.from({ length: grid.width + 1 }, (_, col) =>
     (grid.left + col - grid.centerX) / grid.pxPerHDiv * timebase.secPerDiv + timebase.triggerOffsetSec);
@@ -286,7 +323,7 @@ export function extractTraces(image: RgbaImage, detection: ProfileDetection, met
     throw new Error('Invalid trigger offset or time scale: adjacent columns need distinct timestamps.');
   }
   if (detection.digitalOnly) return { traces: [], warnings: [] };
-  const colors = metadata.colors ?? colorsFor(detection.profileId);
+  const colors = metadata.colors ?? colorsFor(overrides.profileId ?? detection.profileId);
   const markers = markerYs(image, detection, colors, inverted);
   const annotations = plotAnnotations(image, detection, markers);
   const plotMask = annotations ? { ...mask, pixels: mask.pixels.map((bits, index) => bits | annotations[index]!) } : mask;
@@ -300,7 +337,7 @@ export function extractTraces(image: RgbaImage, detection: ProfileDetection, met
     for (let y = grid.top; y <= grid.bottom; y++) {
       const pixel = y * image.width + x;
       const i = pixel * 4;
-      if (plotMask.pixels[pixel] || image.data[i + 3]! < 128) continue;
+      if (plotMask.pixels[pixel] || image.data[i + 3]! < MIN_VISIBLE_ALPHA) continue;
       const r = image.data[i]!;
       const g = image.data[i + 1]!;
       const b = image.data[i + 2]!;

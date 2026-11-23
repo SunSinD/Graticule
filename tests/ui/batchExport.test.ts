@@ -2,7 +2,8 @@ import { strFromU8, unzipSync } from 'fflate';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { computeMathTrace } from '../../src/core/math.js';
 import { analyzePngBytes } from '../../src/core/pipeline.js';
-import { buildBatchReportZip, svgToPngBytes } from '../../src/ui/batchExport.js';
+import { buildBatchReportZip, emptyCaptureNote, svgToPngBytes } from '../../src/ui/batchExport.js';
+import { formatWarning } from '../../src/ui/i18n.js';
 import type { BatchExportEntry } from '../../src/ui/batchExport.js';
 import * as download from '../../src/ui/download.js';
 import { sample } from '../core/fixtures.js';
@@ -182,6 +183,47 @@ describe('buildBatchReportZip', () => {
     expect(Object.keys(files)).toEqual(['report.md', 'report.tex', 'report.html']);
     expect(read(files, 'report.md')).toBe('# Rapport de laboratoire\n');
     expect(onProgress).not.toHaveBeenCalled();
+  });
+
+  test('strips the image extension before cleaning non ASCII and very long file names', async () => {
+    const long = 'a'.repeat(198) + '.png';
+    const files = unzipSync(await buildBatchReportZip(
+      [{ ...capture('波形.png'), pngBytes }, { ...capture('Été.heif'), pngBytes }, { ...capture(long), pngBytes }],
+      { locale: 'en' },
+    ));
+    const stems = Object.keys(files).filter((name) => name.endsWith('.csv')).map((name) => name.slice('captures/'.length, -4));
+
+    expect(stems).toContain('graticule');
+    expect(stems).toContain('Ete');
+    const longStem = stems.find((stem) => stem.startsWith('aaa'))!;
+    expect(longStem).toBe('a'.repeat(198));
+    expect(stems.some((stem) => stem === 'png' || stem.endsWith('.p') || stem.endsWith('.png'))).toBe(false);
+  });
+
+  test('writes en and em dashes as LaTeX dashes', async () => {
+    const files = unzipSync(await buildBatchReportZip([{ ...capture('a.png', 'Lab 3 – part 2 — final'), pngBytes }], { locale: 'en' }));
+
+    expect(read(files, 'report.tex')).toContain('\\subsection{Lab 3 -- part 2 --- final}');
+  });
+
+  test('turns channel warning codes into clean sentences in both languages', () => {
+    const empty = {
+      ...result,
+      traces: [],
+      detection: { ...result.detection, warnings: ['zero_marker_mismatch:C1', 'unsupported_channel_unit:C3'] },
+    };
+
+    const en = emptyCaptureNote(empty, 'en')!;
+    expect(en).toContain('C1: the offset on screen does not match the zero marker. Check the zero level.');
+    expect(en).toContain('C3 is not in volts, so it was left out.');
+    expect(en).not.toMatch(/zero marker mismatch|unsupported channel unit|_/);
+
+    const fr = emptyCaptureNote(empty, 'fr')!;
+    expect(fr).toContain('C1 : le décalage affiché ne correspond pas au repère du zéro.');
+    expect(fr).toContain('C3 n’est pas en volts, il a donc été ignoré.');
+
+    expect(formatWarning('digital_only', 'en')).toBe('Only digital channels were found.');
+    expect(formatWarning('new_warning:C2', 'en')).toBe('C2: new warning');
   });
 });
 

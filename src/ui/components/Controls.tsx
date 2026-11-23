@@ -1,5 +1,6 @@
 import type { ChannelId, ExtractionOverrides, ExtractionResult, Locale, MathConfig, MathOp, MathTraceResult, ProfileId } from '../../core/types';
 import type { Dict } from '../i18n';
+import { formatWarning } from '../i18n';
 import type { ChannelLabels } from '../history';
 import { ScaleInput } from './ScaleInput';
 import { useState } from 'react';
@@ -50,7 +51,7 @@ export function ProfilePanel({ tx, choice, result, disabled, onChoice }: Profile
       </select>
       {notes.map((n) => (
         <p key={n} className="note">
-          {tx.fallback[n] ?? n.replace(/_/g, ' ')}
+          {formatWarning(n, tx)}
         </p>
       ))}
     </section>

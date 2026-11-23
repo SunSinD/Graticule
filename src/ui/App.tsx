@@ -24,7 +24,7 @@ import { renderBodeTable, renderMeasurementsTable } from '../core/export/table';
 import { analyzeBode, analyzeSingle, recomputeBode } from './engine';
 import { filesFromDataTransfer, isImageFile, isPhotoLike, loadFile, releaseUrl } from './files';
 import type { LoadedFile } from './files';
-import { HISTORY_LIMIT, capHistory, compareItems, openHistory, releaseItems, storedChange } from './history';
+import { HISTORY_LIMIT, capHistory, compareItems, nextRev, openHistory, releaseItems, storedChange } from './history';
 import type { ChannelLabels, HistoryItem, HistoryStore, ItemState } from './history';
 import { baseName, copyImage, copyPlain, copyRich, downloadBlob, downloadText, svgToPng } from './download';
 import { formatDuration, reasonLabel, t } from './i18n';
@@ -48,6 +48,13 @@ type PointOverrides = Readonly<Record<string, BodePointOverride>>;
 type Source = 'pick' | 'camera';
 type MetaPatch = Pick<Partial<HistoryItem>, 'title' | 'channelLabels' | 'cursors'>;
 type Analysis = typeof import('./analysis');
+interface PendingCursors {
+  readonly cursors: PlotCursors | null | undefined;
+  /** When the cursors moved, so a newer cursor on disk is never overwritten by this one. */
+  readonly rev: number;
+  /** Changes on every write attempt, so only the newest attempt can clear this entry. */
+  readonly token: symbol;
+}
 
 interface BodeSession {
   readonly state: ItemState;
@@ -251,8 +258,12 @@ export function App() {
   const storeRef = useRef<HistoryStore | null>(null);
   const persisted = useRef<Map<string, HistoryItem>>(new Map());
   const cursorSaves = useRef<Map<string, number>>(new Map());
+  // Cursor moves not yet confirmed on disk, kept until their save commits so pagehide can still write them.
+  const pendingCursors = useRef<Map<string, PendingCursors>>(new Map());
   const saveSeq = useRef<Map<string, number>>(new Map());
   const inFlightSave = useRef<Map<string, HistoryItem>>(new Map());
+  // Snapshots that did not fit on disk. They are not retried until their saved fields change.
+  const failedSave = useRef<Map<string, HistoryItem>>(new Map());
   const batchRef = useRef(false);
   const batchTokenRef = useRef(0);
   const mathByIdRef = useRef<Readonly<Record<string, MathConfig>>>({});
@@ -310,6 +321,7 @@ export function App() {
       window.clearTimeout(feedbackTimer.current);
       for (const timer of cursorSaves.current.values()) window.clearTimeout(timer);
       cursorSaves.current.clear();
+      pendingCursors.current.clear();
     };
   }, []);
 
@@ -372,10 +384,14 @@ export function App() {
     if (!store || !historyReady || !keepHistory) return;
     const prev = persisted.current;
     const next = new Map<string, HistoryItem>();
-    const cancelCursorSave = (id: string): void => {
+    const stopCursorTimer = (id: string): void => {
       const timer = cursorSaves.current.get(id);
       if (timer !== undefined) window.clearTimeout(timer);
       cursorSaves.current.delete(id);
+    };
+    const cancelCursorSave = (id: string): void => {
+      stopCursorTimer(id);
+      pendingCursors.current.delete(id);
     };
     const save = (item: HistoryItem): void => {
       const id = item.id;
@@ -387,9 +403,25 @@ export function App() {
       };
       const seq = (saveSeq.current.get(id) ?? 0) + 1;
       saveSeq.current.set(id, seq);
-      void store.put(item).then((ok) => {
+      // Captures the user is looking at are never deleted to make room for another one.
+      const keep = new Set([...selectedRef.current, ...(activeRef.current ? [activeRef.current] : [])]);
+      void store.put(item, keep).then(({ ok, evicted }) => {
         settle();
-        if (!ok || storeRef.current !== store) return;
+        if (storeRef.current !== store) return;
+        for (const gone of evicted) {
+          // Deleted from disk to make room. It stays in this session but is not written back,
+          // otherwise it would push out another capture in turn.
+          persisted.current.delete(gone);
+          const live = itemsRef.current.find((i) => i.id === gone);
+          if (live) failedSave.current.set(gone, live);
+        }
+        if (!ok) {
+          if (saveSeq.current.get(id) === seq) failedSave.current.set(id, item);
+          return;
+        }
+        failedSave.current.delete(id);
+        // This save carried the newest cursor move, so that move no longer waits on its own.
+        if (storeRef.current === store && pendingCursors.current.get(id)?.cursors === item.cursors) cancelCursorSave(id);
         const latest = itemsRef.current.find((i) => i.id === id);
         // Removed, or history turned off, while the write was running.
         if (!latest || !keepRef.current) {
@@ -401,42 +433,78 @@ export function App() {
         persisted.current.set(id, item);
         // The item changed while this write ran, and nothing newer was saved for it.
         if (latest !== item && latest.state !== 'extracting' && storedChange(item, latest) !== 'none') {
-          cancelCursorSave(id);
+          stopCursorTimer(id);
           save(latest);
         }
       }, settle);
     };
-    const flushCursor = (id: string): void => {
-      cancelCursorSave(id);
-      const latest = itemsRef.current.find((i) => i.id === id);
-      if (!latest || latest.state === 'extracting' || !keepRef.current) return;
-      if (storeRef.current === store && persisted.current.has(id)) save(latest);
+    const flushCursor = (id: string, urgent = false): void => {
+      stopCursorTimer(id);
+      const pending = pendingCursors.current.get(id);
+      if (!pending) return;
+      if (storeRef.current !== store || !keepRef.current || !persisted.current.has(id)) {
+        pendingCursors.current.delete(id);
+        return;
+      }
+      const token = Symbol('cursors');
+      pendingCursors.current.set(id, { ...pending, token });
+      void store.updateCursors(id, pending.cursors ?? null, urgent, pending.rev).then((ok) => {
+        // A failed write keeps the move, so a queued save or the next pagehide still writes it.
+        if (!ok) return;
+        // A newer move, another attempt, a full save or a remove took over while this one waited.
+        if (pendingCursors.current.get(id)?.token !== token) return;
+        pendingCursors.current.delete(id);
+        if (storeRef.current !== store) return;
+        const was = persisted.current.get(id);
+        if (was) persisted.current.set(id, { ...was, cursors: pending.cursors, cursorsAt: pending.rev });
+      });
     };
     flushCursorSaves.current = () => {
-      for (const id of [...cursorSaves.current.keys()]) flushCursor(id);
+      for (const id of [...pendingCursors.current.keys()]) flushCursor(id, true);
     };
     for (const item of items) {
       const was = prev.get(item.id);
+      const change = was ? storedChange(was, item) : 'other';
+      const failed = failedSave.current.get(item.id);
+      const id = item.id;
+      const pend = pendingCursors.current.get(id);
+      // Notes a cursor move that is not on disk yet. The same move already waiting or saving is
+      // left alone, so an unrelated render does not restart it. True when the move is new.
+      const track = (): boolean => {
+        if (pend?.cursors === item.cursors) return false;
+        pendingCursors.current.set(id, { cursors: item.cursors, rev: item.cursorsAt ?? nextRev(), token: Symbol('cursors') });
+        return true;
+      };
+      const schedule = (): void => {
+        stopCursorTimer(id);
+        cursorSaves.current.set(id, window.setTimeout(() => flushCursor(id), CURSOR_SAVE_DELAY));
+      };
       if (was && item.state === 'extracting') {
-        cancelCursorSave(item.id);
-        next.set(item.id, was);
+        // The capture is not saved while it extracts again, but a cursor move still is: it stays
+        // tracked, so its timer or a pagehide still writes it if the tab reloads before the end.
+        next.set(id, was);
+        if ((pend || item.cursors !== was.cursors) && track()) schedule();
         continue;
       }
-      const change = was ? storedChange(was, item) : 'other';
-      if (change === 'other') {
-        if (was) next.set(item.id, was);
-        cancelCursorSave(item.id);
+      if (change !== 'none' && failed && storedChange(failed, item) === 'none') {
+        // Same snapshot that already failed to save, so it is not written again on every render.
+        // A cursor move stays pending, since its small cursor record may still fit at pagehide.
+        if (was) next.set(id, was);
+        stopCursorTimer(id);
+      } else if (change === 'other') {
+        if (was) next.set(id, was);
+        // The full save carries the cursors too, but it may wait behind another tab's lock, so a
+        // cursor move stays pending for pagehide until a save with it commits.
+        stopCursorTimer(id);
+        if (was && (pend || item.cursors !== was.cursors)) track();
         save(item);
       } else if (change === 'cursors' && was) {
-        next.set(item.id, was);
-        cancelCursorSave(item.id);
-        const id = item.id;
-        cursorSaves.current.set(
-          id,
-          window.setTimeout(() => flushCursor(id), CURSOR_SAVE_DELAY),
-        );
+        next.set(id, was);
+        if (track()) schedule();
       } else {
         next.set(item.id, item);
+        // The cursors went back to the saved ones while an older move still waits, so it is replaced.
+        if (pend && track()) schedule();
         if (was && was.lastUsed !== item.lastUsed) void store.updateMeta(item.id, { lastUsed: item.lastUsed });
       }
     }
@@ -446,12 +514,14 @@ export function App() {
         void store.remove(id);
       }
     }
+    const live = new Set(items.map((i) => i.id));
+    for (const id of [...failedSave.current.keys()]) if (!live.has(id)) failedSave.current.delete(id);
     persisted.current = next;
   }, [items, keepHistory, historyReady]);
 
   useEffect(() => {
     const flush = (): void => {
-      if (cursorSaves.current.size > 0) flushCursorSaves.current();
+      if (pendingCursors.current.size > 0) flushCursorSaves.current();
     };
     const onVisibility = (): void => {
       if (document.visibilityState === 'hidden') flush();
@@ -535,7 +605,7 @@ export function App() {
 
   const updateMeta = useCallback(
     (id: string, patch: MetaPatch) => {
-      patchItem(id, patch);
+      patchItem(id, 'cursors' in patch ? { ...patch, cursorsAt: nextRev() } : patch);
     },
     [patchItem],
   );
@@ -675,8 +745,10 @@ export function App() {
     replaceIdRef.current = null;
     persisted.current = new Map();
     inFlightSave.current.clear();
+    failedSave.current.clear();
     for (const timer of cursorSaves.current.values()) window.clearTimeout(timer);
     cursorSaves.current.clear();
+    pendingCursors.current.clear();
     void storeRef.current?.clear();
     setItems([]);
     setSelected([]);
@@ -696,6 +768,10 @@ export function App() {
     persisted.current = new Map();
     // A write that started before this switch may land before a clear, so the item is written again.
     inFlightSave.current.clear();
+    failedSave.current.clear();
+    for (const timer of cursorSaves.current.values()) window.clearTimeout(timer);
+    cursorSaves.current.clear();
+    pendingCursors.current.clear();
     if (!keep) void storeRef.current?.clear();
   };
 
@@ -725,7 +801,6 @@ export function App() {
         const now = Date.now();
         for (const f of images) {
           const name = f.name || 'photo.png';
-          const photo = source === 'camera' || isPhotoLike(f);
           let loaded: LoadedFile;
           try {
             loaded = await loadFile(f, name, { photo: source === 'camera' });
@@ -742,8 +817,10 @@ export function App() {
             releaseItems(added);
             return;
           }
+          const { hasExif, ...file } = loaded;
+          const photo = source === 'camera' || isPhotoLike(f) || hasExif;
           added.push({
-            ...loaded,
+            ...file,
             addedAt: now,
             lastUsed: now,
             state: 'staged',
@@ -779,7 +856,7 @@ export function App() {
         if (skipped.length > 0) setFileNote(tx.filesSkipped(skipped));
       } catch (e) {
         if (!committed) releaseItems(added);
-        if (mountedRef.current) setNotice(message(e));
+        if (mountedRef.current) setNotice(`${tx.error}: ${message(e)}`);
       } finally {
         if (mountedRef.current) setAdding(false);
       }
@@ -1334,7 +1411,9 @@ export function App() {
         : mode === 'bode' && bode
           ? tx.extractedBode(bode.points.length, formatDuration(bode.elapsedMs, locale))
           : '';
-  const error = notice ?? (mode === 'single' ? activeItem?.error ?? null : session?.error ?? null);
+  // Only a capture's own read or extraction error gets the "could not read this file" prefix.
+  const fileError = mode === 'single' ? activeItem?.error ?? null : session?.error ?? null;
+  const error = notice ?? (fileError ? `${tx.error}: ${fileError}` : null);
 
   const toggleTheme = (): void => {
     const next: Theme = dark ? 'light' : 'dark';
@@ -1663,7 +1742,7 @@ export function App() {
         )}
         {error && (
           <p className="error" role="alert">
-            {tx.error}: {error}
+            {error}
           </p>
         )}
         {status && (

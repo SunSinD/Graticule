@@ -1,4 +1,4 @@
-import { at } from './pixels.js';
+import { at, MIN_VISIBLE_ALPHA } from './pixels.js';
 import type { GridGeometry, ProfileId, RgbaImage } from './types.js';
 
 export const CURSOR = 1;
@@ -66,6 +66,7 @@ export function buildOverlayMask(image: RgbaImage, grid: GridGeometry, profile: 
   for (let y = top; y <= bottom; y++) {
     for (let x = left; x <= right; x++) {
       const i = at(image, x, y);
+      if (data[i + 3]! < MIN_VISIBLE_ALPHA) continue;
       const r = data[i]!;
       const g = data[i + 1]!;
       const b = data[i + 2]!;
@@ -101,7 +102,16 @@ export function buildOverlayMask(image: RgbaImage, grid: GridGeometry, profile: 
     for (let line = axisStart; line <= axisEnd; line++) {
       const runs = (bit: number) => findRuns(start, end, i => horizontal ? has(i, line, bit) : has(line, i, bit));
       const yellowRuns = runs(YELLOW);
-      if (hasDashPattern(yellowRuns, span)) {
+      const followsTrace = () => {
+        const dashes = yellowRuns.filter(run => run.end - run.start >= 2 && run.end - run.start <= 16);
+        const turns = dashes.filter(run => [run.start, run.end].some(i => [-1, 1].some(direction =>
+          [1, 2, 3].every(distance => {
+            const cross = line + direction * distance;
+            return cross >= axisStart && cross <= axisEnd && (horizontal ? has(i, cross, YELLOW) : has(cross, i, YELLOW));
+          }))));
+        return turns.length >= Math.max(3, dashes.length / 2);
+      };
+      if (hasDashPattern(yellowRuns, span) && !followsTrace()) {
         for (const run of yellowRuns) {
           if (run.end - run.start > 18) continue;
           if (horizontal) fill(run.start, line, run.end, line, CURSOR);
@@ -127,7 +137,7 @@ export function buildOverlayMask(image: RgbaImage, grid: GridGeometry, profile: 
   if (profile === 'rigol-ds1054z') {
     const sameColor = (x: number, y: number, r: number, g: number, b: number) => {
       const i = at(image, x, y);
-      return data[i] === r && data[i + 1] === g && data[i + 2] === b;
+      return data[i + 3]! >= MIN_VISIBLE_ALPHA && data[i] === r && data[i + 1] === g && data[i + 2] === b;
     };
     if ([545, 590, 640, 665].every(x => sameColor(x, 40, 152, 152, 152) && sameColor(x, 64, 152, 152, 152))) {
       fill(530, 40, 679, 64, OVERLAY);
@@ -144,7 +154,7 @@ export function buildOverlayMask(image: RgbaImage, grid: GridGeometry, profile: 
       const ink = inverted ? 0 : 255;
       const digitalInk = (x: number, y: number) => {
         const i = at(image, x, y);
-        return data[i] === ink && data[i + 1] === ink && data[i + 2] === ink;
+        return data[i + 3]! >= MIN_VISIBLE_ALPHA && data[i] === ink && data[i + 1] === ink && data[i + 2] === ink;
       };
       for (let y = top; y + 16 <= bottom; y++) {
         const borders = [...findRuns(left, left + 92, x => digitalInk(x, y)),
@@ -166,7 +176,7 @@ export function buildOverlayMask(image: RgbaImage, grid: GridGeometry, profile: 
         for (let x = left; x <= right; x++) {
           const i = at(image, x, y);
           const ink = inverted ? 0 : 255;
-          if (data[i] === ink && data[i + 1] === ink && data[i + 2] === ink) count++;
+          if (data[i + 3]! >= MIN_VISIBLE_ALPHA && data[i] === ink && data[i + 1] === ink && data[i + 2] === ink) count++;
         }
         return count > grid.width * 0.4;
       };
@@ -178,6 +188,7 @@ export function buildOverlayMask(image: RgbaImage, grid: GridGeometry, profile: 
     // A Siglent trigger level badge is a triangle with its long edge at the right border.
     const packed = (x: number, y: number) => {
       const i = at(image, x, y);
+      if (data[i + 3]! < MIN_VISIBLE_ALPHA) return -1;
       return (data[i]! << 16) | (data[i + 1]! << 8) | data[i + 2]!;
     };
     for (let y = top + 9; y <= bottom - 9; y++) {

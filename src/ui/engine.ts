@@ -19,7 +19,11 @@ type Pipeline = typeof import('../core/pipeline');
 
 let pipelinePromise: Promise<Pipeline> | null = null;
 function pipeline(): Promise<Pipeline> {
-  pipelinePromise ??= import('../core/pipeline');
+  pipelinePromise ??= import('../core/pipeline').catch((e: unknown) => {
+    // A failed chunk load is retried on the next call instead of failing for the whole session.
+    pipelinePromise = null;
+    throw e;
+  });
   return pipelinePromise;
 }
 

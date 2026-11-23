@@ -11,7 +11,7 @@ import type {
   SvgExportOptions,
 } from '../types.js';
 import { aggregateBodeFrequencies } from '../bode.js';
-import { projectRectToQuad } from '../deskew.js';
+import { normalizeQuad, projectRectToQuad } from '../deskew.js';
 import { scaleOffset } from '../dsp.js';
 import { GRATICULE_VERSION, formatEng, localizeDecimal, trimTrailingZeros } from './format.js';
 import { EXPORT_TEXT, GAP_LABELS, SVG_TEXT } from './labels.js';
@@ -154,7 +154,7 @@ function waveformLayout(result: ExtractionResult, options: SvgExportOptions) {
   const marginR = traces.length > 1 ? 76 : 28;
   const width = dimension(options.width, 960, x0 + marginR + 1);
   const plotW = width - x0 - marginR;
-  const plotH = plotW / Math.max(1, grid.hDivs) * Math.max(1, grid.vDivs);
+  const plotH = plotW / (grid.width / grid.pxPerHDiv) * Math.max(1, grid.vDivs);
   const laneGap = 5;
   const lanesH = traces.length * laneGap + 6;
   const axisLabelH = options.cursors ? 52 : 34;
@@ -220,11 +220,10 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
   const showGrid = options.showGrid ?? true;
   const showLegend = options.showLegend ?? true;
   const grid = result.detection.grid;
-  const hDivs = Math.max(1, grid.hDivs);
   const vDivs = Math.max(1, grid.vDivs);
   const { frame, traces, laneGap, lanesH, axisLabelH, legendRowH } = waveformLayout(result, options);
   const { width, height, x0, y0, x1, y1, plotW, plotH } = frame;
-  const divPx = plotW / hDivs;
+  const vDivPx = plotH / vDivs;
   const channelLabel = (id: ChannelId) => options.channelLabels?.[id]?.trim() || id;
   const gw = Math.max(1e-9, grid.width);
   const gh = Math.max(1e-9, grid.height);
@@ -243,19 +242,23 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
 
   if (showGrid) {
     const g: string[] = [];
-    for (let i = 1; i < hDivs; i++) g.push(line(x0 + i * divPx, y0, x0 + i * divPx, y1, pal.grid, 1));
-    for (let j = 1; j < vDivs; j++) g.push(line(x0, y0 + j * divPx, x1, y0 + j * divPx, pal.grid, 1));
-    const cx = x0 + (hDivs / 2) * divPx;
-    const cy = y0 + (vDivs / 2) * divPx;
-    const sub = divPx / 5;
-    for (let k = 1; k < hDivs * 5; k++) {
+    for (const x of grid.vLines) {
+      if (x > grid.left && x < grid.right) g.push(line(mapX(x), y0, mapX(x), y1, pal.grid, 1));
+    }
+    for (let j = 1; j < vDivs; j++) g.push(line(x0, y0 + j * vDivPx, x1, y0 + j * vDivPx, pal.grid, 1));
+    const cx = mapX(grid.centerX);
+    const cy = mapY(grid.centerY);
+    const subX = grid.pxPerHDiv / 5;
+    const firstLine = grid.vLines[0] ?? grid.left;
+    for (let k = 1; firstLine + k * subX < grid.right - 1e-9; k++) {
       if (k % 5 === 0) continue;
-      const xx = x0 + k * sub;
+      const xx = mapX(firstLine + k * subX);
+      if (xx <= x0) continue;
       g.push(line(xx, cy - 3, xx, cy + 3, pal.soft, 1));
     }
     for (let k = 1; k < vDivs * 5; k++) {
       if (k % 5 === 0) continue;
-      const yy = y0 + k * sub;
+      const yy = y0 + k * vDivPx / 5;
       g.push(line(cx - 3, yy, cx + 3, yy, pal.soft, 1));
     }
     out.push(`<g aria-hidden="true">${g.join('')}</g>`);
@@ -263,24 +266,50 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
   out.push(`<rect x="${n(x0)}" y="${n(y0)}" width="${n(plotW)}" height="${n(plotH)}" fill="none" stroke="${pal.ink}" stroke-width="1"/>`);
 
   const ticks: string[] = [];
-  for (let i = 0; i <= hDivs; i++) {
-    const xx = x0 + i * divPx;
+  const { secPerDiv, triggerOffsetSec } = result.timebase;
+  const formatTime = (time: number, signed = false) => {
+    const sig = Math.min(17, Math.max(3, 2 + Math.floor(Math.log10(Math.abs(time)) - Math.log10(secPerDiv))));
+    return svgMinus(formatEng(Math.abs(time) < secPerDiv * 1e-6 ? 0 : time, 's', locale, { sig, trim: true, signed }));
+  };
+  const timeTicks: { pixel: number; x: number; label: string }[] = [];
+  for (const [i, x] of grid.vLines.entries()) {
+    const xx = mapX(x);
     ticks.push(line(xx, y1, xx, y1 + 4, pal.ink, 1));
-    const tv = frame.timeAt(i / hDivs);
-    const label = svgMinus(formatEng(Math.abs(tv) < Math.abs(result.timebase.secPerDiv) * 1e-6 ? 0 : tv, 's', locale, { sig: 3, trim: true }));
-    if (i % 2 === 0 || hDivs <= 10) {
-      ticks.push(text(xx, y1 + lanesH + 14, label, { anchor: 'middle', size: 10, mono: true }, pal.ink));
+    if (i % 2 === 0 || grid.hDivs <= 10) {
+      timeTicks.push({ pixel: x, x: xx, label: formatTime(frame.timeAt((x - grid.left) / gw)) });
     }
   }
+  const tickSize = 10;
+  const characterWidth = tickSize * 0.605;
+  const labelPadding = 2.02; // Allows for rounding SVG coordinates to two decimal places.
+  const useRelativeTime = Math.abs(triggerOffsetSec) >= secPerDiv && timeTicks.some((tick, i) => {
+    const previous = timeTicks[i - 1];
+    return previous && tick.x - previous.x < (previous.label.length + tick.label.length) * characterWidth / 2 + labelPadding;
+  });
+  let nextLabelStart = -Infinity;
+  for (const { pixel, x, label } of timeTicks) {
+    const caption = useRelativeTime ? formatTime((pixel - grid.centerX) / grid.pxPerHDiv * secPerDiv) : label;
+    const halfWidth = caption.length * characterWidth / 2;
+    if (x - halfWidth < nextLabelStart) continue;
+    ticks.push(text(x, y1 + lanesH + 14, caption, { anchor: 'middle', size: tickSize, mono: true }, pal.ink));
+    nextLabelStart = x + halfWidth + labelPadding;
+  }
+  if (useRelativeTime) {
+    const offset = formatTime(triggerOffsetSec, true);
+    ticks.push(text((x0 + x1) / 2, y1 + lanesH + 31, `${t.timeAxis} (${t.offset} ${offset})`,
+      { anchor: 'middle', mono: true }, pal.ink));
+  }
   const axisTraces = traces.slice(0, 2);
+  const voltageLabelStride = Math.max(1, Math.ceil(15 / vDivPx));
   axisTraces.forEach((tr, idx) => {
     const left = idx === 0;
     const ax = left ? x0 : x1;
     for (let j = 0; j <= vDivs; j++) {
-      const yy = y0 + j * divPx;
+      const yy = y0 + j * vDivPx;
+      ticks.push(line(ax, yy, left ? ax - 4 : ax + 4, yy, pal.ink, 1));
+      if (j % voltageLabelStride !== 0) continue;
       const v = frame.voltAt(tr.channel, j / vDivs)!;
       const clean = Math.abs(v) < tr.settings.voltsPerDiv * 1e-6 ? 0 : v;
-      ticks.push(line(ax, yy, left ? ax - 4 : ax + 4, yy, pal.ink, 1));
       ticks.push(
         text(left ? ax - 7 : ax + 7, yy + 3.5, svgMinus(formatEng(clean, 'V', locale, { sig: 4, trim: true })), {
           anchor: left ? 'end' : 'start',
@@ -348,7 +377,7 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
   if (traces.length === 0) {
     out.push(text((x0 + x1) / 2, (y0 + y1) / 2, t.noChannels, { anchor: 'middle', size: 13, fill: pal.muted }, pal.ink));
   }
-  if (options.cursors) out.push(cursorMarkup(result, frame, options.cursors, locale, pal, y1 + lanesH + 35));
+  if (options.cursors) out.push(cursorMarkup(result, frame, options.cursors, locale, pal, y1 + lanesH + (useRelativeTime ? 48 : 35)));
 
   if (showLegend) {
     let ly = y1 + lanesH + axisLabelH + 10;
@@ -379,12 +408,8 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
         { size: 11, mono: true }, pal.ink));
       ly += legendRowH;
     }
-    lg.push(
-      text(x0, ly, `${t.timePerDiv} ${niceDiv(result.timebase.secPerDiv, locale, 's')}   ${t.trigger} ${svgMinus(formatEng(result.timebase.triggerOffsetSec, 's', locale, { sig: 3, trim: true }))}`, {
-        size: 11,
-        mono: true,
-      }, pal.ink),
-    );
+    const triggerLabel = useRelativeTime ? '' : `   ${t.trigger} ${svgMinus(formatEng(triggerOffsetSec, 's', locale, { sig: 3, trim: true }))}`;
+    lg.push(text(x0, ly, `${t.timePerDiv} ${niceDiv(secPerDiv, locale, 's')}${triggerLabel}`, { size: 11, mono: true }, pal.ink));
     ly += legendRowH;
     lg.push(text(x0, ly, t.gapNote, { size: 10, fill: pal.muted }, pal.ink));
     ly += legendRowH;
@@ -701,12 +726,12 @@ export interface OverlayOptions {
  */
 export function renderOverlaySvg(result: ExtractionResult, options: OverlayOptions = {}): string {
   const { sourceQuad, sourceWidth, sourceHeight } = result;
-  const projected = Boolean(sourceQuad && sourceWidth && sourceHeight);
-  const w = projected ? sourceWidth : result.imageWidth;
-  const h = projected ? sourceHeight : result.imageHeight;
+  const quad = sourceQuad && sourceWidth && sourceHeight ? normalizeQuad(sourceQuad, sourceWidth, sourceHeight) : null;
+  const w = quad ? sourceWidth : result.imageWidth;
+  const h = quad ? sourceHeight : result.imageHeight;
   const g = result.detection.grid;
   const size = { width: result.imageWidth, height: result.imageHeight };
-  const at = (x: number, y: number) => projected && sourceQuad ? projectRectToQuad({ x, y }, sourceQuad, size) : { x, y };
+  const at = (x: number, y: number) => quad ? projectRectToQuad({ x, y }, quad, size) : { x, y };
   const coords = ({ x, y }: ReturnType<typeof at>) => `${n(x)} ${n(y)}`;
   const xy = (x: number, y: number) => coords(at(x, y));
   const pixelCenter = (x: number, y: number) => {
@@ -714,7 +739,7 @@ export function renderOverlaySvg(result: ExtractionResult, options: OverlayOptio
     return { x: point.x + 0.5, y: point.y + 0.5 };
   };
   const pixelBoundary = (x: number, y: number) => pixelCenter(x - 0.5, y - 0.5);
-  const region = (left: number, right: number) => projected
+  const region = (left: number, right: number) => quad
     ? `polygon points="${xy(left, g.top)} ${xy(right, g.top)} ${xy(right, g.bottom)} ${xy(left, g.bottom)}"`
     : `rect x="${n(left)}" y="${n(g.top)}" width="${n(right - left)}" height="${n(g.height)}"`;
   const out: string[] = [

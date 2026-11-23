@@ -69,7 +69,6 @@ const METRIC_ALIASES: Readonly<Record<string, MetricKey>> = {
   pkpk: 'vpp',
   'pk-pk': 'vpp',
   '+duty': 'duty',
-  '-duty': 'duty',
   f: 'freq',
   vmax: 'vmax',
   max: 'vmax',
@@ -214,6 +213,7 @@ export const EXPORT_TEXT: Readonly<Record<Locale, ExportText>> = {
 export interface SvgText {
   readonly offset: string;
   readonly probe: string;
+  readonly timeAxis: string;
   readonly timePerDiv: string;
   readonly trigger: string;
   readonly gaps: string;
@@ -236,6 +236,7 @@ export const SVG_TEXT: Readonly<Record<Locale, SvgText>> = {
   en: {
     offset: 'offset',
     probe: 'probe',
+    timeAxis: 'Time',
     timePerDiv: 'Time/div',
     trigger: 'trigger',
     gaps: 'gaps',
@@ -256,6 +257,7 @@ export const SVG_TEXT: Readonly<Record<Locale, SvgText>> = {
   fr: {
     offset: 'd\u00e9calage',
     probe: 'sonde',
+    timeAxis: 'Temps',
     timePerDiv: 'Temps/div',
     trigger: 'd\u00e9clenchement',
     gaps: 'trous',

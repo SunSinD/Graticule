@@ -5,6 +5,8 @@ export interface LoadedFile {
   readonly name: string;
   readonly bytes: Uint8Array;
   readonly url: string;
+  /** The PNG carried EXIF data, so it came from a camera and is checked like a photo. */
+  readonly hasExif: boolean;
 }
 
 export interface LoadOptions {
@@ -38,16 +40,53 @@ function chunkType(bytes: Uint8Array, at: number): string {
   return String.fromCharCode(bytes[at]!, bytes[at + 1]!, bytes[at + 2]!, bytes[at + 3]!);
 }
 
-function hasExifChunk(bytes: Uint8Array): boolean {
+interface PngChunk {
+  readonly type: string;
+  readonly start: number;
+  readonly end: number;
+}
+
+/** Chunks up to IEND. Stops quietly at a chunk whose length runs past the end of the file. */
+function pngChunks(bytes: Uint8Array): PngChunk[] {
+  const out: PngChunk[] = [];
   let pos = 8;
   while (pos + 8 <= bytes.length) {
     const len = ((bytes[pos]! << 24) | (bytes[pos + 1]! << 16) | (bytes[pos + 2]! << 8) | bytes[pos + 3]!) >>> 0;
     const type = chunkType(bytes, pos + 4);
-    if (type === 'eXIf') return true;
-    if (type === 'IDAT' || type === 'IEND') return false;
+    if (len > bytes.length - pos - 12) break;
+    out.push({ type, start: pos, end: pos + 12 + len });
+    if (type === 'IEND') break;
     pos += 12 + len;
   }
-  return false;
+  return out;
+}
+
+export function hasExifChunk(bytes: Uint8Array): boolean {
+  return hasPngSignature(bytes) && pngChunks(bytes).some((c) => c.type === 'eXIf');
+}
+
+/**
+ * Chromium ignores an eXIf chunk placed after the image data, so the photo would not be rotated.
+ * Returns a copy with every such chunk moved just before the first IDAT, or null when none needs moving.
+ */
+export function moveExifBeforeIdat(bytes: Uint8Array): Uint8Array | null {
+  if (!hasPngSignature(bytes)) return null;
+  const chunks = pngChunks(bytes);
+  const firstIdat = chunks.findIndex((c) => c.type === 'IDAT');
+  if (firstIdat < 0) return null;
+  const late = chunks.filter((c, i) => i > firstIdat && c.type === 'eXIf');
+  if (late.length === 0) return null;
+  const order = [...chunks.slice(0, firstIdat), ...late, ...chunks.slice(firstIdat).filter((c) => c.type !== 'eXIf')];
+  const tail = chunks.length ? bytes.subarray(chunks[chunks.length - 1]!.end) : new Uint8Array(0);
+  const out = new Uint8Array(bytes.length);
+  out.set(bytes.subarray(0, 8), 0);
+  let at = 8;
+  for (const c of order) {
+    out.set(bytes.subarray(c.start, c.end), at);
+    at += c.end - c.start;
+  }
+  out.set(tail, at);
+  return out;
 }
 
 /** True only for plain PNGs the core decoder reads exactly like the browser. Others go through the canvas. */
@@ -94,8 +133,12 @@ export function makeUrl(bytes: Uint8Array): string {
 
 export async function loadFile(file: Blob, name: string, options: LoadOptions = {}): Promise<LoadedFile> {
   let bytes: Uint8Array = new Uint8Array(await file.arrayBuffer());
-  if (options.photo || !isRawPng(bytes)) bytes = await toPngBytes(file);
-  return { id: newId(), name, bytes, url: makeUrl(bytes) };
+  const hasExif = hasExifChunk(bytes);
+  if (options.photo || !isRawPng(bytes)) {
+    const fixed = hasExif ? moveExifBeforeIdat(bytes) : null;
+    bytes = await toPngBytes(fixed ? new Blob([fixed as BlobPart], { type: 'image/png' }) : file);
+  }
+  return { id: newId(), name, bytes, url: makeUrl(bytes), hasExif };
 }
 
 export function releaseUrl(url: string): void {

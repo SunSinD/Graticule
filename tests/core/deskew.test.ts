@@ -41,6 +41,17 @@ describe('four-corner deskew', () => {
     expect([...rect.data.slice(0, 4)]).toEqual([...yellow, 128]);
   });
 
+  test('projects full-image deskew overlays through the same pixel corners as extraction', () => {
+    const image = bitmap(40, 30);
+    for (let x = 0; x < image.width; x++) pixel(image, x, 12, yellow);
+    const result = analyzeCapture(image, 'full-image.png', { manualQuad: [
+      { x: 0, y: 0 }, { x: 40, y: 0 }, { x: 40, y: 30 }, { x: 0, y: 30 },
+    ] });
+    const overlay = renderOverlaySvg(result);
+    expect(overlay).toContain('points="0 0 39 0 39 29 0 29"');
+    expect(overlay).toContain('L39.5 12.5"');
+  });
+
   test('rejects crossed, reversed, duplicate, collinear and out-of-bounds corners', () => {
     const [a, b, c, d] = quad;
     const bad: Quad[] = [

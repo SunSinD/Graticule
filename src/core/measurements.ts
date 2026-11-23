@@ -328,10 +328,10 @@ export function measurePhase(traces: readonly ChannelTrace[], frequencyHz: numbe
   };
 }
 
-function computedFor(reading: ScopeMeasureReading, measurement: ChannelMeasurements | undefined,
+function computedFor(metric: ScopeMeasureReading['metric'], measurement: ChannelMeasurements | undefined,
   trace: ChannelTrace | undefined): number | null {
   if (!measurement) return null;
-  switch (reading.metric) {
+  switch (metric) {
     case 'vpp': return measurement.vpp;
     case 'vmax': return measurement.vmax;
     case 'vmin': return measurement.vmin;
@@ -340,6 +340,7 @@ function computedFor(reading: ScopeMeasureReading, measurement: ChannelMeasureme
     case 'freq': return measurement.frequencyHz;
     case 'period': return measurement.periodSec;
     case 'duty': return measurement.dutyCyclePct;
+    case '-duty': return measurement.dutyCyclePct === null ? null : 100 - measurement.dutyCyclePct;
     case 'amplitude': {
       const values = trace?.samples.filter(valid).map(s => s.voltage).sort((a, b) => a - b) ?? [];
       return values.length ? quantile(values, 0.95) - quantile(values, 0.05) : null;
@@ -349,7 +350,7 @@ function computedFor(reading: ScopeMeasureReading, measurement: ChannelMeasureme
 }
 
 const baseUnits: Partial<Record<ScopeMeasureReading['metric'], string>> = {
-  vpp: 'V', vmax: 'V', vmin: 'V', vavg: 'V', vrms: 'V', amplitude: 'V', freq: 'Hz', period: 's', duty: '%',
+  vpp: 'V', vmax: 'V', vmin: 'V', vavg: 'V', vrms: 'V', amplitude: 'V', freq: 'Hz', period: 's', duty: '%', '-duty': '%',
 };
 
 export function compareScope(readings: readonly ScopeMeasureReading[], measurements: readonly ChannelMeasurements[],
@@ -361,12 +362,13 @@ export function compareScope(readings: readonly ScopeMeasureReading[], measureme
   }
   return all.flatMap(reading => {
     if (reading.value === null) return [];
-    const graticuleValue = computedFor(reading, measurements.find(m => m.channel === reading.channel),
+    const metric = reading.metric === 'duty' && /^-duty(?:\s*\(|$)/i.test(reading.label.trim()) ? '-duty' : reading.metric;
+    const graticuleValue = computedFor(metric, measurements.find(m => m.channel === reading.channel),
       traces.find(t => t.channel === reading.channel));
     const delta = graticuleValue === null ? null : graticuleValue - reading.value;
     return [{
-      channel: reading.channel, metric: reading.metric === 'other' ? reading.label : reading.metric,
-      unit: baseUnits[reading.metric] ?? reading.unit, scopeValue: reading.value,
+      channel: reading.channel, metric: metric === '-duty' ? '-Duty' : metric === 'other' ? reading.label : metric,
+      unit: baseUnits[metric] ?? reading.unit, scopeValue: reading.value,
       graticuleValue, delta, deltaPct: delta === null || reading.value === 0 ? null : delta / Math.abs(reading.value) * 100,
     }];
   });

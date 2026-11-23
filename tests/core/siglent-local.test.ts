@@ -133,9 +133,11 @@ describe.skipIf(localFiles.length === 0)('local Siglent SDS2000X Plus capture re
     expect(inverted.frames.every(frame => !frame.parityError && !frame.framingError)).toBe(true);
   });
 
-  test.each([3, 4])('keeps baud unresolved on Lab 2 capture %i', index => {
+  test.each([3, 4])('keeps baud unresolved on Lab 2 capture %i with just one edge', index => {
     const result = results.get(`SDS2104X_Plus_PNG_${index}.png`)!;
-    expect(decodeUart(result, { channel: 'C1' })).toMatchObject({ reason: 'baud_unresolved', frames: [] });
+    for (const idleHigh of [true, false]) {
+      expect(decodeUart(result, { channel: 'C1', idleHigh })).toMatchObject({ reason: 'baud_unresolved', frames: [] });
+    }
   });
 
   test('withholds the Zener C1 fundamental and measures the active filter C2 near three cycles', () => {

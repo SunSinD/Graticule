@@ -36,7 +36,7 @@ function gates(options: BodeGateOptions): Required<BodeGateOptions> {
 }
 
 export function frequencyFromFileName(name: string): number | null {
-  const baseName = name.split(/[/\\]/).at(-1) ?? '';
+  const baseName = (name.split(/[/\\]/).at(-1) ?? '').replace(/(\S)\s+-\s+/g, '$1 ');
   const tokens = /(?:^|[^\d.,+\-\u2212])([+\-\u2212]?\s*(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[eE][+\-]?\d+)?\s*[pnuµμmkMG]?\s*[Hh][Zz])(?=$|[^A-Za-z])/g;
   for (const [, token] of baseName.matchAll(tokens)) {
     const frequency = parseEngineering(token!);
@@ -266,16 +266,17 @@ export function analyzeBodeBatch(extractions: readonly (ExtractionResult | BodeR
 }
 
 function isGateOptions(options: BodeGateOptions | BodeOverrides): options is BodeGateOptions {
-  return !(options instanceof Map) && Object.values(options).some(value =>
-    typeof value === 'number' || typeof value === 'string' || typeof value === 'boolean');
+  return !(options instanceof Map) && Object.entries(options).every(([key, value]) =>
+    Object.hasOwn(defaults, key) && (value === undefined || typeof value === typeof defaults[key as keyof BodeGateOptions]));
 }
 
 export function recomputeBodeResult(result: BodeResult, options?: BodeGateOptions): BodeResult;
 export function recomputeBodeResult(result: BodeResult, overrides: BodeOverrides | undefined, options?: BodeGateOptions): BodeResult;
 export function recomputeBodeResult(result: BodeResult, edits?: BodeOverrides | BodeGateOptions, options?: BodeGateOptions): BodeResult {
   const gateOnly = options === undefined && edits !== undefined && isGateOptions(edits);
+  const gateChanges = Object.fromEntries(Object.entries(gateOnly ? edits : options ?? {}).filter(([, value]) => value !== undefined));
   const normalized = gates({ inputChannel: result.inputChannel, outputChannel: result.outputChannel, ...result.gateOptions,
-    ...(gateOnly ? edits : options) });
+    ...gateChanges });
   const pairChanged = normalized.inputChannel !== result.inputChannel || normalized.outputChannel !== result.outputChannel;
   const liveEdits = edits && !gateOnly ? edits as BodeOverrides : undefined;
   const points = result.points.map(point => {

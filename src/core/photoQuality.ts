@@ -13,7 +13,7 @@ export interface PhotoQualityReport {
 }
 
 const sampleLimit = 640;
-const angles = Array.from({ length: 101 }, (_, i) => (i - 50) / 2);
+const angles = Array.from({ length: 181 }, (_, i) => (i - 90) / 2);
 const slopes = angles.map(angle => Math.tan(angle * Math.PI / 180));
 
 function percentile(histogram: Uint32Array, count: number, fraction: number): number {
@@ -107,7 +107,7 @@ function measureEdges({ levels, width, height, contrast }: ReturnType<typeof sam
       curvatureYSquares += curvatureY ** 2;
 
       const dy = Math.abs(above - below);
-      if (dy >= minEdge && dy >= 1.5 * Math.abs(left - right)) {
+      if (dy >= minEdge && dy >= Math.abs(left - right)) {
         xEdges.push(x);
         yEdges.push(y);
       }

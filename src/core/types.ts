@@ -138,7 +138,7 @@ export interface ChannelTrace {
 
 export interface ScopeMeasureReading {
   readonly label: string;
-  readonly metric: 'vpp' | 'vmax' | 'vmin' | 'vavg' | 'vrms' | 'amplitude' | 'freq' | 'period' | 'duty' | 'other';
+  readonly metric: 'vpp' | 'vmax' | 'vmin' | 'vavg' | 'vrms' | 'amplitude' | 'freq' | 'period' | 'duty' | '-duty' | 'other';
   readonly channel: ChannelId | null;
   readonly value: number | null;
   readonly unit: string;

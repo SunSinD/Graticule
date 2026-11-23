@@ -97,21 +97,25 @@ function outputSize([a, b, c, d]: Quad, size: DeskewSize | undefined): DeskewSiz
   return { width: w, height: Math.max(2, Math.min(Math.round(height * scale), Math.floor(maxPixels / w))) };
 }
 
+export function normalizeQuad(quad: Quad, imageWidth: number, imageHeight: number): Quad {
+  const [tl, tr, br, bl] = quad;
+  const fullWidth = tl.x === 0 && bl.x === 0 && tr.x === imageWidth && br.x === imageWidth;
+  const fullHeight = tl.y === 0 && tr.y === 0 && bl.y === imageHeight && br.y === imageHeight;
+  // Full-image bounds can use the exclusive right and bottom edges.
+  const pixelPoint = ({ x, y }: Point): Point => ({
+    x: fullWidth ? Math.min(x, imageWidth - 1) : x,
+    y: fullHeight ? Math.min(y, imageHeight - 1) : y,
+  });
+  return fullWidth || fullHeight ? [pixelPoint(tl), pixelPoint(tr), pixelPoint(br), pixelPoint(bl)] : quad;
+}
+
 export function rectifyGrid(image: RgbaImage, quad: Quad, size?: DeskewSize): RgbaImage {
   if (!Number.isInteger(image.width) || !Number.isInteger(image.height) || image.width < 2 || image.height < 2
       || image.data.length !== image.width * image.height * 4) throw new Error('Invalid RGBA capture dimensions');
   if (!validateQuad(quad, image.width, image.height)) {
     throw new Error('Invalid deskew corners: use four convex corners inside the image in TL, TR, BR, BL order');
   }
-  const [tl, tr, br, bl] = quad;
-  const fullWidth = tl.x === 0 && bl.x === 0 && tr.x === image.width && br.x === image.width;
-  const fullHeight = tl.y === 0 && tr.y === 0 && bl.y === image.height && br.y === image.height;
-  // Full-image bounds can use the exclusive right and bottom edges.
-  const pixelPoint = ({ x, y }: Point): Point => ({
-    x: fullWidth ? Math.min(x, image.width - 1) : x,
-    y: fullHeight ? Math.min(y, image.height - 1) : y,
-  });
-  const pixelQuad: Quad = fullWidth || fullHeight ? [pixelPoint(tl), pixelPoint(tr), pixelPoint(br), pixelPoint(bl)] : quad;
+  const pixelQuad = normalizeQuad(quad, image.width, image.height);
   const { width, height } = outputSize(pixelQuad, size);
   const { toQuad } = transform(pixelQuad);
   const data = new Uint8ClampedArray(width * height * 4);

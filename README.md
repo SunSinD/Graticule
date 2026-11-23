@@ -41,7 +41,7 @@ Drop a screenshot from your scope or take a photo of the screen on your phone, c
 
 - Reads the grid, the time scale and the volts per division from the screenshot
 - Extracts every visible analog channel as time and voltage data
-- Measures Vpp, Vmax, Vmin, Vavg, Vrms, period, frequency, duty cycle and the phase between any two channels
+- Measures Vpp, Vmax, Vmin, Vavg, Vrms, period, frequency, duty cycle and the phase between the first two channels
 - Measures rise time from 10 to 90%, fall time and overshoot on square waves
 - Compares its numbers with the scope MEASURE bar on Siglent SDS2000X Plus
 - Adds a math channel like `C1 - C2`, `C1 + C2` or `C1 × C2`
@@ -134,7 +134,7 @@ Clear asks you to confirm before it deletes anything. Turn off Keep history at t
 
 ## Phone photos
 
-On phones and tablets, tap the camera button to take a photo of the scope screen. Big photos are scaled down to 1920 px and turned the right way up. Graticule then checks the photo, and if it is blurry, tilted, too dark, too small or has glare, it tells you what to fix. You can retake the photo or use it anyway.
+On phones and tablets, tap the camera button to take a photo of the scope screen. Big photos are scaled down to 1920 px and turned the right way up. Graticule then checks the photo, and if it is blurry, tilted, low contrast, too small or has glare, it tells you what to fix. You can retake the photo or use it anyway.
 
 When a photo is tilted, click Straighten. Drag the 4 corners onto the 4 corners of the grid and click Apply crop. Graticule flattens the grid before it reads the traces, and the 1:1 overlay still lines up with the tilted photo.
 
@@ -208,9 +208,10 @@ npm run cli -- capture.png --xy C1,C2 --svg --out xy.svg
 npm run cli -- capture.png --fft C1 --window hann --table
 npm run cli -- capture.png --decode uart --channel C1 --baud auto --table
 npm run cli -- compare capture.png scope.csv --channel C1
+npm run cli -- compare capture.png scope.csv --channel C1 --csv-column "CH1 Voltage"
 ```
 
-`compare` checks a screenshot against the CSV saved by the scope itself and tells you how far apart they are. `--decode uart` reads the bytes of a serial signal from the trace.
+`compare` checks a screenshot against the CSV saved by the scope itself and tells you how far apart they are. Add `--csv-column` to pick the scope CSV column by its label. `--decode uart` reads the bytes of a serial signal from the trace.
 
 ## Accuracy
 

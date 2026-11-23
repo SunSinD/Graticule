@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { configDefaults, defineConfig } from 'vitest/config';
 import type { Plugin } from 'vite';
@@ -16,6 +16,8 @@ function listBundledAssets(directory: string, prefix = 'assets'): string[] {
   });
 }
 
+const STATIC_FILES = ['index.html', 'manifest.webmanifest', 'favicon.svg', 'icon-192.png', 'icon-512.png'];
+
 function precachePlugin(): Plugin {
   return {
     name: 'graticule-precache',
@@ -30,14 +32,21 @@ function precachePlugin(): Plugin {
         .map((asset) => asset.slice('assets/'.length))
         .sort();
       const version = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')).version as string;
-      const digest = createHash('sha256')
-        .update(`${version}\0${assets.join('\0')}`)
-        .digest('hex')
-        .slice(0, 8);
+      const serviceWorkerPath = resolve(dist, 'sw.js');
+      const serviceWorkerSource = readFileSync(serviceWorkerPath, 'utf8');
+      const hash = createHash('sha256').update(`${version}\0${assets.join('\0')}`);
+      // A worker only change must never reuse the cache of the build it replaces.
+      hash.update('\0sw.js\0').update(createHash('sha256').update(serviceWorkerSource).digest('hex'));
+      // The page and static files keep the same names between builds, so their contents go into the cache name.
+      for (const name of STATIC_FILES) {
+        const path = resolve(dist, name);
+        if (!existsSync(path)) continue;
+        hash.update(`\0${name}\0`).update(createHash('sha256').update(readFileSync(path)).digest('hex'));
+      }
+      const digest = hash.digest('hex').slice(0, 8);
       const cacheName = `graticule-v${version}-${digest}`;
       const precache = assets.map((name) => JSON.stringify(`./assets/${name}`)).join(',');
-      const serviceWorkerPath = resolve(dist, 'sw.js');
-      const serviceWorker = readFileSync(serviceWorkerPath, 'utf8')
+      const serviceWorker = serviceWorkerSource
         .replaceAll('__GRATICULE_CACHE__', cacheName)
         .replace('/*__GRATICULE_PRECACHE__*/', precache);
       writeFileSync(serviceWorkerPath, serviceWorker);

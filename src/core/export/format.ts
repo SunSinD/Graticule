@@ -1,10 +1,10 @@
 import type { Locale } from '../types.js';
 
-export const GRATICULE_VERSION = '2.0.3';
+export const GRATICULE_VERSION = '2.0.4';
 export const EMPTY_CELL = '\u2014';
 
 export function spreadsheetText(text: string): string {
-  return /^ *[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+  return /^(?:[\s\u00a0]*[=+\-@]|[\t\r\n])/.test(text) ? `'${text}` : text;
 }
 
 interface SiPrefix {
@@ -128,10 +128,6 @@ export function csvNumber(value: number | null | undefined, sig = 9): string {
   return rounded === 0 ? '0' : String(rounded);
 }
 
-function cleanFloat(value: number): number {
-  return Number(value.toPrecision(12));
-}
-
 export function stepScale125(value: number, dir: 1 | -1): number {
   if (!Number.isFinite(value) || value <= 0) return 1;
   const exp = Math.max(-323, Math.floor(Math.log10(value)));
@@ -145,28 +141,26 @@ export function stepScale125(value: number, dir: 1 | -1): number {
   return value;
 }
 
-const MULTIPLIERS: Readonly<Record<string, number>> = {
-  '': 1,
-  p: 1e-12,
-  n: 1e-9,
-  u: 1e-6,
-  '\u00b5': 1e-6,
-  '\u03bc': 1e-6,
-  m: 1e-3,
-  k: 1e3,
-  K: 1e3,
-  M: 1e6,
-  G: 1e9,
+const PREFIX_EXPONENTS: Readonly<Record<string, number>> = {
+  '': 0,
+  p: -12,
+  n: -9,
+  u: -6,
+  '\u00b5': -6,
+  '\u03bc': -6,
+  m: -3,
+  k: 3,
+  K: 3,
+  M: 6,
+  G: 9,
 };
 
 const UNIT_SUFFIXES: readonly string[] = ['hz', 'db', 'div', 'v²', 'v2', 'v', 's', '\u00b0', '%', 'a'];
 
 export function parseEngineering(input: string): number | null {
   const text = input.trim().replace(/,/g, '.').replace(/\u2212/g, '-');
-  const match = /^([+-]?)\s*((?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)/i.exec(text);
+  const match = /^([+-]?)\s*(\d+\.?\d*|\.\d+)(?:e([+-]?\d+))?/i.exec(text);
   if (!match) return null;
-  const base = Number(match[1]! + match[2]!);
-  if (!Number.isFinite(base)) return null;
   let rest = text.slice(match[0].length).replace(/\s+/g, '').replace(/\/div$/i, '');
   const lower = rest.toLowerCase();
   for (const unit of UNIT_SUFFIXES) {
@@ -175,8 +169,12 @@ export function parseEngineering(input: string): number | null {
       break;
     }
   }
-  const mult = MULTIPLIERS[rest];
-  if (mult === undefined) return null;
-  const value = cleanFloat(base * mult);
+  const prefixExponent = PREFIX_EXPONENTS[rest];
+  if (prefixExponent === undefined) return null;
+  const exponentText = match[3] ?? '0';
+  const exponent = Number(exponentText);
+  // Huge exponents already overflow or underflow with any SI prefix.
+  const scaledExponent = Number.isSafeInteger(exponent) ? exponent + prefixExponent : exponentText;
+  const value = Number(`${match[1]}${match[2]}e${scaledExponent}`);
   return Number.isFinite(value) ? value : null;
 }

@@ -171,6 +171,8 @@ const en = {
     manual_crop: 'Using your crop box.',
     manual_profile: 'Universal mode chosen by you.',
     digital_only: 'Only digital channels were found.',
+    zero_marker_mismatch: '{ch}: the offset on screen does not match the zero marker. Check the zero level.',
+    unsupported_channel_unit: '{ch} is not in volts, so it was left out.',
   } as Record<string, string>,
   gapLabels: GAP_LABELS.en,
   scaleDefault: 'not read, check it',
@@ -407,6 +409,8 @@ const fr: Dict = {
     manual_crop: 'Votre cadre est utilisé.',
     manual_profile: 'Mode universel choisi par vous.',
     digital_only: 'Seulement des canaux numériques trouvés.',
+    zero_marker_mismatch: '{ch} : le décalage affiché ne correspond pas au repère du zéro. Vérifiez le niveau zéro.',
+    unsupported_channel_unit: '{ch} n’est pas en volts, il a donc été ignoré.',
   },
   gapLabels: GAP_LABELS.fr,
   scaleDefault: 'non lu, à vérifier',
@@ -517,6 +521,18 @@ export const ROW_LABELS: Readonly<Record<Locale, Readonly<Record<RowKey, string>
 
 export function t(locale: Locale): Dict {
   return DICTS[locale];
+}
+
+/** Turns a warning code such as `zero_marker_mismatch:C1` into a clean sentence. */
+export function formatWarning(code: string, locale: Locale | Dict): string {
+  const split = code.indexOf(':');
+  const key = split < 0 ? code : code.slice(0, split);
+  const channel = split < 0 ? '' : code.slice(split + 1);
+  const known = (typeof locale === 'string' ? DICTS[locale] : locale).fallback[key];
+  if (known) return channel ? known.replaceAll('{ch}', channel) : known.replace(/^\{ch\}\s*:?\s*/, '');
+  const words = key.replace(/_/g, ' ');
+  const text = channel ? `${channel}: ${words}` : words;
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 export function gapLabel(status: GapStatus, locale: Locale): string {

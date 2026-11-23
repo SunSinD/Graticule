@@ -6,6 +6,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, test } from 'vitest';
 import { version } from '../../package.json';
+import { renderWaveformCsv } from '../../src/core/export/csv.js';
+import { analyzePngBytes } from '../../src/core/pipeline.js';
 import { sample } from './fixtures.js';
 
 const root = mkdtempSync(join(tmpdir(), 'graticule-cli-'));
@@ -24,6 +26,13 @@ describe('command line', () => {
     const result = cli(input, '--csv', '--title', 'Bench capture');
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout.split('\n').slice(0, 3)).toEqual([`# Graticule v${version}`, '# file: capture.png', '# title: Bench capture']);
+  });
+
+  test('matches the browser CSV renderer with nanosecond samples at a one-second offset', () => {
+    const result = cli(input, '--csv', '--sec-per-div', '1ns', '--trigger-offset', '1s');
+    expect(result.status, result.stderr).toBe(0);
+    const capture = analyzePngBytes(sample('sine_schmitt.png'), 'capture.png', { secPerDiv: 1e-9, triggerOffsetSec: 1 });
+    expect(result.stdout).toBe(renderWaveformCsv(capture));
   });
 
   test('exports LaTeX and dark SVG and creates nested output directories', () => {
@@ -101,6 +110,21 @@ describe('command line', () => {
     const collision = cli('compare', input, scope, '--json', '--out', scope);
     expect(collision.status).toBe(1);
     expect(collision.stderr).toContain('Output would overwrite an input file');
+  }, 15_000);
+
+  test('documents and accepts an explicit compare CSV column', () => {
+    expect(cli('--help').stdout).toContain('--csv-column <label>');
+    const scope = join(root, 'named-reference.csv');
+    writeFileSync(scope, 'Time,Channel 1 (V),Channel 2 (V),Bench Output\n-0.003,1,2,3\n0.003,1,2,3\n');
+    const byChannel = cli('compare', input, scope, '--channel', 'C2', '--json');
+    expect(byChannel.status, byChannel.stderr).toBe(0);
+    expect(JSON.parse(byChannel.stdout)).toMatchObject({ channel: 'C2', csvColumn: 'Channel 2 (V)' });
+    const byColumn = cli('compare', input, scope, '--csv-column', 'Channel 2 (V)', '--json');
+    expect(byColumn.status, byColumn.stderr).toBe(0);
+    expect(JSON.parse(byColumn.stdout)).toMatchObject({ channel: 'C2', csvColumn: 'Channel 2 (V)' });
+    const explicit = cli('compare', input, scope, '--channel', 'C2', '--csv-column', 'Bench Output', '--json');
+    expect(explicit.status, explicit.stderr).toBe(0);
+    expect(JSON.parse(explicit.stdout)).toMatchObject({ channel: 'C2', csvColumn: 'Bench Output' });
   }, 15_000);
 
   test('uses custom titles in Bode CSV and Bode and Compare LaTeX captions', () => {

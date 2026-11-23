@@ -1,6 +1,7 @@
 import type { ChannelId, RgbaImage } from './types.js';
 
 export const CHANNELS = ['C1', 'C2', 'C3', 'C4'] as const satisfies readonly ChannelId[];
+export const MIN_VISIBLE_ALPHA = 128;
 
 export interface ChannelColor {
   readonly rgb: readonly number[];
@@ -16,7 +17,8 @@ export const at = (image: RgbaImage, x: number, y: number) => (y * image.width +
 
 export function pixelMatches(image: RgbaImage, x: number, y: number, predicate: PixelPredicate): boolean {
   const index = at(image, x, y);
-  return predicate(image.data[index]!, image.data[index + 1]!, image.data[index + 2]!);
+  return image.data[index + 3]! >= MIN_VISIBLE_ALPHA
+    && predicate(image.data[index]!, image.data[index + 1]!, image.data[index + 2]!);
 }
 
 export function hueDegrees(r: number, g: number, b: number, high: number, spread: number): number {

@@ -61,7 +61,7 @@ function renderMarkdown(tables: readonly Table[]): string {
 }
 
 function renderTsv(tables: readonly Table[]): string {
-  const cell = (text: string) => escapeTsv(spreadsheetText(text));
+  const cell = (text: string) => spreadsheetText(escapeTsv(text));
   return tables
     .map((t) => [cell(t.caption), t.head.map(cell).join('\t'), ...t.rows.map((r) => r.map((value, index) =>
       index >= t.numericFrom && index < (t.numericTo ?? r.length) ? escapeTsv(value) : cell(value)).join('\t'))].join('\n'))
@@ -79,7 +79,7 @@ const LATEX_CHARS: Readonly<Record<string, string>> = {
 function renderLatex(tables: readonly Table[]): string {
   const escape = (value: string) => value.replace(/[\t\r\n]+/g, ' ')
     .replace(/[\\{}&%$#_~^°µμ–—−Δ→≤<>|]/g, char => LATEX_CHARS[char]!);
-  const row = (cells: readonly string[]) => cells.map(escape).join(' & ').replace(/^(\s*)\[/, '$1{[}') + ' \\\\';
+  const row = (cells: readonly string[]) => cells.map(escape).join(' & ').replace(/^(\s*)(\*?)\[/, '$1$2{[}') + ' \\\\';
   return tables.map(table => [
     '\\begin{table}[ht]', '\\centering', '\\caption{' + escape(table.caption) + '}',
     '\\begin{tabular}{' + table.head.map((_, i) => i >= table.numericFrom ? 'r' : 'l').join('') + '}',
@@ -153,7 +153,7 @@ export function measurementTables(result: ExtractionResult, locale: Locale,
     const value = metricValue(m, key);
     const limited = key === 'rise' ? m.riseLimited : key === 'fall' && m.fallLimited;
     const formatted = unit && METRIC_UNITS[key] === 'V' ? formatEng(value, unit, locale) : formatMetric(value, key, '', locale);
-    return limited && value !== null ? '≤ ' + formatted : formatted;
+    return limited && value !== null ? '< ' + formatted : formatted;
   };
   const rows: string[][] = MEASURE_ROWS.map((key) => [
     METRIC_LABELS[locale][key],

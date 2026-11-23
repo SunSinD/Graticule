@@ -22,7 +22,7 @@ import type { BodeRejectedCapture, ChannelId, ExtractionOverrides, ExtractionRes
 const usage = `Usage
   graticule capture.png [options]
   graticule --bode folder [options]
-  graticule compare capture.png scope.csv [--channel C1] [--json]
+  graticule compare capture.png scope.csv [--channel C1] [--csv-column <label>] [--json]
 
 With no output flag, prints a table. Use --out with a file path for one format
 or a directory path for multiple formats.
@@ -104,7 +104,7 @@ async function run(): Promise<void> {
       hdivs: { type: 'string' }, vdivs: { type: 'string' }, offset: { type: 'string', multiple: true },
       'trigger-offset': { type: 'string' }, math: { type: 'string' }, 'math-a': { type: 'string' }, 'math-b': { type: 'string' },
       xy: { type: 'string' }, fft: { type: 'string' }, window: { type: 'string' }, scale: { type: 'string' },
-      decode: { type: 'string' }, channel: { type: 'string' }, baud: { type: 'string' },
+      decode: { type: 'string' }, channel: { type: 'string' }, baud: { type: 'string' }, 'csv-column': { type: 'string' },
     },
   });
   if (values.out === '') throw new Error('--out requires a non-empty path.');
@@ -167,6 +167,9 @@ async function run(): Promise<void> {
   if (values.decode && values.svg) throw new Error('--svg is unsupported with --decode uart. Use a table, CSV or JSON.');
   const channel = channelId(values.channel, '--channel');
   if (!comparing && !values.decode && channel) throw new Error('--channel requires compare or --decode uart.');
+  const csvColumn = values['csv-column'];
+  if (csvColumn !== undefined && !comparing) throw new Error('--csv-column requires compare.');
+  if (csvColumn !== undefined && !csvColumn.trim()) throw new Error('--csv-column requires a column label.');
   const baud = values.baud === undefined || values.baud === 'auto' ? 'auto' : Number(values.baud);
   if (baud !== 'auto' && (!Number.isFinite(baud) || baud <= 0)) throw new Error('Use --baud auto or a positive rate.');
   if (values.baud !== undefined && !values.decode) throw new Error('--baud requires --decode uart.');
@@ -205,7 +208,7 @@ async function run(): Promise<void> {
     if (comparing) {
       const scopeFile = positionals[2]!;
       inputs.push(scopeFile);
-      const comparison = compareWithScopeCsv(result, parseScopeCsv(await readFile(scopeFile, 'utf8')), { channel });
+      const comparison = compareWithScopeCsv(result, parseScopeCsv(await readFile(scopeFile, 'utf8')), { channel, csvColumn });
       if (values.svg) throw new Error('Compare supports a table, CSV and JSON.');
       if (values.json) json(comparison);
       const rows = Object.entries(comparison.unaligned).map(([key, value]) =>

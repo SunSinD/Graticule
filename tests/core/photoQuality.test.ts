@@ -88,7 +88,7 @@ describe('phone photo quality', () => {
     expect(report.contrast).toBe(32);
   });
 
-  it.each([-10, -5, 4.5, 8])('finds horizontal lines tilted by %s degrees', angle => {
+  it.each([-42, -30, -10, -5, 4.5, 8, 30, 42])('finds horizontal lines tilted by %s degrees', angle => {
     const report = assessPhotoQuality(capture({ angle }));
     expect(report.issues).toContain('tilted');
     expect(Math.abs(report.tiltDeg - angle)).toBeLessThanOrEqual(0.5);

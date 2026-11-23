@@ -349,6 +349,15 @@ describe('spectrum and harmonic THD', () => {
     expect(spec.fundamental?.vrms).toBeCloseTo(Math.SQRT1_2, 5);
   });
 
+  test('finds a weak fundamental beneath a much stronger second harmonic', () => {
+    const result = capture(1000, 1 / 10_000, { wave: i => 0.04 * sine(i, 100) + sine(i, 50) });
+    const spec = computeSpectrum(result, { channel: 'C1' });
+    expect(spec.fundamental?.frequencyHz).toBeCloseTo(100, 3);
+    expect(spec.thdReason).toBeNull();
+    expect(spec.thdPct).toBeCloseTo(2500, 0);
+    expect(spec.thdBelowFloor).toBe(false);
+  });
+
   test('fits off-bin harmonics jointly on observed columns and bridges only short cursor gaps', () => {
     const dt = 1 / 40_000, f0 = 927.37;
     const wave = (i: number) => {
@@ -542,9 +551,19 @@ function uartCapture(bytes: readonly number[], px: number, baud: number,
 }
 
 describe('analog UART', () => {
-  test('counts consecutive E0 frames at 9600 baud with two idle bits on each side', () => {
-    const result = uartCapture([0xe0, 0xe0], 12, 9600, { idleBits: 2, trailingIdleBits: 2 });
+  test('counts one-bit stop pulses between consecutive 0C frames in auto baud mode', () => {
+    const result = uartCapture([0x0c, 0x0c], 12, 9600);
+    const manualAlias = decodeUart(result, { channel: 'C1', baud: 19200 });
+    expect(manualAlias.frames.map(frame => frame.hex)).toEqual(['E0', '80', 'E0', '80']);
     expect(decodeUart(result, { channel: 'C1' })).toMatchObject({ baud: 9600, reason: null, frames: [
+      { hex: '0C', framingError: false, parityError: false },
+      { hex: '0C', framingError: false, parityError: false },
+    ] });
+  });
+
+  test('counts consecutive E0 frames at 9600 baud and flags an equally aligned alternative rate', () => {
+    const result = uartCapture([0xe0, 0xe0], 12, 9600, { idleBits: 2, trailingIdleBits: 2 });
+    expect(decodeUart(result, { channel: 'C1' })).toMatchObject({ baud: 9600, reason: null, warnings: ['baud_ambiguous'], frames: [
       { hex: 'E0', framingError: false, parityError: false },
       { hex: 'E0', framingError: false, parityError: false },
     ] });
@@ -649,6 +668,14 @@ describe('scope CSV comparison', () => {
     expect(() => parseScopeCsv('second,volt\n0,')).toThrow(/no numeric voltage/);
   });
 
+  test.each(['Channel 1', 'CH5', 'Channel 2 Voltage', 'Bench Output'])('applies Rigol index calibration with a %s header', header => {
+    expect(parseScopeCsv(`X,${header},Start,Increment\n0,1,-0.002,0.001\n1,2\n2,3`)).toMatchObject({
+      format: 'rigol', columns: [header], rows: [
+        { timeSec: -0.002, values: [1] }, { timeSec: -0.001, values: [2] }, { timeSec: 0, values: [3] },
+      ],
+    });
+  });
+
   test.each(['1"2"', '"12', '"12"3'])('rejects malformed CSV field %s', field => {
     expect(() => parseScopeCsv(`"Time","C1"\n0,1\n1,${field}`)).toThrow(/quoted field/);
     expect(parseScopeCsv('"Time";"Bench ""A"""\n0;"12"').columns).toEqual(['Bench "A"']);
@@ -660,15 +687,40 @@ describe('scope CSV comparison', () => {
     expect(() => compareWithScopeCsv(result, named, { channel: 'C2' })).toThrow(/CSV is missing channel C2/);
     expect(compareWithScopeCsv(result, named, { channel: 'C2', csvColumn: 'c1_v' }).csvColumn).toBe('C1_V');
     expect(compareWithScopeCsv(result, parseScopeCsv('Second,Volt\n0,2\n1,3'), { channel: 'C2' }).csvColumn).toBe('Volt');
+    const unnamed = parseScopeCsv('Second,Input,Output\n0,2,3\n1,3,4');
+    expect(() => compareWithScopeCsv(result, unnamed, { channel: 'C2' })).toThrow(/--csv-column/);
+    expect(compareWithScopeCsv(result, unnamed, { channel: 'C2', csvColumn: 'Output' }).csvColumn).toBe('Output');
   });
 
   test.each([
     ['C1_V', 'C2_V', 2], ['CH1_V', 'CH2_mV', 2000], ['c1_v', 'c2_v', 2], ['C1 (V)', 'C2 (V)', 2],
+    ['Channel 1 (V)', 'Channel 2 (V)', 2], ['Ch 1 (V)', 'Ch 2 (mV)', 2000],
   ])('selects %s or %s by channel name and applies the voltage unit', (first, second, voltage) => {
     const result = capture(3, 1, { wave: () => 1 }, { wave: () => 2 });
     const csv = parseScopeCsv(`Time,${first},${second}\n-1,1,${voltage}\n0,1,${voltage}\n1,1,${voltage}`);
     expect(compareWithScopeCsv(result, csv, { channel: 'C1' })).toMatchObject({ csvColumn: first, unaligned: { rmseV: 0 } });
     expect(compareWithScopeCsv(result, csv, { channel: 'C2' })).toMatchObject({ csvColumn: second, unaligned: { rmseV: 0 } });
+  });
+
+  test.each(['CH2', 'C2', 'Channel 2', 'Channel 2 (V)'])('infers the screenshot channel from the selected %s column', header => {
+    const result = capture(3, 1, { wave: () => 1 }, { wave: () => 2 });
+    const csv = parseScopeCsv(`Time,C1,${header}\n-1,1,2\n0,1,2\n1,1,2`);
+    const csvColumn = ` ${header.toLowerCase()} `;
+    expect(compareWithScopeCsv(result, csv, { csvColumn })).toMatchObject({
+      channel: 'C2', csvColumn: header, unaligned: { rmseV: 0 },
+    });
+    expect(compareWithScopeCsv(result, csv, { csvColumn, channel: 'C1' })).toMatchObject({
+      channel: 'C1', csvColumn: header, unaligned: { rmseV: 1 },
+    });
+  });
+
+  test.each(['C4', 'CH4', 'Channel 4', 'Channel 4 (V)'])('requires an enabled screenshot channel for %s', csvColumn => {
+    const result = capture(3, 1, { wave: () => 1 });
+    const csv = parseScopeCsv(`Time,${csvColumn}\n-1,2\n0,2\n1,2`);
+    expect(() => compareWithScopeCsv(result, csv, { csvColumn })).toThrow(/C4.*not present or enabled.*--channel/);
+    expect(compareWithScopeCsv(result, csv, { csvColumn, channel: 'C1' })).toMatchObject({
+      channel: 'C1', csvColumn, unaligned: { rmseV: 1 },
+    });
   });
 
   test.each(['C1_V', 'C1', 'CH1', 'C1 (V)'])('selects %s ahead of channel metadata', header => {
@@ -685,12 +737,13 @@ describe('scope CSV comparison', () => {
   });
 
   test('scales duplicate headers by their original units and gives them selectable names', () => {
-    const result = capture(3, 1, { wave: () => 2 });
+    const result = capture(3, 1, { wave: () => 2 }, { wave: () => 0.002 });
     const csv = parseScopeCsv('Time,CH1_mV,CH1_mV,CH2_uV,CH2_uV,C3 (kV),C3 (kV)\n0,1000,2000,1000,2000,1,2');
     expect(csv.columns).toEqual(['CH1_mV', 'CH1_mV 2', 'CH2_uV', 'CH2_uV 2', 'C3 (kV)', 'C3 (kV) 2']);
     expect(csv.rows).toEqual([{ timeSec: 0, values: [1, 2, 0.001, 0.002, 1000, 2000] }]);
     expect(() => compareWithScopeCsv(result, csv)).toThrow(/ambiguous columns for C1/i);
     expect(compareWithScopeCsv(result, csv, { csvColumn: 'CH1_mV 2' })).toMatchObject({ unaligned: { rmseV: 0 } });
+    expect(compareWithScopeCsv(result, csv, { csvColumn: 'CH2_uV 2' })).toMatchObject({ channel: 'C2', unaligned: { rmseV: 0 } });
   });
 
   test('reports unaligned and lag-aligned errors at usable timestamps, with a bounded search', () => {
@@ -717,7 +770,7 @@ describe('scope CSV comparison', () => {
   test('preserves limited overlap and leaves absent reference data blank', () => {
     const result = capture(5, 1, { wave: i => i + 2 });
     const csv = parseScopeCsv('X,CH1,CH2\n-1,9,3\n0,9,\n1,9,5\n');
-    const comparison = compareWithScopeCsv(result, csv, { csvColumn: 'ch2' });
+    const comparison = compareWithScopeCsv(result, csv, { channel: 'C1', csvColumn: 'ch2' });
     expect(comparison.unaligned).toMatchObject({ matchedCount: 2, coverage: 0.4, rmseV: 0, maeV: 0, maxErrorV: 0 });
     expect(compareWithScopeCsv(result, parseScopeCsv('time_s,volts\n10,5\n20,6')).aligned)
       .toMatchObject({ coverage: 0, matchedCount: 0, rmseV: null, frequencyDeltaPct: null });

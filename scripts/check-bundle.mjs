@@ -74,7 +74,7 @@ const portablePath = resolve(root, 'dist-portable/graticule-portable.html');
 if (portableRequested || existsSync(portablePath)) {
   if (!existsSync(portablePath)) throw new Error('dist-portable/graticule-portable.html not found');
   const html = readFileSync(portablePath, 'utf8');
-  if (/ <script\b[^>]*\bsrc\s*=\s*["'][^"']+["'][^>]*>/i.test(` ${html}`)) {
+  if (/<script\b[^>]*\bsrc\s*=\s*["'][^"']+["'][^>]*>/i.test(html)) {
     throw new Error('Portable HTML contains an external script URL');
   }
   if (/<link[^>]+rel=["']stylesheet["'][^>]*>/i.test(html)) {

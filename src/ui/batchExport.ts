@@ -4,8 +4,8 @@ import { renderWaveformCsv } from '../core/export/csv.js';
 import { escapeXml, renderWaveformSvg } from '../core/export/svg.js';
 import { renderMeasurementsTable } from '../core/export/table.js';
 import type { ChannelId, ExtractionResult, Locale, MathTraceResult } from '../core/types.js';
-import { baseName, svgToPng } from './download.js';
-import { t } from './i18n.js';
+import { baseName, stripImageExt, svgToPng } from './download.js';
+import { formatWarning } from './i18n.js';
 
 export interface BatchExportEntry {
   readonly fileName: string;
@@ -23,7 +23,8 @@ export interface BatchExportOptions {
 }
 
 function safeStem(name: string): string {
-  const ascii = name.trim().normalize('NFKD').replace(/\p{M}+/gu, '')
+  // The extension goes first, so it is never kept as the whole name or cut in half.
+  const ascii = stripImageExt(name).normalize('NFKD').replace(/\p{M}+/gu, '')
     .replace(/[^a-z0-9._-]+/gi, '-').replace(/^[.-]+/, '');
   return baseName(ascii.slice(0, 200));
 }
@@ -58,18 +59,18 @@ const LATEX_CHARS: Readonly<Record<string, string>> = {
   '<': '\\textless{}', '>': '\\textgreater{}', '|': '\\textbar{}',
   '°': '\\textdegree{}', 'µ': '\\textmu{}', 'μ': '\\textmu{}', '−': '\\ensuremath{-}',
   'Δ': '\\ensuremath{\\Delta}', '→': '\\ensuremath{\\to}', '≤': '\\ensuremath{\\leq}',
+  '–': '--', '—': '---',
 };
 
 function latexText(text: string): string {
-  return inlineText(text).replace(/[\\{}&%$#_^~<>|°µμ−Δ→≤]/g, char => LATEX_CHARS[char]!);
+  return inlineText(text).replace(/[\\{}&%$#_^~<>|°µμ−Δ→≤–—]/g, char => LATEX_CHARS[char]!);
 }
 
 /** Explains an empty plot and table when the capture has no analog trace to show. */
 export function emptyCaptureNote(result: ExtractionResult, locale: Locale): string | null {
   const warnings = result.detection.warnings;
   if (warnings.length === 0 || result.traces.some(trace => trace.settings.enabled)) return null;
-  const known = t(locale).fallback;
-  const reasons = [...new Set(warnings.map(w => known[w] ?? w.replace(/_/g, ' ')))].join(' ');
+  const reasons = [...new Set(warnings.map(w => formatWarning(w, locale)))].join(' ');
   return locale === 'fr'
     ? 'Note : aucune trace analogique dans cette capture, le graphique et le tableau sont donc vides. ' + reasons
     : 'Note: this capture has no analog traces, so the plot and table are empty. ' + reasons;

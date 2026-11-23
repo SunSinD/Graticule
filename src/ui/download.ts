@@ -15,8 +15,9 @@ export function downloadText(text: string, fileName: string, type: string): void
 }
 
 function svgSize(svg: string): { width: number; height: number } {
-  const w = /\swidth="(\d+(?:\.\d+)?)"/.exec(svg);
-  const h = /\sheight="(\d+(?:\.\d+)?)"/.exec(svg);
+  const root = /<svg\b[^>]*>/i.exec(svg)?.[0] ?? '';
+  const w = /\swidth="(\d+(?:\.\d+)?)"/.exec(root);
+  const h = /\sheight="(\d+(?:\.\d+)?)"/.exec(root);
   return { width: w ? Number(w[1]) : 960, height: h ? Number(h[1]) : 640 };
 }
 
@@ -95,13 +96,15 @@ export async function copyPlain(text: string): Promise<void> {
   if (!ok) throw new Error('Copy failed');
 }
 
-const IMAGE_EXT = /\.(png|jpe?g|webp|bmp|gif|heic)$/i;
+const IMAGE_EXT = /\.(png|jpe?g|webp|bmp|gif|heic|heif)$/i;
 const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 
+export function stripImageExt(fileName: string): string {
+  return fileName.trim().replace(IMAGE_EXT, '');
+}
+
 export function baseName(fileName: string): string {
-  const name = fileName
-    .trim()
-    .replace(IMAGE_EXT, '')
+  const name = stripImageExt(fileName)
     .replace(/[\\/:*?"<>|\x00-\x1f]/g, '_')
     .replace(/[. ]+$/, '');
   if (!name) return 'graticule';

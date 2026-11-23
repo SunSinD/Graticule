@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { strFromU8, unzipSync } from 'fflate';
 import { test, expect, type Page } from '@playwright/test';
 
@@ -220,6 +221,42 @@ test('history survives a reload and clicking an item opens it in single mode', a
   await expect(row).toBeVisible();
   await row.click();
   await expect(page.getByRole('button', { name: 'Clean Plot' })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-testid="measurement-summary"]')).toBeVisible();
+});
+
+test('a capture too big to save never deletes the other saved captures', async ({ page }) => {
+  await extractSine(page);
+  await page.waitForTimeout(300);
+  await page.evaluate(() => {
+    const win = window as unknown as { bigPuts: number };
+    win.bigPuts = 0;
+    const put = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (this: IDBObjectStore, value: unknown, key?: IDBValidKey) {
+      if ((value as { name?: string } | null)?.name === 'big.png') {
+        win.bigPuts += 1;
+        throw new DOMException('The quota has been exceeded.', 'QuotaExceededError');
+      }
+      return put.call(this, value, key);
+    };
+  });
+  await addFiles(page, [{ name: 'big.png', mimeType: 'image/png', buffer: await fs.readFile(SINE) }]);
+  const sine = page.locator('.file-row', { hasText: 'sine_schmitt.png' });
+  const big = page.locator('.file-row', { hasText: 'big.png' });
+  await expect(big).toBeVisible();
+  await page.waitForTimeout(300);
+  for (let i = 0; i < 3; i++) {
+    await sine.click();
+    await big.click();
+  }
+  await page.waitForTimeout(300);
+  const attempts = await page.evaluate(() => (window as unknown as { bigPuts: number }).bigPuts);
+  expect(attempts).toBeGreaterThan(0);
+  expect(attempts).toBeLessThanOrEqual(2);
+
+  await page.reload();
+  await expect(page.locator('.file-row', { hasText: 'sine_schmitt.png' })).toBeVisible();
+  await expect(page.locator('.file-row', { hasText: 'big.png' })).toHaveCount(0);
+  await page.locator('.file-row', { hasText: 'sine_schmitt.png' }).click();
   await expect(page.locator('[data-testid="measurement-summary"]')).toBeVisible();
 });
 
@@ -896,6 +933,150 @@ test('a cursor move saved right before a reload is kept', async ({ page }) => {
   await expect(page.getByRole('slider', { name: 'X1' })).toHaveAttribute('aria-valuenow', '35');
 });
 
+/** Shows the cursors and moves X1 two big steps, from 25 to 35. */
+async function moveX1(page: Page): Promise<void> {
+  await page.keyboard.press('c');
+  const x1 = page.getByRole('slider', { name: 'X1' });
+  await x1.focus();
+  await page.keyboard.press('Shift+ArrowRight');
+  await page.keyboard.press('Shift+ArrowRight');
+  await expect(x1).toHaveAttribute('aria-valuenow', '35');
+}
+
+async function openSavedSine(page: Page): Promise<void> {
+  await page.locator('.file-row', { hasText: 'sine_schmitt.png' }).click();
+  await expect(page.getByRole('button', { name: 'Clean Plot' })).toHaveAttribute('aria-pressed', 'true');
+}
+
+const savedKeys = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<string[]>((resolve, reject) => {
+        const open = indexedDB.open('graticule-history', 1);
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const db = open.result;
+          const req = db.transaction('items', 'readonly').objectStore('items').getAllKeys();
+          req.onsuccess = () => {
+            db.close();
+            resolve(req.result.map(String));
+          };
+          req.onerror = () => reject(req.error);
+        };
+      }),
+  );
+
+test('a cursor move still waiting for another tab to finish saving is kept after a reload', async ({ page, context }) => {
+  await extractSine(page);
+  await page.waitForTimeout(300);
+  const other = await context.newPage();
+  await other.goto('/');
+  await expect(other.locator('.file-row', { hasText: 'sine_schmitt.png' })).toBeVisible();
+  await other.evaluate(
+    () =>
+      new Promise<void>((held) => {
+        void navigator.locks.request(
+          'graticule-history',
+          () =>
+            new Promise<void>((release) => {
+              (window as unknown as { releaseHistory: () => void }).releaseHistory = release;
+              held();
+            }),
+        );
+      }),
+  );
+  await moveX1(page);
+  await page.waitForTimeout(900);
+  await page.reload();
+  await other.evaluate(() => (window as unknown as { releaseHistory: () => void }).releaseHistory());
+  await openSavedSine(page);
+  await page.keyboard.press('c');
+  await expect(page.getByRole('slider', { name: 'X1' })).toHaveAttribute('aria-valuenow', '35');
+});
+
+test('a cursor move made while a rename waits for another tab is kept after a reload', async ({ page, context }) => {
+  await extractSine(page);
+  await page.waitForTimeout(300);
+  const other = await context.newPage();
+  await other.goto('/');
+  await expect(other.locator('.file-row', { hasText: 'sine_schmitt.png' })).toBeVisible();
+  await other.evaluate(
+    () =>
+      new Promise<void>((held) => {
+        void navigator.locks.request(
+          'graticule-history',
+          () =>
+            new Promise<void>((release) => {
+              (window as unknown as { releaseHistory: () => void }).releaseHistory = release;
+              held();
+            }),
+        );
+      }),
+  );
+  const title = page.getByRole('textbox', { name: 'Title' });
+  await title.fill('Renamed while locked');
+  await title.press('Enter');
+  await title.evaluate((el) => (el as HTMLElement).blur());
+  await moveX1(page);
+  await page.waitForTimeout(900);
+  await page.reload();
+  await other.evaluate(() => (window as unknown as { releaseHistory: () => void }).releaseHistory());
+  await openSavedSine(page);
+  await page.keyboard.press('c');
+  await expect(page.getByRole('slider', { name: 'X1' })).toHaveAttribute('aria-valuenow', '35');
+});
+
+test('a cursor move saved on reload keeps a newer title from another tab', async ({ page, context }) => {
+  await extractSine(page);
+  await page.waitForTimeout(300);
+  const other = await context.newPage();
+  await other.goto('/');
+  await openSavedSine(other);
+  const otherTitle = other.getByRole('textbox', { name: 'Title' });
+  await otherTitle.fill('Newer title');
+  await otherTitle.press('Enter');
+  await other.waitForTimeout(500);
+  await moveX1(page);
+  await page.waitForTimeout(100);
+  await page.reload();
+  await openSavedSine(page);
+  await expect(page.getByRole('textbox', { name: 'Title' })).toHaveValue('Newer title');
+  await page.keyboard.press('c');
+  await expect(page.getByRole('slider', { name: 'X1' })).toHaveAttribute('aria-valuenow', '35');
+});
+
+test('a cursor move saved on reload never brings back a capture another tab removed', async ({ page, context }) => {
+  await extractSine(page);
+  await page.waitForTimeout(300);
+  const other = await context.newPage();
+  await other.goto('/');
+  await other.getByRole('button', { name: 'Remove sine_schmitt.png' }).click();
+  await expect.poll(() => savedKeys(other)).toEqual([]);
+  await moveX1(page);
+  await page.waitForTimeout(100);
+  await page.reload();
+  await expect(page.locator('[data-testid="file-input"]')).toBeAttached();
+  await expect.poll(() => savedKeys(page)).toEqual([]);
+  await expect(page.locator('.file-row')).toHaveCount(0);
+});
+
+test('a cursor move followed by a new extraction is kept when the tab reloads before it ends', async ({ page }) => {
+  await extractSine(page);
+  await page.waitForTimeout(300);
+  // The next extraction never ends, so the reload always happens while it runs.
+  await page.evaluate(() => {
+    Worker.prototype.postMessage = () => undefined;
+  });
+  await moveX1(page);
+  const profile = page.getByRole('combobox', { name: 'Profile' });
+  await profile.selectOption('universal-fallback');
+  await expect(profile).toHaveValue('universal-fallback');
+  await page.reload();
+  await openSavedSine(page);
+  await page.keyboard.press('c');
+  await expect(page.getByRole('slider', { name: 'X1' })).toHaveAttribute('aria-valuenow', '35');
+});
+
 test('a custom title goes into the downloaded CSV', async ({ page }) => {
   await extractSine(page);
   const title = page.getByRole('textbox', { name: 'Title' });
@@ -1322,4 +1503,39 @@ test('XY and FFT draw smaller on a 360px phone so labels stay readable, while SV
   expect(fftSvg.text).toMatch(/<svg[^>]+width="880"/);
   expect(await phone.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
   await ctx.close();
+});
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const head = Buffer.alloc(8);
+  head.writeUInt32BE(data.length, 0);
+  head.write(type, 4, 'latin1');
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(zlib.crc32(Buffer.concat([head.subarray(4), data])), 0);
+  return Buffer.concat([head, data, crc]);
+}
+
+/** A 2 wide, 3 tall PNG whose EXIF says rotate 90 degrees, with the eXIf chunk after the image data. */
+function lateExifPng(): Buffer {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(2, 0);
+  ihdr.writeUInt32BE(3, 4);
+  ihdr[8] = 8;
+  ihdr[9] = 2;
+  const rows = Buffer.alloc(3 * (1 + 2 * 3), 0xff);
+  for (let y = 0; y < 3; y++) rows[y * 7] = 0;
+  const exif = Buffer.from([0x4d, 0x4d, 0, 0x2a, 0, 0, 0, 8, 0, 1, 0x01, 0x12, 0, 3, 0, 0, 0, 1, 0, 6, 0, 0, 0, 0, 0, 0]);
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', zlib.deflateSync(rows)),
+    pngChunk('eXIf', exif),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+test('a PNG with its EXIF orientation after the image data is turned upright', async ({ page }) => {
+  await addFiles(page, [{ name: 'rotated.png', mimeType: 'image/png', buffer: lateExifPng() }]);
+  const img = page.locator('img[alt="rotated.png"]');
+  await expect(img).toBeVisible();
+  await expect.poll(() => img.evaluate((el: HTMLImageElement) => [el.naturalWidth, el.naturalHeight])).toEqual([3, 2]);
 });

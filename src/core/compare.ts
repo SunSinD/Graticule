@@ -81,10 +81,18 @@ const numeric = (value: string | undefined): number | null =>
   value && /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(value) && Number.isFinite(Number(value)) ? Number(value) : null;
 const clean = (label: string) => label.trim().toLowerCase().replace(/\s+/g, ' ');
 const timeHeader = /^(?:(?:x(?:-axis)?|time)(?:[\s_]*[(\[]?\s*(?:[mun\u00b5\u03bc]?s|seconds?)\s*[)\]]?)?|seconds?)$/i;
-const channelHeader = /^(?:CH?\s*([1-4])(?=\b|_)|([1-4])(?=$|\s*[([]))/i;
+const channelHeader = /^(?:C(?:H(?:ANNEL)?)?[\s_]*([1-4])(?=\b|_)|([1-4])(?=$|\s*[([]))/i;
 const timeUnit = /^(?:([mun\u00b5\u03bc]?)s|seconds?)$/i;
 const voltageUnit = /^(?:([muk\u00b5\u03bc]?)v|volts?)$/i;
 const prefixes: Readonly<Record<string, number>> = { m: 1e-3, u: 1e-6, '\u00b5': 1e-6, '\u03bc': 1e-6, n: 1e-9, k: 1e3 };
+
+function channelForHeader(header: string): ChannelId | undefined {
+  const match = channelHeader.exec(header);
+  if (!match) return undefined;
+  const suffix = header.slice(match[0].length);
+  const voltage = suffix.replace(/^[\s_(\[]+|[\s)\]]+$/g, '');
+  return !suffix || voltageUnit.test(voltage) ? `C${match[1] ?? match[2]}` as ChannelId : undefined;
+}
 
 function unit(label: string, pattern: RegExp): RegExpExecArray | null {
   return pattern.exec(clean(label).split(/[\s_(\[]+/).at(-1)?.replace(/[)\]]$/, '') ?? '');
@@ -137,11 +145,15 @@ export function parseScopeCsv(text: string): ScopeCsvData {
       .map(row => ({ timeSec: numeric(row[3])!, values: [numeric(row[4])] })));
   }
   const header = records[index]!;
-  const isRigol = /^x$/i.test(header[0]!) && header.slice(1).some(cell => /^ch\s*\d/i.test(cell));
+  const startColumn = header.findIndex(label => clean(label) === 'start');
+  const incrementColumn = header.findIndex(label => clean(label) === 'increment');
+  const isRigol = /^x$/i.test(header[0]!)
+    && ((startColumn >= 0 && incrementColumn >= 0)
+      || header.slice(1).some(label => channelForHeader(clean(label)) || /^ch\s*\d/i.test(label)));
   const format = isRigol ? 'rigol' : /^second/i.test(header[0]!) || records.some(row => /^record length$/i.test(row[0]!))
     ? 'siglent' : 'generic';
-  const metadataStart = isRigol ? header.findIndex(label => clean(label) === 'start') : -1;
-  const metadataIncrement = isRigol ? header.findIndex(label => clean(label) === 'increment') : -1;
+  const metadataStart = isRigol ? startColumn : -1;
+  const metadataIncrement = isRigol ? incrementColumn : -1;
   const columnIndices = header.slice(1).flatMap((label, i) => label && i + 1 !== metadataStart && i + 1 !== metadataIncrement ? [i + 1] : []);
   const units = records[index + 1];
   const firstUnit = clean(units?.[0] ?? '');
@@ -201,24 +213,30 @@ export function compareWithScopeCsv(result: ExtractionResult, csv: ScopeCsvData,
   const available = result.traces.filter(t => t.settings.enabled);
   const labels = csv.columns.map(clean);
   const headers = csv[rawColumnsKey]?.map(clean) ?? labels;
-  const named = headers.map(header => {
-    const match = channelHeader.exec(header);
-    if (!match) return undefined;
-    const suffix = header.slice(match[0].length);
-    const voltage = suffix.replace(/^[\s_(\[]+|[\s)\]]+$/g, '');
-    return !suffix || voltageUnit.test(voltage) ? match[1] ?? match[2] : undefined;
-  });
-  const trace = options.channel ? available.find(t => t.channel === options.channel)
-    : (options.csvColumn === undefined ? available.find(t => named.includes(t.channel[1])) : undefined) ?? available[0];
-  if (!trace) throw new Error(options.channel ? `Missing enabled channel ${options.channel}.` : 'The screenshot has no enabled analog channel.');
-  const { channel, settings } = trace;
+  const named = headers.map(channelForHeader);
   const selectedLabel = options.csvColumn === undefined ? undefined : clean(options.csvColumn);
-  const matches = labels.flatMap((label, i) => (selectedLabel === undefined ? named[i] === channel[1] : label === selectedLabel) ? [i] : []);
-  if (matches.length > 1) throw new Error(`Scope CSV has ambiguous columns for ${options.csvColumn ?? channel}. Specify a CSV column.`);
+  const selectedChannel = selectedLabel === undefined ? undefined : named[labels.indexOf(selectedLabel)];
+  const requestedChannel = options.channel ?? selectedChannel;
+  const trace = requestedChannel ? available.find(t => t.channel === requestedChannel)
+    : available.find(t => selectedLabel === undefined && named.includes(t.channel)) ?? available[0];
+  if (!trace) {
+    if (options.channel) throw new Error(`Missing enabled channel ${options.channel}.`);
+    if (selectedChannel) {
+      throw new Error(`CSV column "${options.csvColumn}" refers to ${selectedChannel}, which is not present or enabled in the capture. Pass --channel to use another enabled channel.`);
+    }
+    throw new Error('The screenshot has no enabled analog channel.');
+  }
+  const { channel, settings } = trace;
+  const matches = labels.flatMap((label, i) => (selectedLabel === undefined ? named[i] === channel : label === selectedLabel) ? [i] : []);
+  if (matches.length > 1) throw new Error(`Scope CSV has ambiguous columns for ${options.csvColumn ?? channel}. Specify a CSV column with --csv-column.`);
   let column = matches[0] ?? -1;
   if (column < 0 && selectedLabel === undefined) {
-    column = named.some(Boolean) ? -1 : headers.findIndex(label => !channelHeader.test(label));
-    if (column < 0) throw new Error(`Scope CSV is missing channel ${channel}.`);
+    const voltageColumns = headers.flatMap((header, i) =>
+      unit(header, voltageUnit) || csv.rows.some(row => Number.isFinite(row.values[i])) ? [i] : []);
+    const [onlyColumn] = voltageColumns;
+    if (!named.some(Boolean) && voltageColumns.length === 1 && onlyColumn !== undefined
+        && !channelHeader.test(headers[onlyColumn]!)) column = onlyColumn;
+    if (column < 0) throw new Error(`Scope CSV is missing channel ${channel}. Specify a CSV column with --csv-column.`);
   }
   const csvColumn = csv.columns[column];
   if (!csvColumn) throw new Error(`Unknown CSV column ${options.csvColumn ?? channel}.`);

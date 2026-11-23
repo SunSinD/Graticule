@@ -32,7 +32,8 @@ export function niceCeiling125(value: number): number {
 export function analysisPlot(options: AnalysisPlotOptions, title: string, square: boolean,
   xLabel: string, yLabel: string, xTicks: readonly AxisTick[], yTicks: readonly AxisTick[],
   draw: (x: (f: number) => number, y: (f: number) => number, ink: string) => string): string {
-  const size = (value: number | undefined, fallback: number) => Number.isFinite(value) ? Math.max(240, value!) : fallback;
+  const size = (value: number | undefined, fallback: number) =>
+    Number.isFinite(value) ? Math.min(16384, Math.max(240, Math.round(value!))) : fallback;
   const width = size(options.width, square ? 620 : 880), height = size(options.height, square ? 590 : 450);
   const paper = options.theme === 'dark' ? '#0a0a0a' : '#fff', ink = options.theme === 'dark' ? '#eee' : '#111';
   let w = width - 108, h = height - 106;

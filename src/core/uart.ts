@@ -89,7 +89,7 @@ function inspect(samples: readonly TraceSample[], edges: Edge[], px: number, thr
     }
     return { bit: ones === zeroes ? null : Number(ones > zeroes), uncertain: Math.max(ones, zeroes) !== cols.length };
   };
-  let alignment = 0, included = 0, frameStarts = 0, good = 0, bad = 0, single = 0, short = 0;
+  let alignment = 0, included = 0, frameStarts = 0, good = 0, bad = 0, short = 0;
   let croppedStop = false;
   let previousFrameGood = false;
   let nextCol = 0;
@@ -166,7 +166,6 @@ function inspect(samples: readonly TraceSample[], edges: Edge[], px: number, thr
       const gap = (edges[j]!.col - edges[j - 1]!.col) / px;
       alignment += Math.abs(phase - Math.round(phase));
       included++;
-      if (gap >= 0.72 && gap <= 1.28) single++;
       if (gap < 0.69) short++;
     }
     const time = samples[0]!.timeSec + start * dt;
@@ -197,22 +196,26 @@ function inspect(samples: readonly TraceSample[], edges: Edge[], px: number, thr
   const frameWeight = good + (croppedStop ? 0.75 : 0);
   // Frames at different baud rates earn equal credit when they cover the same number of samples.
   const frameCoverage = frameWeight * px / MIN_PX_PER_BIT;
-  const score = frameWeight > 0 ? 4 * frameWeight / frames.length + 2.5 * fraction + 2 * single / Math.max(1, included)
+  const score = frameWeight > 0 ? 4 * frameWeight / frames.length + 2.5 * fraction
     - 7 * error - 3 * short / Math.max(1, included) + 2 * Math.log2(1 + frameCoverage) - 0.35 * bad : -Infinity;
-  return { frames, score, good };
+  return { frames, score, good, edgeCoverage: fraction };
 }
 
-function pulseAlignment(edges: readonly Edge[], px: number, frameBits: number): number {
-  let widths = 0, aligned = 0;
+function pulseTiming(edges: readonly Edge[], px: number, frameBits: number) {
+  let widths = 0, aligned = 0, single = 0;
   const tolerance = Math.max(0.18, 1.35 / px);
   for (let i = 1; i < edges.length; i++) {
     const before = edges[i - 1]!, after = edges[i]!;
     const bits = (after.col - before.col) / px;
     if (before.gap || after.gap || (before.bit === 1 && bits >= frameBits)) continue;
     widths++;
-    if (Math.round(bits) >= 1 && Math.abs(bits - Math.round(bits)) <= tolerance) aligned++;
+    const rounded = Math.round(bits);
+    if (rounded >= 1 && Math.abs(bits - rounded) <= tolerance) {
+      aligned++;
+      if (rounded === 1) single++;
+    }
   }
-  return widths ? aligned / widths : 1;
+  return { alignment: widths ? aligned / widths : 1, singleFraction: single / Math.max(1, widths) };
 }
 
 export function decodeUart(result: ExtractionResult, options: UartOptions): UartDecodeResult {
@@ -258,7 +261,7 @@ export function decodeUart(result: ExtractionResult, options: UartOptions): Uart
   const frameBits = 1 + dataBits + Number(parity !== 'none') + stopBits;
   const trial = (rate: number) => {
     const px = 1 / (rate * dt);
-    const alignment = manual === null ? pulseAlignment(edges, px, frameBits) : 1;
+    const { alignment, singleFraction } = pulseTiming(edges, px, frameBits);
     const filtered: Edge[] = [];
     for (const edge of edges) {
       if (filtered.length && edge.col - filtered.at(-1)!.col < px * 0.27) filtered.pop();
@@ -285,15 +288,25 @@ export function decodeUart(result: ExtractionResult, options: UartOptions): Uart
         byte: null, hex: '', ascii: '', framingError: true, parityError: false, uncertain: true,
       });
     }
-    const score = alignment >= 0.75 ? best.score - 4 * (1 - alignment) : -Infinity;
-    return { rate, px, frames: best.frames, good: best.good, score };
+    const score = manual !== null ? best.score
+      : alignment >= 0.75 ? best.score + 2 * singleFraction - 4 * (1 - alignment) : -Infinity;
+    const fullyExplained = alignment === 1 && best.edgeCoverage >= 1 && best.good > 0
+      && best.frames.length === best.good && best.frames.every(frame => !frame.uncertain);
+    return { rate, px, frames: best.frames, good: best.good, score, singleFraction, fullyExplained };
   };
-  const best = manual === null
+  const trials = manual === null
     ? STANDARD_UART_BAUDS.filter(rate => 1 / (rate * dt) >= 2).map(trial)
-      .sort((a, b) => b.score - a.score || b.good - a.good)[0]
-    : trial(manual);
+      .sort((a, b) => b.score - a.score || b.good - a.good)
+    : [trial(manual)];
+  const [best, ...alternatives] = trials;
   if (!best || (manual === null && !Number.isFinite(best.score))) return out('baud_unresolved', null, null);
   if (best.px < MIN_PX_PER_BIT - 1e-9) return out('insufficient_resolution', best.rate, best.px);
+  if (best.fullyExplained && alternatives.some(other => other.px >= MIN_PX_PER_BIT - 1e-9 && other.fullyExplained
+      && other.singleFraction === best.singleFraction && other.good !== best.good
+      && Math.abs(other.frames[0]!.startSec - best.frames[0]!.startSec) <= dt
+      && Math.abs(other.frames.at(-1)!.endSec - best.frames.at(-1)!.endSec) <= dt)) {
+    warnings.push('baud_ambiguous');
+  }
   if (best.px < 8 - 1e-9) warnings.push('low_resolution');
   if (best.frames.some(frame => frame.uncertain)) warnings.push('uncertain_frames');
   if (best.frames.some(frame => frame.framingError)) warnings.push('framing_errors');

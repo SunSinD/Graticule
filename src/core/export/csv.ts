@@ -1,11 +1,13 @@
+import { columnInterval } from '../columns.js';
 import type { BodePoint, BodeResult, ChannelId, ChannelTrace, ExtractionResult, MathTraceResult, TraceSample } from '../types.js';
 import { GRATICULE_VERSION, csvNumber, spreadsheetText } from './format.js';
 
 const EOL = '\n';
+const TIME_ROUNDING_FRACTION = 1e-4;
 
 export function csvComment(text: string): string {
-  return spreadsheetText(text).replace(/,(?=[^\S\t\r]*(?:"[^\S\t\r]*)?[=+\-@\t\r])/g, ",'")
-    .replace(/[\r\n]+/g, ' ').trim();
+  return spreadsheetText(text.replace(/[\r\n]+/g, ' ').trim())
+    .replace(/([,;])(?=[^\S\t]*(?:"+[^\S\t]*)?[=+\-@\t])/g, "$1'");
 }
 
 export function csvField(text: string): string {
@@ -35,6 +37,7 @@ export function renderWaveformCsv(result: ExtractionResult, channelLabels?: Part
   const traces = result.traces.filter((t) => t.settings.enabled);
   const tb = result.timebase;
   const grid = result.detection.grid;
+  const triggerOffset = Number.isFinite(tb.triggerOffsetSec) ? String(tb.triggerOffsetSec) : '';
   const lines: string[] = [
     `# Graticule v${GRATICULE_VERSION}`,
     `# file: ${csvComment(result.fileName)}`,
@@ -42,7 +45,7 @@ export function renderWaveformCsv(result: ExtractionResult, channelLabels?: Part
     `# profile: ${csvComment(result.detection.profileName)} (${result.detection.profileId})`,
     `# grid: ${grid.hDivs} x ${grid.vDivs} div, layout ${grid.layoutVariant}`,
     `# time_per_div_s: ${csvNumber(tb.secPerDiv)} (${tb.source})`,
-    `# trigger_offset_s: ${csvNumber(tb.triggerOffsetSec)}`,
+    `# trigger_offset_s: ${triggerOffset}`,
   ];
   if (result.topFrequencyHz !== null) lines.push(`# scope_frequency_hz: ${csvNumber(result.topFrequencyHz)}`);
   for (const t of traces) {
@@ -78,16 +81,21 @@ export function renderWaveformCsv(result: ExtractionResult, channelLabels?: Part
   for (const samples of series) for (const s of samples) cols.add(s.col);
   const sortedCols = [...cols].sort((a, b) => a - b);
 
-  for (const col of sortedCols) {
-    let time: number | null = null;
+  const times = sortedCols.map(col => {
     for (const m of byCol) {
       const s = m.get(col);
-      if (s && Number.isFinite(s.timeSec)) {
-        time = s.timeSec;
-        break;
-      }
+      if (s && Number.isFinite(s.timeSec)) return s.timeSec;
     }
-    const row = [csvNumber(time)];
+    return null;
+  });
+  const roundedTimes = times.map(time => csvNumber(time, 15));
+  const distinctTimes = new Set(roundedTimes);
+  const tolerance = columnInterval(result) * TIME_ROUNDING_FRACTION;
+  const keepPrecision = distinctTimes.size !== new Set(times).size || distinctTimes.has('Infinity') || distinctTimes.has('-Infinity')
+    || times.some((time, i) => time !== null && Math.abs(Number(roundedTimes[i]) - time) > tolerance);
+
+  for (const [i, col] of sortedCols.entries()) {
+    const row = [keepPrecision ? String(times[i] ?? '') : roundedTimes[i]!];
     for (const m of byCol) {
       const s = m.get(col);
       if (!s) {

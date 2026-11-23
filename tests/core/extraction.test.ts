@@ -1,12 +1,14 @@
 import { describe, expect, test } from 'vitest';
 import { compareWithScopeCsv, parseScopeCsv } from '../../src/core/compare.js';
+import { glyphs as siglentGlyphs, labels as siglentLabels } from '../../src/core/font/siglentFont.js';
+import { compareScope } from '../../src/core/measurements.js';
 import { analyzeCapture, analyzePngBytes } from '../../src/core/pipeline.js';
 import { readScopeMetadata } from '../../src/core/ocr.js';
 import { decodePng } from '../../src/core/png.js';
 import { detectProfile } from '../../src/core/profiles.js';
 import type { ChannelId, ChannelTrace, ExtractionOverrides, RgbaImage } from '../../src/core/types.js';
 import { decodeUart } from '../../src/core/uart.js';
-import { bitmap, magenta, pixel, sample, yellow } from './fixtures.js';
+import { bitmap, magenta, paint, pixel, sample, yellow } from './fixtures.js';
 import type { Rgb } from './fixtures.js';
 
 const grid = { x: 10, y: 10, width: 400, height: 200 };
@@ -140,6 +142,54 @@ describe('column extraction and waveform measurements', () => {
     expect(c1.validCount).toBe(400);
   });
 
+  test('keeps yellow square-wave plateaus that are connected by repeated vertical transitions', () => {
+    const image = bitmap(201, 81);
+    for (let x = 0; x < image.width; x++) {
+      const phase = x % 20;
+      const y = phase < 5 ? 20 : 60;
+      paint(image, { x, y: phase === 0 || phase === 5 ? 20 : y, width: 1,
+        height: phase === 0 || phase === 5 ? 41 : 1 }, [255, 255, 0]);
+    }
+    const result = analyzeCapture(image, 'square-wave.png', { manualCrop: { x: 0, y: 0, width: 200, height: 80 } });
+    expect(result.traces).toMatchObject([{ channel: 'C1', validCount: 201, maskedCount: 0 }]);
+    expect(result.measurements[0]?.dutyCyclePct).toBeCloseTo(25, 0);
+  });
+
+  test('reads negative Siglent duty and compares it to time spent low', () => {
+    const image = decodePng(sample('sine_schmitt.png'));
+    const detection = detectProfile(image);
+    const label = Object.keys(siglentLabels).find(tokens => siglentLabels[tokens] === '+Duty')!.split(' ');
+    const value = [...'75%'].map(char => Object.keys(siglentGlyphs).find(glyph => siglentGlyphs[glyph] === char)!);
+    const draw = (glyphs: readonly string[], x: number, y: number, ink: Rgb) => {
+      for (const glyph of glyphs) {
+        const rows = glyph.split('/');
+        rows.forEach((row, dy) => [...row].forEach((bit, dx) => {
+          if (bit === '#') pixel(image, x + dx, y + dy, ink);
+        }));
+        x += rows[0]!.length + 1;
+      }
+    };
+    paint(image, { x: 10, y: 511, width: 233, height: 17 }, [14, 14, 14]);
+    draw(['#######', ...label.slice(1)], 10, 513, yellow);
+    draw(value, 131, 513, [255, 255, 255]);
+    const reading = readScopeMetadata(image, detection).scopeReadings[0]!;
+    expect(reading).toMatchObject({ label: '-Duty', metric: '-duty', channel: 'C1', value: 75, unit: '%' });
+    const result = analyzePngBytes(sample('sine_schmitt.png'), 'measure.png');
+    const c1 = { ...result.measurements[0]!, dutyCyclePct: 25 };
+    const readings = [reading, { ...reading, label: '+Duty', metric: 'duty' as const, value: 25 },
+      { ...reading, label: '-Duty(C1)', metric: 'duty' as const }];
+    expect(compareScope(readings, [c1], result.traces, null, null)).toMatchObject([
+      { metric: '-Duty', graticuleValue: 75, delta: 0 },
+      { metric: 'duty', graticuleValue: 25, delta: 0 },
+      { metric: '-Duty', graticuleValue: 75, delta: 0 },
+    ]);
+
+    for (let y = 511; y < 528; y++) {
+      for (let x = 10; x < 122; x++) image.data[4 * (image.width * y + x) + 3] = 64;
+    }
+    expect(readScopeMetadata(image, detection).scopeReadings.some(item => item.label === '-Duty')).toBe(false);
+  });
+
   test('marks the hidden channel at a collision and keeps the visible one', () => {
     const image = bitmap(421, 221);
     plot(image, yellow, () => 94);
@@ -239,7 +289,7 @@ describe('scope CSV regression cases', () => {
     const c1 = analyzeCapture(image, 'c1.png', overrides);
     const csv = parseScopeCsv('Time (s),C2\n-1,0\n1,0');
     expect(() => compareWithScopeCsv(c1, csv)).toThrow(/CSV is missing channel C1/);
-    expect(compareWithScopeCsv(c1, csv, { csvColumn: 'c2' })).toMatchObject({ channel: 'C1', csvColumn: 'C2' });
+    expect(compareWithScopeCsv(c1, csv, { channel: 'C1', csvColumn: 'c2' })).toMatchObject({ channel: 'C1', csvColumn: 'C2' });
     plot(image, magenta, () => 150);
     const both = analyzeCapture(image, 'both.png', overrides);
     expect(compareWithScopeCsv(both, csv)).toMatchObject({ channel: 'C2', csvColumn: 'C2' });

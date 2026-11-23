@@ -91,7 +91,7 @@ describe('Bode sine fit', () => {
       baseReason: 'capture_unreadable', accepted: true, warnings: ['manual_measurement'], rejectionReasons: [], edited: true, override: edit });
     expect(edited.points[0]!.gainDb).toBeCloseTo(20 * Math.log10(2));
     expect(recomputeBodeResult(edited, { minR2: 0.9 }).points[0]!.frequencyHz).toBe(1200);
-    const reset = recomputeBodeResult(edited, {});
+    const reset = recomputeBodeResult(edited, new Map());
     expect(reset.points[0]).toMatchObject({ frequencyHz: 1000, gainDb: null, accepted: false, edited: false,
       rejectionReasons: ['capture_unreadable'] });
     expect(reset.points[0]!.override).toBeUndefined();
@@ -283,7 +283,11 @@ describe('Bode sine fit', () => {
     }
     expect(changed.gateOptions?.minR2).toBe(0.97);
     expect(recomputeBodeResult(changed, new Map()).points.every(point => !point.edited)).toBe(true);
-    expect(recomputeBodeResult(changed, {}).points.every(point => !point.edited)).toBe(true);
+    for (const gate of [{}, { minR2: undefined, minCycles: undefined }]) {
+      const unchanged = recomputeBodeResult(changed, gate);
+      expect(unchanged.points.map(point => point.override)).toEqual(changed.points.map(point => point.override));
+      expect(unchanged.gateOptions).toEqual(changed.gateOptions);
+    }
   });
 
   test.each([false, true])('clears old channel-pair measurements when the pair changes (explicit edits %s)', explicit => {
@@ -431,6 +435,7 @@ test.each([
   ['10mHz.png', 0.01], ['10MHz.PNG', 10_000_000], ['-20Hz.png', null], ['sweep -20 Hz.png', null],
   ['1e3Hz.png', 1000], ['osc_1.2e+3Hz.png', 1200], ['.2kHz.png', 200], ['2,5 kHz.png', 2500],
   ['10µHz.png', 1e-5], ['1KHz.png', null], ['/archive/500Hz/capture.png', null],
+  ['01 - 500 Hz.png', 500], ['01 - -500 Hz.png', null], ['-500Hz.png', null],
 ] as const)('reads only positive complete frequency tokens in %s', (name, expected) => {
   expect(frequencyFromFileName(name)).toBe(expected);
 });
