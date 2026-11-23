@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vitest';
+import { niceCeiling125 } from '../../src/core/export/analysis-plot.js';
 import { csvField, renderBodeCsv, renderWaveformCsv } from '../../src/core/export/csv.js';
 import { GRATICULE_VERSION, parseEngineering, stepScale125 } from '../../src/core/export/format.js';
+import { GAP_LABELS } from '../../src/core/export/labels.js';
 import { renderBodeSvg, renderOverlaySvg, renderWaveformSvg, waveformFrame } from '../../src/core/export/svg.js';
 import { renderBodeTable, renderMeasurementsTable, renderTables } from '../../src/core/export/table.js';
 import { splitTrace } from '../../src/core/export/trace-geometry.js';
@@ -13,7 +15,7 @@ const result = analyzePngBytes(sample('sine_schmitt.png'), 'Capture_A&B%#_1.png'
 
 describe('waveform exports', () => {
   test('formats engineering scales with optional units per division and rejects overflow', () => {
-    expect(GRATICULE_VERSION).toBe('2.0.2');
+    expect(GRATICULE_VERSION).toBe('2.0.3');
     expect(parseEngineering('5 mV/div')).toBe(0.005);
     expect(parseEngineering('5 V²')).toBe(5);
     expect(parseEngineering('200 mV²')).toBe(0.2);
@@ -28,6 +30,17 @@ describe('waveform exports', () => {
     expect(parseEngineering('1e1 2 V')).toBeNull();
     expect(parseEngineering('1.2e2 V')).toBe(120);
     expect(parseEngineering('3 GigaVolts')).toBeNull();
+  });
+
+  test('keeps the analysis axis ceiling finite when the next step overflows', () => {
+    expect(niceCeiling125(9e307)).toBe(1e308);
+    expect(niceCeiling125(1.1e308)).toBe(1.1e308);
+    expect(niceCeiling125(Number.MAX_VALUE)).toBe(Number.MAX_VALUE);
+  });
+
+  test('labels gaps masked by a menu in both locales', () => {
+    expect(GAP_LABELS.en.masked_overlay).toBe('hidden by a menu');
+    expect(GAP_LABELS.fr.masked_overlay).toBe('caché par un menu');
   });
 
   test('steps through positive representable subnormal scales', () => {
@@ -59,7 +72,7 @@ describe('waveform exports', () => {
   test('adds an optional sanitized Bode title in CSV and a custom caption in LaTeX', () => {
     const bode = analyzeBodeBatch([result]);
     expect(renderBodeCsv(bode, 'Sweep, =1+1').split('\n').slice(0, 2)).toEqual([
-      '# Graticule v2.0.2', "# title: Sweep,' =1+1",
+      '# Graticule v2.0.3', "# title: Sweep,' =1+1",
     ]);
     expect(renderBodeCsv(bode, ' \t ')).toBe(renderBodeCsv(bode));
     const point = { ...bode.points[0]!, accepted: false, rejectionReasons: ['frequency_mismatch'] };

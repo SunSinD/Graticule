@@ -184,16 +184,21 @@ export function computeXyPlot(result: ExtractionResult, xAxis: XyAxisId, yAxis: 
 export function renderXySvg(xy: XyResult, opts: XySvgOptions = {}): string {
   const locale = opts.locale ?? 'en';
   const range = (lo: number, hi: number, unit: XyResult['xUnit']) => {
-    const padding = lo === hi ? Math.max(1, Math.abs(lo) * 0.1)
-      : Math.max((hi / 2 - lo / 2) * 0.09, Math.max(Math.abs(lo), Math.abs(hi)) * Number.EPSILON * 8, Number.MIN_VALUE);
+    const constant = lo === hi;
+    const padding = constant ? Math.max(1, Math.abs(lo) * 0.1)
+      : Math.max((hi / 2 - lo / 2) * 0.02, Math.max(Math.abs(lo), Math.abs(hi)) * Number.EPSILON * 8, Number.MIN_VALUE);
     const paddedMin = Math.max(-Number.MAX_VALUE, lo - padding), paddedMax = Math.min(Number.MAX_VALUE, hi + padding);
     const step = niceCeiling125((paddedMax / 2 - paddedMin / 2) / 3 || Number.MIN_VALUE);
-    const first = Math.floor(paddedMin / step), last = Math.ceil(paddedMax / step);
-    const min = Math.max(-Number.MAX_VALUE, first * step), max = Math.min(Number.MAX_VALUE, last * step);
+    const first = Math.floor((constant ? paddedMin : lo) / step);
+    const last = Math.ceil((constant ? paddedMax : hi) / step);
+    const min = Math.max(-Number.MAX_VALUE, Math.min(paddedMin, first * step));
+    const max = Math.min(Number.MAX_VALUE, Math.max(paddedMax, last * step));
+    const magnitude = Math.max(Math.abs(min), Math.abs(max));
+    const sig = Math.max(3, Math.floor(Math.log10(magnitude)) - Math.floor(Math.log10(step)) + 1);
     const span = max - min;
     const fraction = (v: number) => Number.isFinite(span) ? (v - min) / span : (v / 2 - min / 2) / (max / 2 - min / 2);
     const ticks = Array.from({ length: last - first + 1 }, (_, i) => (first + i) * step).filter(Number.isFinite)
-      .map(value => ({ fraction: fraction(value), label: axisValue(value, unit, locale) }));
+      .map(value => ({ fraction: fraction(value), label: axisValue(value, unit, locale, sig) }));
     return { fraction, ticks };
   };
   const a = range(xy.xMin ?? 0, xy.xMax ?? 0, xy.xUnit), b = range(xy.yMin ?? 0, xy.yMax ?? 0, xy.yUnit);

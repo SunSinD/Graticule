@@ -24,7 +24,7 @@ export function niceCeiling125(value: number): number {
   const exponent = Math.floor(Math.log10(value));
   for (const coefficient of [1, 2, 5, 10]) {
     const candidate = Number(`${coefficient}e${exponent}`);
-    if (candidate >= value) return candidate;
+    if (Number.isFinite(candidate) && candidate >= value) return candidate;
   }
   return value;
 }
@@ -67,4 +67,5 @@ export function analysisPlot(options: AnalysisPlotOptions, title: string, square
   return out.join('');
 }
 
-export const axisValue = (value: number, unit: string, locale: Locale) => formatEng(value, unit, locale, { sig: 3, trim: true });
+export const axisValue = (value: number, unit: string, locale: Locale, sig = 3) =>
+  formatEng(value, unit, locale, { sig, trim: sig === 3 });

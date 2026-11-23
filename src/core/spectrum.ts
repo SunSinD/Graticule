@@ -144,6 +144,11 @@ function fft(real: Float64Array): Float64Array {
 
 const db = (value: number): number | null => value > 0 && Number.isFinite(value) ? 20 * Math.log10(value) : null;
 
+function isPeak(bin: SpectrumBin, index: number, bins: readonly SpectrumBin[]): boolean {
+  return index > 0 && bin.vrms > 0 && Number.isFinite(bin.vrms) && bin.vrms >= bins[index - 1]!.vrms
+    && (index === bins.length - 1 || bin.vrms > bins[index + 1]!.vrms);
+}
+
 interface Fit {
   readonly error: number;
   readonly amps: readonly number[];
@@ -317,8 +322,7 @@ export function computeSpectrum(result: ExtractionResult, options: SpectrumOptio
       * (interior ? Math.SQRT2 : 1) * scale;
     return { frequencyHz: i * binSpacingHz, vrms, dbv: db(vrms) };
   });
-  const peaks = bins.filter((b, i) => i > 0 && Number.isFinite(b.vrms) && b.vrms > scale * 1e-10 && b.vrms >= bins[i - 1]!.vrms
-    && (i === nyquist || b.vrms > bins[i + 1]!.vrms)).sort((a, b) => b.vrms - a.vrms);
+  const peaks = bins.filter((b, i) => b.vrms > scale * 1e-10 && isPeak(b, i, bins)).sort((a, b) => b.vrms - a.vrms);
   const strongest = peaks[0];
   const refine = (peak: SpectrumBin, radius: number, single = false) => peak.frequencyHz >= sampleRateHz / 2 ? peak
     : refineFundamental(centered, scale, sampleRateHz, peak, resolutionBandwidthHz, radius * resolutionBandwidthHz, single);
@@ -371,12 +375,24 @@ export function renderSpectrumSvg(spec: SpectrumResult, opts: SpectrumSvgOptions
   const linear = opts.scale === 'linear', locale = opts.locale ?? 'en';
   const nyquist = spec.bins.at(-1)?.frequencyHz || 1;
   const maxHarmonicHz = spec.harmonics.reduce((max, h) => Math.max(max, h.frequencyHz), 0);
-  const maxHz = spec.fundamental
-    ? Math.min(nyquist, niceCeiling125(Math.max(12 * spec.fundamental.frequencyHz, maxHarmonicHz * 1.35)))
-    : nyquist;
+  let maxHz = nyquist;
+  if (spec.fundamental) {
+    const harmonicLimit = Math.max(12 * spec.fundamental.frequencyHz, maxHarmonicHz * 1.35);
+    const significantRms = 0.01 * spec.fundamental.vrms; // -40 dBc
+    let upperHz = harmonicLimit;
+    for (let i = spec.bins.length - 1; i > 0; i--) {
+      const bin = spec.bins[i]!;
+      if (bin.frequencyHz <= harmonicLimit) break;
+      if (bin.vrms >= significantRms && isPeak(bin, i, spec.bins)) {
+        upperHz = bin.frequencyHz;
+        break;
+      }
+    }
+    maxHz = Math.min(nyquist, niceCeiling125(upperHz));
+  }
   const hzStep = niceCeiling125(maxHz / 6 || Number.MIN_VALUE);
-  const xTicks = Array.from({ length: Math.floor(maxHz / hzStep) + 1 }, (_, i) => ({
-    fraction: i * hzStep / maxHz, label: axisValue(i * hzStep, 'Hz', locale),
+  const xTicks = Array.from({ length: Math.floor(maxHz / hzStep + 1e-9) + 1 }, (_, i) => ({
+    fraction: Math.min(1, i * hzStep / maxHz), label: axisValue(i * hzStep, 'Hz', locale),
   }));
   const floor = spec.noiseFloorDbv;
   const low = floor === null ? -100 : floor - 12;

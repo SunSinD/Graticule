@@ -1285,6 +1285,33 @@ input.tiny {
   justify-content: center;
 }
 
+.sample-link {
+  margin-top: -8px;
+  min-height: 30px;
+  padding: 6px 8px;
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  text-decoration-color: transparent;
+  border-radius: 4px;
+}
+
+.sample-link:hover:not(:disabled) {
+  color: var(--text);
+  text-decoration-color: var(--line-strong);
+}
+
+.sample-link:focus-visible {
+  color: var(--text);
+  outline: 1px solid var(--text);
+  outline-offset: 2px;
+}
+
+.sample-link:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 .center-msg {
   margin: auto;
 }

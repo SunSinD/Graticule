@@ -45,7 +45,36 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/');
 });
 
-test('cold load completes quickly with no errors, no external requests and no examples', async ({ page }) => {
+test('cold load completes quickly with no errors, no external requests and a subtle sample button', async ({ page }) => {
+  const pageErrors: string[] = [];
+  const consoleErrors: string[] = [];
+  const externalRequests: string[] = [];
+  const sampleRequests: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  page.on('request', (request) => {
+    const url = new URL(request.url());
+    if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') externalRequests.push(request.url());
+    if (/\/sample-[^/]+\.js$/.test(url.pathname)) sampleRequests.push(request.url());
+  });
+
+  await page.goto('/', { waitUntil: 'networkidle', timeout: 5_000 });
+  await expect(page.getByText('Drop an oscilloscope screenshot, paste one, or add images.')).toBeVisible();
+  const main = page.getByRole('main');
+  await expect(main.getByRole('button', { name: 'Add images' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Take photo' })).toHaveCount(0);
+  await expect(page.locator('[data-testid="camera-input"]')).toHaveCount(0);
+  await expect(main.getByRole('button', { name: 'Try a sample', exact: true })).toBeVisible();
+  expect(sampleRequests).toEqual([]);
+  await expect(page.getByRole('button', { name: /^Open$/ })).toHaveCount(0);
+  expect(pageErrors).toEqual([]);
+  expect(consoleErrors).toEqual([]);
+  expect(externalRequests).toEqual([]);
+});
+
+test('Try a sample stages the sample, extracts on click and hides once history has a capture', async ({ page }) => {
   const pageErrors: string[] = [];
   const consoleErrors: string[] = [];
   const externalRequests: string[] = [];
@@ -55,17 +84,36 @@ test('cold load completes quickly with no errors, no external requests and no ex
   });
   page.on('request', (request) => {
     const url = new URL(request.url());
-    if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') externalRequests.push(request.url());
+    if (url.protocol !== 'blob:' && url.protocol !== 'data:' && url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') {
+      externalRequests.push(request.url());
+    }
   });
 
-  await page.goto('/', { waitUntil: 'networkidle', timeout: 5_000 });
+  const sampleButton = page.getByRole('main').getByRole('button', { name: 'Try a sample', exact: true });
+  await sampleButton.dblclick();
+  await expect(page.locator('.file-row', { hasText: 'sine_schmitt.png' })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: 'Extract', exact: true })).toBeEnabled();
+  await expect(page.getByRole('group', { name: 'View' })).toHaveCount(0);
+  await expect(page.locator('.stage img')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Extract', exact: true }).click();
+  await expect(page.locator('.paper svg')).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator('[data-testid="measurement-summary"]')).toContainText(/15\.\d+\s*V/, { timeout: 5_000 });
+
+  await page.waitForTimeout(300);
+  await page.reload();
+  await expect(page.locator('.file-row', { hasText: 'sine_schmitt.png' })).toBeVisible();
   await expect(page.getByText('Drop an oscilloscope screenshot, paste one, or add images.')).toBeVisible();
-  const main = page.getByRole('main');
-  await expect(main.getByRole('button', { name: 'Add images' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Take photo' })).toHaveCount(0);
-  await expect(page.locator('[data-testid="camera-input"]')).toHaveCount(0);
-  await expect(page.getByText(/sample|example/i)).toHaveCount(0);
-  await expect(page.getByRole('button', { name: /^Open$/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Try a sample', exact: true })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Clear', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm clear?' }).click();
+  await expect(page.locator('.file-row')).toHaveCount(0);
+  await expect(page.getByRole('main').getByRole('button', { name: 'Try a sample', exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'FR', exact: true }).click();
+  await expect(page.getByRole('main').getByRole('button', { name: 'Essayer un exemple', exact: true })).toBeVisible();
+
   expect(pageErrors).toEqual([]);
   expect(consoleErrors).toEqual([]);
   expect(externalRequests).toEqual([]);
@@ -1250,6 +1298,28 @@ test('math controls have 32px touch targets and no sideways scroll on a 360x640 
   }
   await phone.getByRole('checkbox', { name: 'C2', exact: true }).click();
   expect((await phone.getByRole('button', { name: 'Enable C2' }).boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(32);
+  expect(await phone.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+  await ctx.close();
+});
+
+test('XY and FFT draw smaller on a 360px phone so labels stay readable, while SVG exports keep the full size', async ({ browser }) => {
+  const ctx = await browser.newContext(SMALL_PHONE);
+  const phone = await ctx.newPage();
+  await phone.goto('/');
+  await extractSine(phone);
+  await phone.keyboard.press('4');
+  const xy = phone.locator('[data-testid="xy-plot"] svg');
+  await expect(xy).toHaveAttribute('width', '420');
+  const xyFont = await xy.evaluate((svg) => 11 * (svg.getBoundingClientRect().width / Number(svg.getAttribute('width'))));
+  expect(xyFont).toBeGreaterThanOrEqual(8);
+  const xySvg = await download(phone, 'SVG');
+  expect(xySvg.text).toMatch(/<svg[^>]+width="620"/);
+
+  await phone.keyboard.press('5');
+  const fft = phone.locator('[data-testid="fft-plot"] svg');
+  await expect(fft).toHaveAttribute('width', '460');
+  const fftSvg = await download(phone, 'SVG');
+  expect(fftSvg.text).toMatch(/<svg[^>]+width="880"/);
   expect(await phone.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
   await ctx.close();
 });

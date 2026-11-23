@@ -3,10 +3,13 @@ import { median, quantile, valid } from './dsp.js';
 import { measureChannel } from './measurements.js';
 import type { ChannelId, ExtractionResult, TraceSample } from './types.js';
 
+const rawColumnsKey = Symbol('rawColumns');
+
 export interface ScopeCsvData {
   readonly format: 'siglent' | 'rigol' | 'generic';
   readonly columns: readonly string[];
   readonly rows: readonly { readonly timeSec: number; readonly values: readonly (number | null)[] }[];
+  readonly [rawColumnsKey]?: readonly string[];
 }
 
 export interface ScopeComparisonOptions {
@@ -140,9 +143,15 @@ export function parseScopeCsv(text: string): ScopeCsvData {
   const metadataStart = isRigol ? header.findIndex(label => clean(label) === 'start') : -1;
   const metadataIncrement = isRigol ? header.findIndex(label => clean(label) === 'increment') : -1;
   const columnIndices = header.slice(1).flatMap((label, i) => label && i + 1 !== metadataStart && i + 1 !== metadataIncrement ? [i + 1] : []);
+  const units = records[index + 1];
+  const firstUnit = clean(units?.[0] ?? '');
+  const unitsRow = units && (unit(firstUnit, timeUnit) || firstUnit === 'sequence'
+    || (/^(?:units?)?$/.test(firstUnit) && columnIndices.some(col => unit(units[col] ?? '', voltageUnit)))) ? units : undefined;
+  const timeScale = unitScale(timeUnit, header[0]!, unitsRow?.[0]);
+  const rawColumns = columnIndices.map(col => header[col]!);
+  const voltageScales = rawColumns.map((label, i) => unitScale(voltageUnit, label, unitsRow?.[columnIndices[i]!]));
   const columns: string[] = [];
-  for (const col of columnIndices) {
-    const name = header[col]!;
+  for (const name of rawColumns) {
     let unique = name, suffix = 2;
     while (columns.some(other => clean(other) === clean(unique))) unique = `${name} ${suffix++}`;
     columns.push(unique);
@@ -157,12 +166,6 @@ export function parseScopeCsv(text: string): ScopeCsvData {
   const data = records.slice(index + 1).filter((row, i) => row !== pair && i + index + 1 !== pairIndex && numeric(row[0]) !== null);
   const indexes = isRigol && start !== null && increment !== null && increment > 0
     && data.every(row => Number.isInteger(numeric(row[0])));
-  const units = records[index + 1];
-  const firstUnit = clean(units?.[0] ?? '');
-  const unitsRow = units && (unit(firstUnit, timeUnit) || firstUnit === 'sequence'
-    || (/^(?:units?)?$/.test(firstUnit) && columnIndices.some(col => unit(units[col] ?? '', voltageUnit)))) ? units : undefined;
-  const timeScale = unitScale(timeUnit, header[0]!, unitsRow?.[0]);
-  const voltageScales = columnIndices.map(col => unitScale(voltageUnit, header[col]!, unitsRow?.[col]));
   const rows = data.map(row => ({
     timeSec: (indexes ? start! + numeric(row[0])! * increment! : numeric(row[0])!) * timeScale,
     values: columnIndices.map((col, i) => {
@@ -171,7 +174,8 @@ export function parseScopeCsv(text: string): ScopeCsvData {
       return Number.isFinite(volts) ? volts : null;
     }),
   })).filter(row => Number.isFinite(row.timeSec));
-  return checkedCsv(format, columns, rows);
+  const csv = checkedCsv(format, columns, rows);
+  return columns.some((label, i) => label !== rawColumns[i]) ? { ...csv, [rawColumnsKey]: rawColumns } : csv;
 }
 
 function referenceAt(csv: ScopeCsvData, column: number, time: number, tolerance: number): number | null {
@@ -195,19 +199,27 @@ function referenceAt(csv: ScopeCsvData, column: number, time: number, tolerance:
 export function compareWithScopeCsv(result: ExtractionResult, csv: ScopeCsvData,
   options: ScopeComparisonOptions = {}): ScopeComparisonResult {
   const available = result.traces.filter(t => t.settings.enabled);
-  const named = csv.columns.map(label => {
-    const match = channelHeader.exec(label);
-    return match?.[1] ?? match?.[2];
+  const labels = csv.columns.map(clean);
+  const headers = csv[rawColumnsKey]?.map(clean) ?? labels;
+  const named = headers.map(header => {
+    const match = channelHeader.exec(header);
+    if (!match) return undefined;
+    const suffix = header.slice(match[0].length);
+    const voltage = suffix.replace(/^[\s_(\[]+|[\s)\]]+$/g, '');
+    return !suffix || voltageUnit.test(voltage) ? match[1] ?? match[2] : undefined;
   });
   const trace = options.channel ? available.find(t => t.channel === options.channel)
     : (options.csvColumn === undefined ? available.find(t => named.includes(t.channel[1])) : undefined) ?? available[0];
   if (!trace) throw new Error(options.channel ? `Missing enabled channel ${options.channel}.` : 'The screenshot has no enabled analog channel.');
   const { channel, settings } = trace;
-  const channelIndex = named.indexOf(channel[1]);
-  if (options.csvColumn === undefined && channelIndex < 0 && named.some(Boolean)) {
-    throw new Error(`Scope CSV is missing channel ${channel}.`);
+  const selectedLabel = options.csvColumn === undefined ? undefined : clean(options.csvColumn);
+  const matches = labels.flatMap((label, i) => (selectedLabel === undefined ? named[i] === channel[1] : label === selectedLabel) ? [i] : []);
+  if (matches.length > 1) throw new Error(`Scope CSV has ambiguous columns for ${options.csvColumn ?? channel}. Specify a CSV column.`);
+  let column = matches[0] ?? -1;
+  if (column < 0 && selectedLabel === undefined) {
+    column = named.some(Boolean) ? -1 : headers.findIndex(label => !channelHeader.test(label));
+    if (column < 0) throw new Error(`Scope CSV is missing channel ${channel}.`);
   }
-  const column = options.csvColumn === undefined ? Math.max(channelIndex, 0) : csv.columns.findIndex(label => clean(label) === clean(options.csvColumn!));
   const csvColumn = csv.columns[column];
   if (!csvColumn) throw new Error(`Unknown CSV column ${options.csvColumn ?? channel}.`);
   const grid = result.detection.grid, dt = columnInterval(result), pixel = settings.voltsPerDiv / grid.pxPerVDiv;

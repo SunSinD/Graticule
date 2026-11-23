@@ -89,8 +89,9 @@ function inspect(samples: readonly TraceSample[], edges: Edge[], px: number, thr
     }
     return { bit: ones === zeroes ? null : Number(ones > zeroes), uncertain: Math.max(ones, zeroes) !== cols.length };
   };
-  let alignment = 0, included = 0, good = 0, bad = 0, single = 0, short = 0;
+  let alignment = 0, included = 0, frameStarts = 0, good = 0, bad = 0, single = 0, short = 0;
   let croppedStop = false;
+  let previousFrameGood = false;
   let nextCol = 0;
   for (let i = firstEdge; i < edges.length; i++) {
     const edge = edges[i]!;
@@ -150,11 +151,16 @@ function inspect(samples: readonly TraceSample[], edges: Edge[], px: number, thr
     const lastCol = Math.ceil(end);
     const uncertain = truncated || Boolean(edge.gap) || bits.some(bit => bit.uncertain)
       || samples.slice(Math.ceil(start), lastCol).some(sample => !valid(sample));
-    if (!parityError && byte !== null && stopHigh) {
-      if (truncated) croppedStop = true;
-      else good++;
+    const decoded = !parityError && byte !== null && stopHigh;
+    const frameGood = decoded && !truncated;
+    if (frameGood) {
+      good++;
+      if (previousFrameGood && !edge.gap && start <= previousEnd + 0.25 * px) frameStarts++;
+    } else {
+      bad++;
+      croppedStop ||= decoded;
     }
-    if (framingError || parityError || byte === null) bad++;
+    previousFrameGood = frameGood;
     for (let j = i + 1; j < edges.length && edges[j]!.col < start + (length - 0.25) * px; j++) {
       const phase = (edges[j]!.col - start) / px;
       const gap = (edges[j]!.col - edges[j - 1]!.col) / px;
@@ -184,7 +190,8 @@ function inspect(samples: readonly TraceSample[], edges: Edge[], px: number, thr
       }
     }
   }
-  const fraction = included / Math.max(1, edges.length - 1);
+  // A start shared by two verified frame boundaries explains another edge.
+  const fraction = (included + frameStarts) / Math.max(1, edges.length - 1);
   const error = alignment / Math.max(1, included);
   // Observed stop samples still support a rate when the capture ends inside a stop bit.
   const frameWeight = good + (croppedStop ? 0.75 : 0);
@@ -279,10 +286,11 @@ export function decodeUart(result: ExtractionResult, options: UartOptions): Uart
       });
     }
     const score = alignment >= 0.75 ? best.score - 4 * (1 - alignment) : -Infinity;
-    return { rate, px, frames: best.frames, score };
+    return { rate, px, frames: best.frames, good: best.good, score };
   };
   const best = manual === null
-    ? STANDARD_UART_BAUDS.filter(rate => 1 / (rate * dt) >= 2).map(trial).sort((a, b) => b.score - a.score)[0]
+    ? STANDARD_UART_BAUDS.filter(rate => 1 / (rate * dt) >= 2).map(trial)
+      .sort((a, b) => b.score - a.score || b.good - a.good)[0]
     : trial(manual);
   if (!best || (manual === null && !Number.isFinite(best.score))) return out('baud_unresolved', null, null);
   if (best.px < MIN_PX_PER_BIT - 1e-9) return out('insufficient_resolution', best.rate, best.px);

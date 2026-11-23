@@ -69,6 +69,57 @@ test('first visit becomes available offline and extracts after reload', async ({
   await context.close();
 });
 
+test('Try a sample works in the portable file over file:// with no CSP or console errors', async ({ browser }) => {
+  test.skip(!fs.existsSync(portable), `Skipping portable E2E: ${portable} is not built.`);
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const pageErrors: string[] = [];
+  const consoleErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  await trackCspViolations(page);
+
+  await page.goto(pathToFileURL(portable).href);
+  await page.getByRole('main').getByRole('button', { name: 'Try a sample', exact: true }).click();
+  await expect(page.locator('.file-row', { hasText: 'sine_schmitt.png' })).toBeVisible();
+  await page.getByRole('button', { name: 'Extract', exact: true }).click();
+  await expect(page.locator('.paper svg')).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator('[data-testid="measurement-summary"]')).toContainText(/15\.\d+\s*V/);
+  expect(pageErrors).toEqual([]);
+  expect(consoleErrors).toEqual([]);
+  expect(await cspViolations(page)).toEqual([]);
+  await context.close();
+});
+
+test('Try a sample works offline after the first visit', async ({ browser }) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const pageErrors: string[] = [];
+  const consoleErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+
+  await page.goto('/');
+  await expect(page.locator('[data-testid="file-input"]')).toBeAttached();
+  await page.evaluate(async () => {
+    await navigator.serviceWorker.ready;
+  });
+  await context.setOffline(true);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+
+  await page.getByRole('main').getByRole('button', { name: 'Try a sample', exact: true }).click();
+  await expect(page.locator('.file-row', { hasText: 'sine_schmitt.png' })).toBeVisible();
+  await page.getByRole('button', { name: 'Extract', exact: true }).click();
+  await expect(page.locator('.paper svg')).toBeVisible({ timeout: 10_000 });
+  expect(pageErrors).toEqual([]);
+  expect(consoleErrors).toEqual([]);
+  await context.close();
+});
+
 test('portable HTML over HTTP loads and extracts with no 404 or CSP errors', async ({ browser }) => {
   test.skip(!fs.existsSync(portable), `Skipping portable E2E: ${portable} is not built.`);
   const html = await fs.promises.readFile(portable);
@@ -184,4 +235,5 @@ test('preview serves the manifest and fully precached service worker source', as
   expect(source).toMatch(/"\.\/assets\/[^"]+"/);
   expect(source).toMatch(/\.\/assets\/extract\.worker-[^"]+\.js/);
   expect(source).toMatch(/\.\/assets\/pipeline-[^"]+\.js/);
+  expect(source).toMatch(/\.\/assets\/sample-[^"]+\.js/);
 });

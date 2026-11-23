@@ -281,7 +281,7 @@ export const GAP_LABELS: Readonly<Record<Locale, Readonly<Record<GapStatus, stri
     clipped_high: 'clipped high',
     clipped_low: 'clipped low',
     masked_cursor: 'hidden by cursor',
-    masked_overlay: 'hidden by overlay',
+    masked_overlay: 'hidden by a menu',
     overlap_ambiguous: 'traces overlap',
     unresolved: 'unresolved',
   },

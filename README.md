@@ -65,6 +65,8 @@ Drop a screenshot from your scope or take a photo of the screen on your phone, c
 6. Zoom with the slider or with Ctrl and the mouse wheel. Click the zoom percentage to go back to 100%
 7. Export with the buttons at the bottom right. Original and Overlay export the clean waveform, while Clean, XY, FFT and Bode export the view you are looking at
 
+No screenshot handy? Click Try a sample on the empty screen to load a real scope capture, then click Extract.
+
 Add several files or a whole folder, or tick two or more captures in the history. Then click Extract Bode to make a Bode plot, or Export all (.zip) to get a lab report.
 
 ## Views

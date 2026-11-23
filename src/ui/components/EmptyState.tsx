@@ -5,9 +5,11 @@ interface Props {
   readonly tx: Dict;
   readonly onAdd: () => void;
   readonly onCamera?: () => void;
+  readonly onSample?: () => void;
+  readonly busy?: boolean;
 }
 
-export function EmptyState({ tx, onAdd, onCamera }: Props) {
+export function EmptyState({ tx, onAdd, onCamera, onSample, busy = false }: Props) {
   return (
     <div className="empty">
       <p className="empty-lead">{onCamera ? tx.emptyTouch : tx.emptyDrop}</p>
@@ -23,6 +25,11 @@ export function EmptyState({ tx, onAdd, onCamera }: Props) {
           </button>
         )}
       </div>
+      {onSample && (
+        <button type="button" className="linklike sample-link" disabled={busy} onClick={onSample}>
+          {tx.trySample}
+        </button>
+      )}
       <p className="muted small">{tx.emptyPrivacy}</p>
     </div>
   );

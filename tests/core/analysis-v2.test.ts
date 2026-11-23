@@ -156,7 +156,26 @@ describe('XY analysis', () => {
     const xTicks = Array.from(svg.matchAll(/text-anchor="middle">(-?\d+) V<\/text>/g), match => Number(match[1]));
     const yTicks = Array.from(svg.matchAll(/text-anchor="end">(-?\d+) V<\/text>/g), match => Number(match[1]));
     expect(xTicks).toEqual([-10, -5, 0, 5, 10]);
-    expect(yTicks).toEqual([8, 10, 12, 14, 16, 18]);
+    expect(yTicks).toEqual([10, 12, 14, 16, 18]);
+  });
+
+  test('keeps a rounded boundary close to the XY data when padding crosses it', () => {
+    const xy = computeXyPlot(capture(3, 1, { wave: i => -10.2 + 10.08 * i }, { wave: i => i }), 'C1', 'C2');
+    const svg = renderXySvg(xy);
+    const xTicks = Array.from(svg.matchAll(/text-anchor="middle">(-?\d+) V<\/text>/g), match => Number(match[1]));
+    expect(xTicks).toEqual([-15, -10, -5, 0, 5, 10]);
+  });
+
+  test('gives narrow XY ranges distinct voltage labels on both axes', () => {
+    const xy = computeXyPlot(capture(5, 1, { wave: i => 1 + 0.00002 * i }), 'C1', 'C1');
+    for (const [locale, decimal] of [['en', '.'], ['fr', ',']] as const) {
+      const svg = renderXySvg(xy, { locale });
+      const expected = ['00000', '00002', '00004', '00006', '00008'].map(digits => `1${decimal}${digits} V`);
+      for (const anchor of ['middle', 'end']) {
+        const labels = Array.from(svg.matchAll(new RegExp(`text-anchor="${anchor}">([^<]+ V)<\\/text>`, 'g')), match => match[1]);
+        expect(labels).toEqual(expected);
+      }
+    }
   });
 
   test('estimates phase for periodic sines and a single closed loop', () => {
@@ -432,6 +451,31 @@ describe('spectrum and harmonic THD', () => {
     }
   });
 
+  test('keeps a strong FFT peak above the harmonic band on the SVG plot', () => {
+    const result = capture(1024, 1 / 1024, { wave: i => 2 * sine(i, 128) + 1.6 * sine(i, 1024 / 300) });
+    const spec = computeSpectrum(result, { channel: 'C1' });
+    expect(spec.fundamental?.frequencyHz).toBeCloseTo(8, 2);
+    expect(spec.peaks).toContainEqual(expect.objectContaining({ frequencyHz: 300 }));
+    expect(renderSpectrumSvg(spec)).toContain('>300 Hz</text>');
+  });
+
+  test('finds significant peaks through Nyquist beyond the eight reported peaks', () => {
+    const harmonics = [2, 3, 4, 5, 6, 7, 8];
+    const result = capture(1024, 1 / 1024, { wave: i =>
+      2 * sine(i, 128) + harmonics.reduce((sum, h) => sum + 0.3 * sine(i, 128 / h), 0) + 0.08 * Math.cos(Math.PI * i),
+    });
+    const spec = computeSpectrum(result, { channel: 'C1' });
+    expect(spec.fundamental?.frequencyHz).toBeCloseTo(8, 2);
+    expect(spec.peaks.every(peak => peak.frequencyHz < 512)).toBe(true);
+    expect(renderSpectrumSvg(spec)).toContain('>500 Hz</text>');
+  });
+
+  test('shows a 300 mHz endpoint tick despite floating-point division', () => {
+    const spec = computeSpectrum(capture(16, 1 / 0.6, { wave: () => 0 }), { channel: 'C1' });
+    expect(spec.bins.at(-1)?.frequencyHz).toBe(0.3);
+    expect(renderSpectrumSvg(spec)).toContain('>300 mHz</text>');
+  });
+
   test('exports a squared-voltage spectrum and sanitizes titles in FFT and XY CSV comments', () => {
     const result = capture(512, 1 / 20_000, { wave: i => sine(i, 64) }, { wave: () => 2 });
     const math = computeMathTrace(result, { op: 'mul', a: 'C1', b: 'C2' });
@@ -483,14 +527,14 @@ describe('spectrum and harmonic THD', () => {
 });
 
 function uartCapture(bytes: readonly number[], px: number, baud: number,
-  options: { idleHigh?: boolean; idleBits?: number; parity?: boolean; badParity?: boolean; badStop?: boolean; faults?: Record<number, GapStatus> } = {}) {
+  options: { idleHigh?: boolean; idleBits?: number; trailingIdleBits?: number; parity?: boolean; badParity?: boolean; badStop?: boolean; faults?: Record<number, GapStatus> } = {}) {
   const bits: number[] = Array<number>(options.idleBits ?? 3).fill(1);
   for (const byte of bytes) {
     const data = Array.from({ length: options.parity ? 7 : 8 }, (_, i) => byte >> i & 1);
     const parity = data.reduce((a, b) => a ^ b, 0) ^ Number(Boolean(options.badParity));
     bits.push(0, ...data, ...(options.parity ? [parity, Number(!options.badStop), 1] : [Number(!options.badStop)]));
   }
-  bits.push(1, 1, 1);
+  bits.push(...Array<number>(options.trailingIdleBits ?? 3).fill(1));
   return capture(bits.length * px, 1 / (px * baud), {
     wave: i => (bits[Math.floor(i / px)] === Number(options.idleHigh ?? true)) ? 4.8 : 0.2,
     faults: options.faults,
@@ -498,6 +542,21 @@ function uartCapture(bytes: readonly number[], px: number, baud: number,
 }
 
 describe('analog UART', () => {
+  test('counts consecutive E0 frames at 9600 baud with two idle bits on each side', () => {
+    const result = uartCapture([0xe0, 0xe0], 12, 9600, { idleBits: 2, trailingIdleBits: 2 });
+    expect(decodeUart(result, { channel: 'C1' })).toMatchObject({ baud: 9600, reason: null, frames: [
+      { hex: 'E0', framingError: false, parityError: false },
+      { hex: 'E0', framingError: false, parityError: false },
+    ] });
+  });
+
+  test.each([0x55, 0xaa, 0x80, 0x00, 0xff])('keeps 9600 baud for a single byte %i', byte => {
+    const result = uartCapture([byte], 12, 9600, { idleBits: 2, trailingIdleBits: 2 });
+    expect(decodeUart(result, { channel: 'C1' })).toMatchObject({ baud: 9600, reason: null, frames: [
+      { byte, framingError: false, parityError: false },
+    ] });
+  });
+
   test('resolves a 55 byte when the sixfold alias is also above the resolution limit', () => {
     const result = uartCapture([0x55], 36, 9600);
     expect(decodeUart(result, { channel: 'C1' })).toMatchObject({ baud: 9600, text: 'U', reason: null });
@@ -610,6 +669,28 @@ describe('scope CSV comparison', () => {
     const csv = parseScopeCsv(`Time,${first},${second}\n-1,1,${voltage}\n0,1,${voltage}\n1,1,${voltage}`);
     expect(compareWithScopeCsv(result, csv, { channel: 'C1' })).toMatchObject({ csvColumn: first, unaligned: { rmseV: 0 } });
     expect(compareWithScopeCsv(result, csv, { channel: 'C2' })).toMatchObject({ csvColumn: second, unaligned: { rmseV: 0 } });
+  });
+
+  test.each(['C1_V', 'C1', 'CH1', 'C1 (V)'])('selects %s ahead of channel metadata', header => {
+    const result = capture(3, 1, { wave: () => 2 });
+    const csv = parseScopeCsv(`Time,C1_offset,${header},C1 Range (V)\n-1,5,2,8\n0,5,2,8\n1,5,2,8`);
+    expect(compareWithScopeCsv(result, csv)).toMatchObject({ csvColumn: header, unaligned: { rmseV: 0 } });
+  });
+
+  test('rejects multiple waveform columns for the same channel and permits explicit selection', () => {
+    const result = capture(3, 1, { wave: () => 2 });
+    const csv = parseScopeCsv('Time,C1,CH1 (V)\n-1,5,2\n0,5,2\n1,5,2');
+    expect(() => compareWithScopeCsv(result, csv)).toThrow(/ambiguous columns for C1/i);
+    expect(compareWithScopeCsv(result, csv, { csvColumn: 'CH1 (V)' })).toMatchObject({ unaligned: { rmseV: 0 } });
+  });
+
+  test('scales duplicate headers by their original units and gives them selectable names', () => {
+    const result = capture(3, 1, { wave: () => 2 });
+    const csv = parseScopeCsv('Time,CH1_mV,CH1_mV,CH2_uV,CH2_uV,C3 (kV),C3 (kV)\n0,1000,2000,1000,2000,1,2');
+    expect(csv.columns).toEqual(['CH1_mV', 'CH1_mV 2', 'CH2_uV', 'CH2_uV 2', 'C3 (kV)', 'C3 (kV) 2']);
+    expect(csv.rows).toEqual([{ timeSec: 0, values: [1, 2, 0.001, 0.002, 1000, 2000] }]);
+    expect(() => compareWithScopeCsv(result, csv)).toThrow(/ambiguous columns for C1/i);
+    expect(compareWithScopeCsv(result, csv, { csvColumn: 'CH1_mV 2' })).toMatchObject({ unaligned: { rmseV: 0 } });
   });
 
   test('reports unaligned and lag-aligned errors at usable timestamps, with a bounded search', () => {

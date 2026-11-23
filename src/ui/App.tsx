@@ -230,6 +230,7 @@ export function App() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [batch, setBatch] = useState<BatchProgress | null>(null);
   const compact = useMedia('(max-width: 1000px)');
+  const narrow = useMedia('(max-width: 640px)');
   const [cropOpen, setCropOpen] = useState(false);
   const [forceQuad, setForceQuad] = useState(false);
   const [cropDismissed, setCropDismissed] = useState<ReadonlySet<string>>(() => new Set());
@@ -913,16 +914,29 @@ export function App() {
   const xySvg = useMemo(
     () =>
       analysis && xyResult
-        ? analysis.renderXySvg(xyResult, { locale, title: xyTitle, xLabel: xyLabelX, yLabel: xyLabelY, theme: dark ? 'dark' : 'light' })
+        ? analysis.renderXySvg(xyResult, {
+            locale,
+            title: xyTitle,
+            xLabel: xyLabelX,
+            yLabel: xyLabelY,
+            theme: dark ? 'dark' : 'light',
+            ...(narrow ? { width: 420, height: 400 } : {}),
+          })
         : '',
-    [analysis, xyResult, dark, locale, xyTitle, xyLabelX, xyLabelY],
+    [analysis, xyResult, dark, locale, xyTitle, xyLabelX, xyLabelY, narrow],
   );
   const fftSvg = useMemo(
     () =>
       analysis && spectrum
-        ? analysis.renderSpectrumSvg(spectrum, { locale, title: fftTitle, scale: fftSettings.scale, theme: dark ? 'dark' : 'light' })
+        ? analysis.renderSpectrumSvg(spectrum, {
+            locale,
+            title: fftTitle,
+            scale: fftSettings.scale,
+            theme: dark ? 'dark' : 'light',
+            ...(narrow ? { width: 460, height: 340 } : {}),
+          })
         : '',
-    [analysis, spectrum, dark, locale, fftTitle, fftSettings.scale],
+    [analysis, spectrum, dark, locale, fftTitle, fftSettings.scale, narrow],
   );
   const xyControls: XyControls | null = xyReady
     ? { axes, x: xyX, y: xyY, svg: xySvg, onAxes: (x, y) => setXyAxes([x, y]) }
@@ -1280,6 +1294,22 @@ export function App() {
     return () => window.removeEventListener('paste', onPaste);
   }, [addFiles]);
 
+  const sampleBusy = useRef(false);
+  const loadSample = useCallback(async () => {
+    if (adding || sampleBusy.current) return;
+    sampleBusy.current = true;
+    replaceIdRef.current = null;
+    try {
+      const { sampleFile } = await import('./sample');
+      if (!mountedRef.current) return;
+      await addFiles([sampleFile()], 'pick');
+    } catch (e) {
+      if (mountedRef.current) setNotice(message(e));
+    } finally {
+      sampleBusy.current = false;
+    }
+  }, [adding, addFiles]);
+
   const onDrop = async (e: React.DragEvent) => {
     setDragging(false);
     if (!hasFiles(e.dataTransfer)) return;
@@ -1409,7 +1439,13 @@ export function App() {
 
       <main className={`zone center${showCapture ? ' fit' : ''}`}>
         {mode === 'empty' && !adding && (
-          <EmptyState tx={tx} onAdd={() => openPicker(false)} onCamera={canUseCamera ? () => openCamera() : undefined} />
+          <EmptyState
+            tx={tx}
+            onAdd={() => openPicker(false)}
+            onCamera={canUseCamera ? () => openCamera() : undefined}
+            onSample={items.length === 0 ? () => void loadSample() : undefined}
+            busy={adding}
+          />
         )}
         {mode === 'empty' && adding && <p className="muted center-msg">{tx.working}</p>}
 
