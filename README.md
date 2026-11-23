@@ -216,7 +216,7 @@ npm run cli -- compare capture.png scope.csv --channel C1 --csv-column "CH1 Volt
 To use it without the source code, download the `.tgz` file from a release and install it once.
 
 ```sh
-npm install -g ./graticule-2.0.5.tgz
+npm install -g ./graticule-2.0.6.tgz
 graticule --version
 ```
 

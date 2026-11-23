@@ -1301,8 +1301,12 @@ test('Export all stays in the Bode toolbar after Extract Bode', async ({ page })
   await exportAll.click();
   const zip = await pending;
   expect(zip.suggestedFilename()).toBe('graticule-report.zip');
-  const names = Object.keys(unzipSync(new Uint8Array(await fs.readFile((await zip.path())!))));
+  const files = unzipSync(new Uint8Array(await fs.readFile((await zip.path())!)));
+  const names = Object.keys(files);
   for (const n of ['01', '02', '03']) expect(names).toContain(`captures/sweep_${n}.svg`);
+  const csv = strFromU8(files['captures/sweep_01.csv']!);
+  expect(csv).not.toContain('(universal-fallback)');
+  expect(csv).toMatch(/# time_per_div_s: 0\.002 /);
   await expect(page.locator('[aria-label="Gain plot"]')).toBeVisible();
 });
 
@@ -1630,4 +1634,121 @@ test('a PNG with its EXIF orientation after the image data is turned upright', a
   const img = page.locator('img[alt="rotated.png"]');
   await expect(img).toBeVisible();
   await expect.poll(() => img.evaluate((el: HTMLImageElement) => [el.naturalWidth, el.naturalHeight])).toEqual([3, 2]);
+});
+
+async function zipFiles(page: Page, button: ReturnType<Page['locator']>): Promise<Record<string, Uint8Array>> {
+  const pending = page.waitForEvent('download', { timeout: 30_000 });
+  await button.click();
+  const zip = await pending;
+  expect(zip.suggestedFilename()).toBe('graticule-report.zip');
+  return unzipSync(new Uint8Array(await fs.readFile((await zip.path())!)));
+}
+
+test('Export all in Bode view uses the Bode profile so the zip matches the Bode plot', async ({ page }) => {
+  test.setTimeout(90_000);
+  await addFiles(page, SWEEP.slice(0, 3));
+  await page.getByRole('combobox', { name: 'Profile' }).selectOption('universal-fallback');
+
+  const staged = await zipFiles(page, page.getByRole('button', { name: 'Export all (.zip)' }));
+  const stagedCsv = strFromU8(staged['captures/sweep_01.csv']!);
+  expect(stagedCsv).toContain('# profile: Universal Fallback (universal-fallback)');
+  expect(stagedCsv).toMatch(/# time_per_div_s: 0\.001 \(default\)/);
+  await expect(page.locator('.file-row .dot.on')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Extract Bode (3)' }).click();
+  await expect(page.locator('[aria-label="Gain plot"]')).toBeVisible({ timeout: 20_000 });
+  const files = await zipFiles(page, page.locator('.bode').getByRole('button', { name: 'Export all (.zip)' }));
+  for (const n of ['01', '02', '03']) {
+    const csv = strFromU8(files[`captures/sweep_${n}.csv`]!);
+    expect(csv).toContain('# profile: Universal Fallback (universal-fallback)');
+    expect(csv).toMatch(/# time_per_div_s: 0\.001 \(default\)/);
+  }
+  expect(strFromU8(files['captures/sweep_01.svg']!)).toContain('<svg');
+
+  // Editing one capture in single view must not make the Bode ZIP disagree with the cached Bode plot.
+  await page.locator('.file-row', { hasText: 'sweep_01.png' }).click();
+  await page.getByRole('button', { name: 'Clean Plot' }).click();
+  const time = page.locator('#time-div');
+  await time.fill('5 ms');
+  await time.press('Enter');
+  await expect(page.locator('.paper svg')).toContainText('Time/div 5 ms', { timeout: 10_000 });
+  for (const n of ['01', '02', '03']) {
+    await page.getByRole('checkbox', { name: `Select sweep_${n}.png` }).check();
+  }
+  await expect(page.locator('[aria-label="Gain plot"]')).toBeVisible({ timeout: 10_000 });
+  const afterEdit = await zipFiles(page, page.locator('.bode').getByRole('button', { name: 'Export all (.zip)' }));
+  const afterCsv = strFromU8(afterEdit['captures/sweep_01.csv']!);
+  expect(afterCsv).toContain('# profile: Universal Fallback (universal-fallback)');
+  expect(afterCsv).toMatch(/# time_per_div_s: 0\.001 \(default\)/);
+});
+
+interface DropFile {
+  readonly name: string;
+  readonly type: string;
+  readonly base64: string;
+}
+
+async function dropFiles(page: Page, files: readonly DropFile[]): Promise<void> {
+  const dataTransfer = await page.evaluateHandle((list) => {
+    const dt = new DataTransfer();
+    for (const f of list) dt.items.add(new File([Uint8Array.from(atob(f.base64), (c) => c.charCodeAt(0))], f.name, { type: f.type }));
+    return dt;
+  }, files);
+  await page.locator('.app').dispatchEvent('drop', { dataTransfer });
+}
+
+const NOTES: DropFile = { name: 'notes.txt', type: 'text/plain', base64: Buffer.from('lab notes').toString('base64') };
+
+test('dropping only a text file says only images can be read, in English and French', async ({ page }) => {
+  await dropFiles(page, [NOTES]);
+  await expect(page.getByRole('alert').filter({ hasText: 'Only image files can be read.' })).toBeVisible();
+  await expect(page.locator('.file-row')).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'FR', exact: true }).click();
+  await dropFiles(page, [NOTES]);
+  await expect(page.getByRole('alert').filter({ hasText: 'Seules les images peuvent être lues.' })).toBeVisible();
+  await expect(page.locator('.file-row')).toHaveCount(0);
+});
+
+test('dropping an image with a text file loads the image and skips the text file', async ({ page }) => {
+  const sine: DropFile = { name: 'sine_schmitt.png', type: 'image/png', base64: (await fs.readFile(SINE)).toString('base64') };
+  await dropFiles(page, [sine, NOTES]);
+  await expect(page.locator('.file-row', { hasText: 'sine_schmitt.png' })).toHaveCount(1);
+  await expect(page.locator('.file-row')).toHaveCount(1);
+  await expect(page.getByText('Only image files can be read.')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Extract', exact: true })).toBeEnabled();
+});
+
+test('pressing Enter on Extract moves keyboard focus to the Clean Plot tab', async ({ page }) => {
+  await addFiles(page, SINE);
+  const extract = page.getByRole('button', { name: 'Extract', exact: true });
+  await extract.focus();
+  await page.keyboard.press('Enter');
+  const clean = page.getByRole('button', { name: 'Clean Plot' });
+  await expect(clean).toBeFocused({ timeout: 10_000 });
+  await expect(clean).toHaveAttribute('aria-pressed', 'true');
+  expect(await page.evaluate(() => document.activeElement?.tagName)).not.toBe('BODY');
+});
+
+test('the shortcuts panel links to the source code and keeps the link inside its focus trap', async ({ page }) => {
+  await page.keyboard.press('?');
+  const dialog = page.getByRole('dialog');
+  const link = dialog.getByRole('link', { name: 'Source code on GitHub' });
+  await expect(link).toHaveAttribute('href', 'https://github.com/SunSinD/Graticule');
+  await expect(link).toHaveAttribute('target', '_blank');
+  await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  const close = dialog.getByRole('button', { name: 'Close' });
+  await close.focus();
+  await page.keyboard.press('Tab');
+  await expect(link).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(close).toBeFocused();
+  await page.keyboard.press('Shift+Tab');
+  await expect(link).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+
+  await page.getByRole('button', { name: 'FR', exact: true }).click();
+  await page.keyboard.press('?');
+  await expect(page.getByRole('dialog').getByRole('link', { name: 'Code source sur GitHub' })).toBeVisible();
 });

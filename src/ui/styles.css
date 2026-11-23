@@ -1416,6 +1416,23 @@ input.tiny {
   margin: 0;
 }
 
+.modal-foot {
+  margin: 16px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.modal-foot a {
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.modal-foot a:hover {
+  color: var(--text);
+}
+
 @keyframes fade {
   from {
     opacity: 0;

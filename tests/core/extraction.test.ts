@@ -29,6 +29,12 @@ function plot(image: RgbaImage, ink: Rgb, fn: (column: number) => number | null,
   }
 }
 
+function invertRgb(image: RgbaImage): void {
+  for (let i = 0; i < image.data.length; i += 4) {
+    for (let c = 0; c < 3; c++) image.data[i + c] = 255 - image.data[i + c]!;
+  }
+}
+
 const traceById = (traces: readonly ChannelTrace[], channel: ChannelId) => traces.find(trace => trace.channel === channel)!;
 
 describe('column extraction and waveform measurements', () => {
@@ -82,13 +88,33 @@ describe('column extraction and waveform measurements', () => {
     }
   });
 
+  test.each([
+    ['C1', [255, 255, 0]], ['C2', [255, 0, 212]],
+    ['C3', [0, 255, 255]], ['C4', [0, 255, 0]],
+  ] as const)('keeps %s on its original channel in single-channel RGB negatives', (channel, ink) => {
+    const image = bitmap(421, 221);
+    plot(image, ink, () => 150, 0);
+    invertRgb(image);
+    const result = analyzeCapture(image, 'single-channel-negative.png', { ...overrides, profileId: 'universal-fallback' });
+    expect(result.detection.grid.inverted).toBe(true);
+    expect(result.traces.map(trace => trace.channel)).toEqual([channel]);
+    expect(result.traces[0]!.validCount).toBe(grid.width + 1);
+  });
+
+  test('keeps inverted trace colors when a few extra pixels match only in the normal orientation', () => {
+    const image = bitmap(421, 221, [255, 255, 255]);
+    plot(image, [0, 255, 43], () => 150, 0);
+    paint(image, { x: 50, y: 50, width: 10, height: 4 }, [0, 128, 0]);
+    const result = analyzeCapture(image, 'negative-with-noise.png', { ...overrides, profileId: 'universal-fallback' });
+    expect(result.traces.map(trace => trace.channel)).toEqual(['C2']);
+    expect(result.traces[0]!.validCount).toBe(grid.width + 1);
+  });
+
   test('still reads a full RGB negative of a fallback capture as inverted trace colors', () => {
     const image = bitmap(421, 221);
     plot(image, yellow, col => zero - 45 * Math.cos(2 * Math.PI * col / 80));
     plot(image, magenta, col => zero + 40 - 20 * Math.cos(2 * Math.PI * col / 80));
-    for (let i = 0; i < image.data.length; i += 4) {
-      for (let c = 0; c < 3; c++) image.data[i + c] = 255 - image.data[i + c]!;
-    }
+    invertRgb(image);
     const result = analyzeCapture(image, 'negative.png', { ...overrides, profileId: 'universal-fallback' });
     expect(result.detection.grid.inverted).toBe(true);
     expect(result.traces.map(trace => trace.channel)).toEqual(['C1', 'C2']);

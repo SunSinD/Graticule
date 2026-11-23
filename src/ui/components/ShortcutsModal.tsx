@@ -80,6 +80,11 @@ export function ShortcutsModal({ tx, onClose }: Props) {
             </div>
           ))}
         </dl>
+        <p className="modal-foot">
+          <a href="https://github.com/SunSinD/Graticule" target="_blank" rel="noopener noreferrer">
+            {tx.sourceCode}
+          </a>
+        </p>
       </div>
     </div>
   );

@@ -1129,8 +1129,19 @@ export function App() {
   }, [cursorsShown, cropVisible]);
 
   const exportAll = useCallback(
-    async (list: readonly HistoryItem[]) => {
+    async (list: readonly HistoryItem[], profile: ProfileChoice = 'auto', key: string | null = null) => {
       if (batchRef.current || list.length === 0) return;
+      // A profile picked for the Bode plot applies to every capture, so the zip matches that plot.
+      const forced = profile === 'auto' ? null : profile;
+      const ownResult = (item: HistoryItem): boolean => forced === null || item.profile === forced;
+      const bodeCache = new Map<string, ExtractionResult>();
+      const bodeSession = key ? sessionsRef.current[key] : undefined;
+      if (bodeSession?.state === 'extracted' && bodeSession.result && bodeSession.profile === profile) {
+        for (const p of bodeSession.result.points) {
+          const itemId = bodeSession.pointItems[p.id];
+          if (itemId && p.extraction) bodeCache.set(itemId, p.extraction);
+        }
+      }
       batchRef.current = true;
       const token = ++batchTokenRef.current;
       // False once Clear ran or the app unmounted, so nothing more is extracted, shown or downloaded.
@@ -1138,7 +1149,7 @@ export function App() {
       const current = (id: string): HistoryItem | undefined => itemsRef.current.find((i) => i.id === id);
       const cancelled = new Error('cancelled');
       const total = list.length;
-      const ready: { id: string; result: ExtractionResult }[] = [];
+      const ready: { id: string; result: ExtractionResult; locked: boolean }[] = [];
       const failed: string[] = [];
       setNotice(null);
       setFileNote(null);
@@ -1148,9 +1159,18 @@ export function App() {
           const item = current(original.id);
           // Removed while the batch ran.
           if (item) {
+            const cached = bodeCache.get(item.id) ?? null;
             // A capture extracting again has no final result yet: its old one predates the latest edit.
-            let result = item.state === 'extracting' ? null : item.result;
-            if (!result) {
+            let result = cached ?? (ownResult(item) ? (item.state === 'extracting' ? null : item.result) : null);
+            if (!result && forced !== null) {
+              try {
+                result = await analyzeSingle(item.bytes, item.name, withProfile(item.overrides, forced));
+              } catch {
+                result = null;
+                if (live() && current(item.id)) failed.push(current(item.id)!.name);
+              }
+              if (!live()) return;
+            } else if (!result) {
               const id = item.id;
               const req = (singleReq.current.get(id) ?? 0) + 1;
               singleReq.current.set(id, req);
@@ -1165,7 +1185,7 @@ export function App() {
               }
               if (!live()) return;
             }
-            if (result && current(item.id)) ready.push({ id: item.id, result });
+            if (result && current(item.id)) ready.push({ id: item.id, result, locked: cached !== null });
           }
           setBatch({ phase: 'extract', done: index + 1, total });
         }
@@ -1186,11 +1206,12 @@ export function App() {
           if (!live()) return;
         }
         // Read again now so title, label and Math edits made during the batch are in the report.
-        const entries = ready.flatMap(({ id, result: batchResult }) => {
+        const entries = ready.flatMap(({ id, result: batchResult, locked }) => {
           const item = current(id);
           if (!item) return [];
-          // An edit that finished extracting during the batch replaces the result read earlier.
-          const result = item.state === 'extracted' && item.result ? item.result : batchResult;
+          // An edit that finished extracting during the batch replaces the result read earlier,
+          // unless the result came from the current Bode session or a forced profile override.
+          const result = !locked && forced === null && item.state === 'extracted' && item.result ? item.result : batchResult;
           const config = usableMath(mathConfigs[id], enabledChannels(result));
           let math: MathTraceResult | null = null;
           if (mathTools && config) {
@@ -1721,7 +1742,7 @@ export function App() {
                 type="button"
                 className="btn"
                 disabled={session?.state === 'extracting' || batch !== null}
-                onClick={() => void exportAll(selectedItems)}
+                onClick={() => void exportAll(selectedItems, sessionProfile, bodeKey)}
               >
                 {tx.exportAll}
               </button>
@@ -1766,7 +1787,7 @@ export function App() {
               setView('clean');
             }}
             onReset={() => recompute(bodeKey, bode, session.gate, {})}
-            onExportAll={() => void exportAll(selectedItems)}
+            onExportAll={() => void exportAll(selectedItems, sessionProfile, bodeKey)}
             exportBusy={session.state === 'extracting' || batch !== null}
           />
         )}

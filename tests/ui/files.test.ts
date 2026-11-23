@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { filesFromDataTransfer, hasExifChunk, isRawPng, moveExifBeforeIdat } from '../../src/ui/files.js';
+import { filesFromDataTransfer, hasExifChunk, isImageFile, isRawPng, moveExifBeforeIdat } from '../../src/ui/files.js';
 import { decodePng } from '../../src/core/png.js';
 import { sample } from '../core/fixtures.js';
 
@@ -149,8 +149,27 @@ describe('filesFromDataTransfer', () => {
     ]);
     const skipped: string[] = [];
     const files = await filesFromDataTransfer(dropOf([folder]), skipped);
-    expect(files.map((f) => f.name)).toEqual(['a.png', 'b.png', 'c2.png', 'c10.png']);
+    expect(files.filter(isImageFile).map((f) => f.name)).toEqual(['a.png', 'b.png', 'c2.png', 'c10.png']);
+    expect(files.map((f) => f.name)).toEqual(['a.png', 'b.png', 'c2.png', 'c10.png', 'notes.txt']);
     expect(skipped).toEqual(['locked.png', 'junction']);
+  });
+
+  test('a dropped text file alone is kept so the app can say only images can be read', async () => {
+    const files = await filesFromDataTransfer(dropOf([fileEntry('notes.txt')]));
+    expect(files.map((f) => f.name)).toEqual(['notes.txt']);
+    expect(files.filter(isImageFile)).toEqual([]);
+  });
+
+  test('an image dropped with a text file keeps both and only the image passes the image filter', async () => {
+    const files = await filesFromDataTransfer(dropOf([fileEntry('notes.txt'), fileEntry('sine_schmitt.png')]));
+    expect(files.map((f) => f.name)).toEqual(['notes.txt', 'sine_schmitt.png']);
+    expect(files.filter(isImageFile).map((f) => f.name)).toEqual(['sine_schmitt.png']);
+  });
+
+  test('a browser without folder entries falls back to the dropped files, text files included', async () => {
+    const note = new File(['hi'], 'notes.txt', { type: 'text/plain' });
+    const drop = { items: [{ kind: 'file', getAsFile: () => note }], files: [note] } as unknown as DataTransfer;
+    expect((await filesFromDataTransfer(drop)).map((f) => f.name)).toEqual(['notes.txt']);
   });
 
   test('works without a skipped list', async () => {

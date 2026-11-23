@@ -176,7 +176,10 @@ async function walk(entry: FileSystemEntry, out: File[], skipped: string[]): Pro
   }
 }
 
-/** Files dropped on the page, folders included. Names of entries that could not be read go into `skipped`. */
+/**
+ * Files dropped on the page, folders included. Names of entries that could not be read go into `skipped`.
+ * Non images are kept so the caller can filter them like the file picker and say when nothing was an image.
+ */
 export async function filesFromDataTransfer(dt: DataTransfer, skipped: string[] = []): Promise<File[]> {
   const out: File[] = [];
   const entries: FileSystemEntry[] = [];
@@ -191,5 +194,5 @@ export async function filesFromDataTransfer(dt: DataTransfer, skipped: string[] 
   }
   for (const e of entries) await walk(e, out, skipped);
   if (out.length === 0) out.push(...Array.from(dt.files));
-  return out.filter(isImageFile).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+  return out.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 }

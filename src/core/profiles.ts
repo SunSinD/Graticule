@@ -298,19 +298,6 @@ export interface NativeCards {
   readonly colors?: readonly ChannelColor[];
 }
 
-function traceScore(r: number, g: number, b: number, colors: readonly ChannelColor[]): number {
-  const index = channelColor(r, g, b, colors);
-  if (index < 0) return 0;
-  const { hueMin, hueMax } = colors[index]!;
-  const high = Math.max(r, g, b);
-  const hue = hueDegrees(r, g, b, high, high - Math.min(r, g, b));
-  const width = (hueMax - hueMin + 360) % 360 || 360;
-  const center = (hueMin + width / 2) % 360;
-  const distance = Math.min(Math.abs(hue - center), 360 - Math.abs(hue - center));
-  // Hues near the middle of a channel range count more, so an edge match from the wrong polarity loses ties.
-  return 1 - Math.min(1, distance / (width / 2)) / 2;
-}
-
 function negativeTraceColors(image: RgbaImage, plot: Rect): boolean {
   const colors = colorsFor('universal-fallback');
   let normal = 0;
@@ -322,18 +309,20 @@ function negativeTraceColors(image: RgbaImage, plot: Rect): boolean {
       const i = at(image, x, y);
       if (image.data[i + 3]! < MIN_VISIBLE_ALPHA) continue;
       const r = image.data[i]!, g = image.data[i + 1]!, b = image.data[i + 2]!;
-      normal += traceScore(r, g, b, colors);
-      negated += traceScore(255 - r, 255 - g, 255 - b, colors);
+      normal += Number(channelColor(r, g, b, colors) >= 0);
+      negated += Number(channelColor(255 - r, 255 - g, 255 - b, colors) >= 0);
     }
   }
-  return negated >= normal;
+  // Complementary hues can match in both orientations. Switch to normal colors only
+  // when their pixel count exceeds the inverted count by more than 20%.
+  return normal <= negated * 1.2;
 }
 
 export function invertTraceColors(image: RgbaImage, profileId: ProfileId, inverted: boolean,
   plot?: Pick<GridGeometry, 'left' | 'top' | 'width' | 'height'>): boolean {
   if (!inverted) return false;
   // A bright fallback capture can be a full RGB negative or a white-background export
-  // that keeps normal trace colors. Keep whichever polarity finds more trace pixels.
+  // that keeps normal trace colors.
   if (profileId === 'universal-fallback') {
     return plot ? negativeTraceColors(image, { x: plot.left, y: plot.top, width: plot.width, height: plot.height }) : true;
   }

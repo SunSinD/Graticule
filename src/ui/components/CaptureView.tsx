@@ -137,12 +137,33 @@ export function CaptureView(props: Props) {
   const [zoom, setZoom] = useState(100);
   const viewport = useRef<HTMLDivElement>(null);
   const cropBtn = useRef<HTMLButtonElement>(null);
+  const extractBtn = useRef<HTMLButtonElement>(null);
+  const cleanTab = useRef<HTMLButtonElement>(null);
+  const focusAfterExtract = useRef(false);
   const edited = useRef(false);
   useCtrlWheelZoom(viewport, zoom, ZOOM_MAX, setZoom);
 
   useEffect(() => {
     if (result) setSize(sourceSize(result));
   }, [result]);
+
+  useEffect(() => {
+    focusAfterExtract.current = false;
+  }, [url]);
+
+  // The Extract button goes away once the plot is ready, so keyboard focus moves to the Clean plot tab.
+  useEffect(() => {
+    if (!focusAfterExtract.current || extracting) return;
+    focusAfterExtract.current = false;
+    const active = document.activeElement;
+    if (result && (!active || active === document.body || !active.isConnected)) cleanTab.current?.focus();
+  }, [result, extracting]);
+
+  const extract = (): void => {
+    if (!onExtract) return;
+    focusAfterExtract.current = document.activeElement === extractBtn.current;
+    onExtract();
+  };
 
   useEffect(() => {
     edited.current = false;
@@ -237,7 +258,7 @@ export function CaptureView(props: Props) {
     <div className="capture">
       <div className="toolbar">
         {onExtract && !result && (
-          <button type="button" className="btn primary" disabled={extracting} onClick={onExtract}>
+          <button ref={extractBtn} type="button" className="btn primary" disabled={extracting} onClick={extract}>
             {extracting ? tx.working : tx.extract}
           </button>
         )}
@@ -246,6 +267,7 @@ export function CaptureView(props: Props) {
             {tabs.map(([mode, label, key, extra]) => (
               <button
                 key={mode}
+                ref={mode === 'clean' ? cleanTab : undefined}
                 type="button"
                 className="btn"
                 aria-pressed={shown === mode}

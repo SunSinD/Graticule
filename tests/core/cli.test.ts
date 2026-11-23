@@ -214,7 +214,7 @@ describe('command line', () => {
     const result = cli(flag);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(`${GRATICULE_VERSION}\n`);
-    expect(GRATICULE_VERSION).toBe('2.0.5');
+    expect(GRATICULE_VERSION).toBe('2.0.6');
     expect(cli('--help').stdout).toContain('--version | -v');
   });
 
