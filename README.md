@@ -41,12 +41,16 @@ Drop a screenshot from your scope or take a photo of the screen on your phone, c
 
 - Reads the grid, the time scale and the volts per division from the screenshot
 - Extracts every visible channel as time and voltage data
-- Measures Vpp, Vmax, Vmin, Vavg, Vrms, period, frequency, duty cycle and the phase between C1 and C2
+- Measures Vpp, Vmax, Vmin, Vavg, Vrms, period, frequency, duty cycle and the phase between any two channels
 - Measures rise time from 10 to 90%, fall time and overshoot on square waves
 - Compares its numbers with the scope MEASURE bar
+- Adds a math channel like `C1 - C2`, `C1 + C2` or `C1 × C2`
+- Shows any two channels in XY mode, with the Lissajous phase and the Schmitt trigger thresholds
+- Shows the spectrum of a channel with its fundamental, its harmonics and its THD
 - Puts X1, X2, Y1 and Y2 cursors on the clean plot and reads Δt, 1/Δt, ΔV and phase
 - Straightens tilted phone photos with a 4 corner box
 - Builds a Bode plot from a folder of captures and finds the `-3 dB` cutoff, or both cutoffs for a band pass filter
+- Exports a whole lab report as one zip with every plot, every CSV and the tables in Markdown, LaTeX and HTML
 - Exports SVG, 2x PNG, CSV and tables for Word, Markdown, LaTeX or TSV
 - Copies the plot straight to your clipboard so you can paste it into a report
 - Works in English and French
@@ -57,10 +61,50 @@ Drop a screenshot from your scope or take a photo of the screen on your phone, c
 2. Drop a screenshot, paste one with Ctrl+V, press O, or click Add
 3. Click Extract when you are ready. Nothing runs before that
 4. Check the scales on the right and fix them if needed. The plot updates by itself
-5. Zoom with the slider or with Ctrl and the mouse wheel. Click the zoom percentage to go back to 100%
-6. Export with the buttons at the bottom right
+5. Pick a view at the top of the plot. Press 1 to 5 to switch faster
+6. Zoom with the slider or with Ctrl and the mouse wheel. Click the zoom percentage to go back to 100%
+7. Export with the buttons at the bottom right. They always export the view you are looking at
 
-Add several files or a whole folder, or tick two or more captures in the history, then click Extract Bode to make a Bode plot.
+Add several files or a whole folder, or tick two or more captures in the history. Then click Extract Bode to make a Bode plot, or Export all (.zip) to get a lab report.
+
+## Views
+
+After Extract, one row of tabs switches the view. The buttons next to the tabs change with the view, so you only see what you need.
+
+| Tab | Key | What you see | Buttons |
+| --- | --- | --- | --- |
+| Original | 1 | Your screenshot | Crop, Zoom |
+| Overlay | 2 or T | The extracted traces drawn 1:1 on top of your screenshot | Crop, Zoom |
+| Clean | 3 | The print ready plot | Cursors, Zoom |
+| XY | 4 | One channel against another | X, Y, Swap, Zoom |
+| FFT | 5 | The spectrum of one channel | Channel, Window, Scale, Zoom |
+
+The XY tab only shows up when two or more channels are on. The math channel counts.
+
+## Math channel
+
+Click `+ M` under Channels when two or more channels are on. Pick the two channels and the operation, like `C1 - C2` for the voltage across a part. The scale is set by itself, and you can type your own V/div or label. Untick M to remove it.
+
+The math channel shows up on the plot, in the results, in the CSV, in the tables, in XY mode and in the FFT.
+
+## XY mode
+
+XY mode puts one channel on each axis, like the XY mode of a real scope. Swap flips the two axes. The results show the range of each axis, the phase from the Lissajous figure when both signals are sine waves, and the low and high thresholds of a Schmitt trigger when the plot is a hysteresis loop. Gaps and clipped parts are left out and the results tell you about them.
+
+## Spectrum and THD
+
+The FFT tab shows the spectrum of one channel in dBV or in volts. Pick the window that fits your signal. Hann is a good default and Flat top gives the most accurate peak heights.
+
+The results show the fundamental, the THD up to H10 and the H2 to H5 harmonics in dBc. Values below the dashed line are pixel noise, so a very clean sine shows a THD below 0.5%. When the THD cannot be trusted, like on a clipped signal or with too few cycles, Graticule says why instead of showing a number.
+
+## Lab report zip
+
+Tick two or more captures in the history and click Export all (.zip). Graticule extracts the ones that are not done yet, then downloads `graticule-report.zip` with:
+
+- `report.md`, `report.tex` and `report.html`, with a section, a figure and a table for each capture
+- every plot as SVG and 2x PNG, and every trace as CSV, in the `captures` folder
+
+Each capture keeps its own title and labels. Open the HTML file in Word or paste the LaTeX into your report.
 
 ## Cursors
 
@@ -73,6 +117,8 @@ While the cursors are on, they are also drawn in the SVG, the PNG and the copied
 ## Report ready figures
 
 Type a title in the Export panel to replace the file name on the plot. Give each channel a label like Vin or Vout under Channels. The title and the labels show up in the SVG, the PNG, the CSV and the copied tables, and the title also names the files you download.
+
+Bode plots have their own title field too. It goes on the Bode plot and names the SVG and CSV files.
 
 Click Copy or press Ctrl+C to copy a white 2x PNG of the plot. Paste it right into Word, Google Docs or PowerPoint.
 
@@ -106,9 +152,9 @@ A real screenshot from the scope always gives better results than a photo.
 | Keysight DSOX1000 | Native |
 | Anything else | Universal mode with a crop box |
 
-Native scopes are found by themselves. You can also pick one by hand in the Profile menu.
+Native scopes are found by themselves. You can also pick one by hand in the Profile menu. Siglent screenshots saved with inverted colors, with a white background, are read too.
 
-In universal mode you drag the crop box onto the edge of the grid, then type the time scale and the volts per division. Click Cancel or Clean Plot if the box is already right. Crop has two shapes. Rectangle is best for screenshots and 4 corners is best for photos.
+In universal mode you drag the crop box onto the edge of the grid, then type the time scale and the volts per division. Click Cancel or the Clean tab if the box is already right. Crop has two shapes. Rectangle is best for screenshots and 4 corners is best for photos.
 
 ## Honest data
 
@@ -126,6 +172,7 @@ Graticule never guesses what it cannot see. When a trace is clipped, hidden by a
 | O | Add images |
 | Ctrl+V | Paste a screenshot |
 | E | Go to exports |
+| 1 to 5 | Original, Overlay, Clean, XY, FFT |
 | T | Show or hide the 1:1 overlay |
 | C | Show or hide the cursors |
 | Ctrl+C | Copy the plot |
@@ -152,7 +199,14 @@ npm run cli -- capture.png --svg --locale fr --out capture.svg
 npm run cli -- capture.png --table --format latex
 npm run cli -- photo.png --deskew 120,80,1800,60,1820,1010,100,1030 --csv --out photo.csv
 npm run cli -- --bode ./sweep --table
+npm run cli -- capture.png --math sub --math-a C1 --math-b C2 --csv --out math.csv
+npm run cli -- capture.png --xy C1,C2 --svg --out xy.svg
+npm run cli -- capture.png --fft C1 --window hann --table
+npm run cli -- capture.png --decode uart --channel C1 --baud auto --table
+npm run cli -- compare capture.png scope.csv --channel C1
 ```
+
+`compare` checks a screenshot against the CSV saved by the scope itself and tells you how far apart they are. `--decode uart` reads the bytes of a serial signal from the trace.
 
 ## Accuracy
 

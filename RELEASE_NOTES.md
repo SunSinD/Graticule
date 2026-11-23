@@ -1,43 +1,70 @@
-# Graticule 1.1.3
+# Graticule 2.0.0
 
 Try it live at [sunsind.github.io/Graticule](https://sunsind.github.io/Graticule/).
 
-A fix release for uploads, Bode plots, cursors, exports and the history.
+A big release with a math channel, XY mode, a spectrum view with THD, lab report exports and a cleaner layout.
 
-## Uploads
+## Views
 
-- One damaged or unreadable image no longer cancels the whole upload. The other files are added and a message names the files that were skipped
-- Choosing a new file after a bad photo can no longer delete the open capture by mistake when the pick fails
-- Image previews are cleaned up properly, even when the page closes during an upload
+- One row of tabs now holds every view: Original, Overlay, Clean, XY and FFT
+- Press 1 to 5 to switch views. T still toggles the overlay and C still toggles the cursors
+- The buttons next to the tabs change with the view, so there are never more than four
+- Before Extract you only see your image and the Extract button
+
+## Math channel
+
+- Click `+ M` to add `C1 - C2`, `C1 + C2` or `C1 × C2`, or any other pair of channels
+- The scale is picked by itself, and you can set your own V/div and label
+- The math channel shows up on the plot, in the results, in the CSV, in the tables, in XY mode and in the FFT
+
+## XY mode
+
+- Plot one channel against another, like the XY mode of a real scope
+- Swap the axes with one click
+- The results show the range of each axis, the Lissajous phase for sine waves and the thresholds of a Schmitt trigger loop
+- Export the XY plot as SVG, PNG or CSV
+
+## Spectrum and THD
+
+- The FFT tab shows the spectrum of any channel in dBV or in volts
+- Pick a Hann, Rect, Flat top or Blackman window
+- The results show the fundamental, the THD up to H10 and the H2 to H5 harmonics in dBc
+- A dashed line marks the pixel noise floor. A very clean sine shows a THD below 0.5% instead of a fake number
+- When the THD cannot be trusted, like on a clipped signal, the results say why
+- Export the spectrum as SVG, PNG, CSV or a table
+
+## Results
+
+- The phase now works between any two channels, like C1 and C3, not only C1 and C2
+- Rows with no value for any channel are hidden on screen. Exported tables stay complete
+
+## Lab report zip
+
+- Tick two or more captures and click Export all (.zip)
+- Graticule extracts the ones that are not done yet and shows its progress
+- You get `report.md`, `report.tex` and `report.html`, plus every plot as SVG and PNG and every trace as CSV
 
 ## Bode
 
-- A damaged PNG in a Bode batch shows up as a rejected row instead of stopping the whole batch
-- You can type a frequency and a gain for that row, and it joins the plot as a manual point
-- Opening that row explains why it could not be read, and the export buttons stay off instead of exporting the whole Bode plot
-- The cutoff in the summary shows a dash before anything is extracted, instead of saying not found
-- Sine fits stay accurate at very high frequencies and very small voltages
+- Bode plots have a title field. It goes on the plot and names the downloaded files
+- Extract Bode still works the same way
 
-## Cursors
+## Layout
 
-- Two cursors on the same spot now read exactly 0 for Δt and a dash for 1/Δt, instead of tiny leftover numbers
-- A cursor move right before a reload, a tab switch or closing the app on a phone is saved right away instead of being lost
+- The empty screen on a computer no longer shows a side panel full of empty fields
+- On phones, a capture menu at the top lets you switch captures without scrolling down
+- On phones, the Profile and scale settings fold into a Settings section so the results and exports stay close
+- Status messages sit right above the plot on phones
 
-## Exports
+## Scopes
 
-- Your custom title now goes into the CSV file too, on a `# title:` line
-- The CLI takes `--title` for the waveform CSV
-- Scale steps keep working on very large and very small values
+- Siglent screenshots saved with inverted colors are now read correctly
 
-## Files
+## Command line
 
-- Interlaced PNG files are now read by the core decoder
-- Damaged PNG files are rejected with a clear error instead of giving a broken plot
-
-## History
-
-- Saved captures with missing parts are ignored when the app loads instead of breaking a view
-- The app still opens when the browser blocks storage, like in some private windows or embedded pages
+- `compare` checks a screenshot against the CSV saved by the scope
+- `--decode uart` reads serial bytes from a trace
+- `--math`, `--xy` and `--fft` give the same results as the app
 
 ## Credits
 

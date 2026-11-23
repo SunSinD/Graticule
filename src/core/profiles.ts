@@ -298,19 +298,33 @@ export interface NativeCards {
   readonly colors?: readonly ChannelColor[];
 }
 
-function findCompactSiglentCards(image: RgbaImage, inverted: boolean): NativeCards {
+export function invertTraceColors(image: RgbaImage, profileId: ProfileId, inverted: boolean): boolean {
+  if (!inverted || profileId !== 'siglent-sds2000x-plus') return inverted;
+  // The scope darkens its color badges in print mode. A full RGB negative instead
+  // complements them, which can happen when a capture was inverted after saving.
+  for (const x of [36, 163, 290, 417, 544, 140, 244, 348, 452]) {
+    const i = at(image, x, 550);
+    const r = image.data[i]!, g = image.data[i + 1]!, b = image.data[i + 2]!;
+    const high = Math.max(r, g, b);
+    if (high >= 175 && high <= 182 && Math.min(r, g, b) <= 4) return false;
+  }
+  return true;
+}
+
+function findCompactSiglentCards(image: RgbaImage, invertColors: boolean, inverted: boolean): NativeCards {
   const analog = new Map<ChannelId, Rect>();
   const colors = colorsFor('siglent-sds2000x-plus').map(color => ({ ...color, valMin: 2 }));
   let digital = false;
   for (let x = 4; x <= 420; x += 104) {
     const index = at(image, x + 32, 550);
-    const rgb = Array.from(image.data.subarray(index, index + 3), value => inverted ? 255 - value : value);
+    const rgb = Array.from(image.data.subarray(index, index + 3), value => invertColors ? 255 - value : value);
     const high = Math.max(...rgb);
     const spread = high - Math.min(...rgb);
     if (high < 140 || spread < 90) continue;
     const component = rgb.indexOf(high);
     const label = matchBitmap(readBitmap(image, { x: x + 3, y: 544, width: 31, height: 12 },
-      (...levels) => (inverted ? 255 - levels[component]! : levels[component]!) < high * 0.7), compactBadgeGlyphs);
+      (...levels) => invertColors ? 255 - levels[component]! < high * 0.7
+        : inverted ? levels[component]! > high + 20 : levels[component]! < high * 0.7), compactBadgeGlyphs);
     if (label === 'D') {
       digital = true;
       continue;
@@ -336,7 +350,8 @@ export function rigolCardInk(color: ChannelColor): PixelPredicate {
 }
 
 export function findNativeCards(image: RgbaImage, profile: NativeProfile, inverted: boolean, compact = false): NativeCards {
-  if (compact) return findCompactSiglentCards(image, inverted);
+  const invertColors = invertTraceColors(image, profile.id, inverted);
+  if (compact) return findCompactSiglentCards(image, invertColors, inverted);
   const analog = new Map<ChannelId, Rect>();
   let digital = false;
   const colors = colorsFor(profile.id);
@@ -371,15 +386,14 @@ export function findNativeCards(image: RgbaImage, profile: NativeProfile, invert
       continue;
     }
     const badge = { x: slot.x + 1, y: slot.y + 2, width: 42, height: 12 };
-    const blue: PixelPredicate = (r, g, b) => inverted
-      ? r > 210 && g > 159 && g < 201 && b > 17 && b < 62
-      : b > 193 && g > 57 && g < 94 && r < 45;
+    const blue: PixelPredicate = (r, g, b) => (b > (inverted ? 147 : 193) && g > 39 && g < 94 && r < 45)
+      || (inverted && r > 210 && g > 159 && g < 220 && b > 17 && b < 62);
     if (proportion(image, badge, blue) > 0.65) {
       digital = true;
       continue;
     }
     for (const [index, id] of CHANNELS.entries()) {
-      if (proportion(image, badge, (r, g, b) => (inverted
+      if (proportion(image, badge, (r, g, b) => (invertColors
         ? channelColor(255 - r, 255 - g, 255 - b, colors) : channelColor(r, g, b, colors)) === index) > 0.65) {
         analog.set(id, slot);
         break;
@@ -449,8 +463,12 @@ export function detectProfile(image: RgbaImage, overrides: ExtractionOverrides =
         ? (inverted ? grayscale(r, g, b, 180, 245) : grayscale(r, g, b, 12, 74)) : luminance(r, g, b) < 46;
       if (proportion(image, p.anchors.topBarRoi, p.raster ? rgbNear(p.raster.headerInk) : barBackground, 4) < 0.5
           || proportion(image, p.anchors.bottomBarRoi, p.raster ? rgbNear(p.raster.footerInk) : barBackground, 4) < 0.5) continue;
-      const grid = p.raster ? findRasterPlot(image, p, p.raster) : findPlot(image, p, inverted, compact);
-      if (!grid) continue;
+      const detected = p.raster ? findRasterPlot(image, p, p.raster) : findPlot(image, p, inverted, compact);
+      if (!detected) continue;
+      const h = divisions(overrides.hDivs, detected.hDivs), v = divisions(overrides.vDivs, detected.vDivs);
+      const grid = h === detected.hDivs && v === detected.vDivs ? detected
+        : makeGrid(detected.left, detected.top, detected.right, detected.bottom, h, v,
+          detected.layoutVariant, detected.inverted, detected.fitErrorPx);
       const cards = findNativeCards(image, p, inverted, compact);
       const digitalOnly = cards.digital && !cards.analog.size;
       return {

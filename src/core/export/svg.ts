@@ -159,7 +159,7 @@ function waveformLayout(result: ExtractionResult, options: SvgExportOptions) {
   const lanesH = traces.length * laneGap + 6;
   const axisLabelH = options.cursors ? 52 : 34;
   const legendRowH = 18;
-  const legendH = options.showLegend === false ? 0 : 16 + (traces.length + 2) * legendRowH + 30;
+  const legendH = options.showLegend === false ? 0 : 16 + (traces.length + 2 + Number(Boolean(options.math))) * legendRowH + 30;
   const height = dimension(options.height, Math.round(y0 + plotH + lanesH + axisLabelH + legendH + 12));
   const { secPerDiv, triggerOffsetSec } = result.timebase;
   const spanDivs = grid.width / grid.pxPerHDiv;
@@ -328,6 +328,23 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
     gapCounts[tr.channel] = split.gaps.length;
   });
 
+  const math = options.math;
+  const mathStyle = `fill="none" stroke="${pal.ink}" stroke-width="1.6" stroke-dasharray="3 2"`;
+  if (math) {
+    const segments = splitTrace(math.samples).segments;
+    const d = segments.map(segment => segment.map((p, i) =>
+      `${i ? 'L' : 'M'}${n(mapX(p.xPx))} ${n(mapY(p.yPx))}`).join('')).join('');
+    const label = `${math.label} (${math.unit})`;
+    out.push(`<g aria-label="${escapeXml(label)}" clip-path="url(#plot-clip)">`);
+    if (d) out.push(`<path d="${d}" ${mathStyle}/>`);
+    for (const segment of segments) if (segment.length === 1) {
+      const p = segment[0]!;
+      out.push(`<circle cx="${n(mapX(p.xPx))}" cy="${n(mapY(p.yPx))}" r="1.3" fill="${pal.ink}"/>`);
+    }
+    out.push('</g>');
+    if (!showLegend) out.push(text(x1, 42, label, { anchor: 'end', size: 11, mono: true }, pal.ink));
+  }
+
   if (traces.length === 0) {
     out.push(text((x0 + x1) / 2, (y0 + y1) / 2, t.noChannels, { anchor: 'middle', size: 13, fill: pal.muted }, pal.ink));
   }
@@ -354,6 +371,12 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
         lg.push(text(x0 + 46, ly, `${label}   ${parts.join('   ')}`, { size: 11, mono: true }, pal.ink));
       }
       if (gaps > 0) lg.push(text(x1, ly, gapSummary(tr, locale), { anchor: 'end', size: 10, fill: pal.muted }, pal.ink));
+      ly += legendRowH;
+    }
+    if (math) {
+      lg.push(`<path d="M${n(x0)} ${n(ly - 4)}H${n(x0 + 36)}" ${mathStyle}/>`);
+      lg.push(text(x0 + 46, ly, `${math.label}   ${niceDiv(math.voltsPerDiv, locale, math.unit)}/div   ${t.offset} ${formatEng(math.offsetVolts, math.unit, locale, { trim: true })}`,
+        { size: 11, mono: true }, pal.ink));
       ly += legendRowH;
     }
     lg.push(

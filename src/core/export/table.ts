@@ -1,4 +1,4 @@
-import type { BodeResult, ChannelId, ChannelMeasurements, ExtractionResult, Locale } from '../types.js';
+import type { BodeResult, ChannelId, ChannelMeasurements, ExtractionResult, Locale, MathTraceResult } from '../types.js';
 import { EMPTY_CELL, formatEng, formatFixed, formatPercent, spreadsheetText } from './format.js';
 import { EXPORT_TEXT, METRIC_LABELS, METRIC_UNITS, metricLabel, reasonLabel, toMetricKey } from './labels.js';
 import type { MetricKey } from './labels.js';
@@ -6,7 +6,7 @@ import { sortBodePoints } from './csv.js';
 
 export type TableFormat = 'html' | 'markdown' | 'tsv' | 'latex';
 
-interface Table {
+export interface Table {
   readonly caption: string;
   readonly head: readonly string[];
   readonly rows: readonly (readonly string[])[];
@@ -87,7 +87,7 @@ function renderLatex(tables: readonly Table[]): string {
   ].join('\n')).join('\n\n') + '\n';
 }
 
-function render(tables: readonly Table[], format: TableFormat): string {
+export function renderTables(tables: readonly Table[], format: TableFormat): string {
   if (format === 'html') return renderHtml(tables);
   if (format === 'markdown') return renderMarkdown(tables);
   if (format === 'latex') return renderLatex(tables);
@@ -139,15 +139,16 @@ function deltaText(value: number | null, key: MetricKey | null, unit: string, lo
 }
 
 export function measurementTables(result: ExtractionResult, locale: Locale,
-  channelLabels?: Partial<Record<ChannelId, string>>, title?: string): Table[] {
+  channelLabels?: Partial<Record<ChannelId, string>>, title?: string, math?: MathTraceResult | null): Table[] {
   const tx = EXPORT_TEXT[locale];
   const enabled = new Set(result.traces.filter((t) => t.settings.enabled).map((t) => t.channel));
   const ms = result.measurements.filter((m) => enabled.has(m.channel));
   const tables: Table[] = [];
 
   const channelLabel = (id: ChannelId) => channelLabels?.[id]?.trim() || id;
-  const head = [tx.measurement, ...(ms.length
+  const head = [tx.measurement, ...(ms.length || math
     ? ms.map(m => m.clipped ? `${channelLabel(m.channel)} (${tx.clipped})` : channelLabel(m.channel)) : [tx.value])];
+  if (math) head.push(`${math.label} (${math.unit})`);
   const rows: string[][] = MEASURE_ROWS.map((key) => [
     METRIC_LABELS[locale][key],
     ...ms.map(m => {
@@ -156,14 +157,19 @@ export function measurementTables(result: ExtractionResult, locale: Locale,
       const formatted = formatMetric(value, key, '', locale);
       return limited && value !== null ? '≤ ' + formatted : formatted;
     }),
+    ...(math ? [METRIC_UNITS[key] === 'V' ? formatEng(metricValue(math.measurement, key), math.unit, locale)
+      : formatMetric(metricValue(math.measurement, key), key, '', locale)] : []),
   ]);
-  const ph = result.phaseC1ToC2;
+  const ph = result.phaseC1ToC2?.phaseDeg != null ? result.phaseC1ToC2 : result.phasePair
+    ? { refChannel: result.phasePair.from, targetChannel: result.phasePair.to, phaseDeg: result.phasePair.phaseDeg }
+    : result.phaseC1ToC2;
   if (ph && enabled.has(ph.refChannel) && enabled.has(ph.targetChannel)) {
     const row = [`${METRIC_LABELS[locale].phase} ${channelLabel(ph.refChannel)}\u2192${channelLabel(ph.targetChannel)}`];
     for (const m of ms) row.push(m.channel === ph.targetChannel ? formatMetric(ph.phaseDeg, 'phase', '\u00b0', locale) : EMPTY_CELL);
+    if (math) row.push(EMPTY_CELL);
     rows.push(row);
   }
-  if (!ms.length) for (const row of rows) row.push(EMPTY_CELL);
+  if (!ms.length && !math) for (const row of rows) row.push(EMPTY_CELL);
   tables.push({ caption: `${tx.measurementsCaption} ${title?.trim() || result.fileName}`, head, rows, numericFrom: 1 });
 
   if (result.comparisons.length > 0) {
@@ -189,8 +195,8 @@ export function measurementTables(result: ExtractionResult, locale: Locale,
 }
 
 export function renderMeasurementsTable(result: ExtractionResult, format: TableFormat, locale: Locale,
-  channelLabels?: Partial<Record<ChannelId, string>>, title?: string): string {
-  return render(measurementTables(result, locale, channelLabels, title), format);
+  channelLabels?: Partial<Record<ChannelId, string>>, title?: string, math?: MathTraceResult | null): string {
+  return renderTables(measurementTables(result, locale, channelLabels, title, math), format);
 }
 
 function plainNumber(value: number | null, digits: number, locale: Locale): string {
@@ -232,5 +238,5 @@ export function renderBodeTable(result: BodeResult, format: TableFormat, locale:
     numericFrom: 1,
     numericTo: 6,
   };
-  return render([summary, points], format);
+  return renderTables([summary, points], format);
 }

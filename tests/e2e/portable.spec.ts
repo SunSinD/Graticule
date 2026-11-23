@@ -138,6 +138,40 @@ test('portable file extracts a ten-capture Bode batch without errors', async ({ 
   await context.close();
 });
 
+test('portable file runs the math, XY and FFT views and the zip report from inlined code', async ({ browser }) => {
+  test.skip(!fs.existsSync(portable), `Skipping portable E2E: ${portable} is not built.`);
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const pageErrors: string[] = [];
+  const consoleErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') consoleErrors.push(message.text());
+  });
+  await trackCspViolations(page);
+
+  await page.goto(pathToFileURL(portable).href);
+  await page.locator('[data-testid="file-input"]').setInputFiles([sample]);
+  await page.getByRole('button', { name: 'Extract', exact: true }).click();
+  await expect(page.locator('.paper svg')).toBeVisible({ timeout: 10_000 });
+  await page.getByRole('button', { name: 'Add math channel' }).click();
+  await expect(page.locator('[data-testid="measurement-summary"] thead')).toContainText('C1 - C2');
+  await page.keyboard.press('4');
+  await expect(page.locator('[data-testid="xy-plot"] svg')).toBeVisible();
+  await page.keyboard.press('5');
+  await expect(page.locator('[data-testid="fft-plot"] svg')).toBeVisible();
+  await expect(page.locator('[data-testid="fft-summary"]')).toContainText('Fundamental');
+
+  await page.locator('[data-testid="file-input"]').setInputFiles(sweep.slice(0, 2));
+  const pending = page.waitForEvent('download', { timeout: 20_000 });
+  await page.getByRole('button', { name: 'Export all (.zip)' }).click();
+  expect((await pending).suggestedFilename()).toBe('graticule-report.zip');
+  expect(pageErrors).toEqual([]);
+  expect(consoleErrors).toEqual([]);
+  expect(await cspViolations(page)).toEqual([]);
+  await context.close();
+});
+
 test('preview serves the manifest and fully precached service worker source', async ({ request }) => {
   const manifest = await request.get('/manifest.webmanifest');
   expect(manifest.ok()).toBe(true);

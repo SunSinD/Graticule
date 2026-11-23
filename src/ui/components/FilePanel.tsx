@@ -110,8 +110,8 @@ export function FilePanel(props: Props) {
                   <input
                     type="checkbox"
                     checked={isSel}
-                    aria-label={`${tx.selectForBode} ${item.name}`}
-                    title={tx.selectForBode}
+                    aria-label={`${tx.selectCapture} ${item.name}`}
+                    title={tx.selectCapture}
                     onChange={() => props.onToggle(item.id)}
                   />
                   <button

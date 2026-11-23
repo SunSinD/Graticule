@@ -1,4 +1,4 @@
-import type { ChannelId, ExtractionOverrides, ExtractionResult, Locale, ProfileId } from '../../core/types';
+import type { ChannelId, ExtractionOverrides, ExtractionResult, Locale, MathConfig, MathOp, MathTraceResult, ProfileId } from '../../core/types';
 import type { Dict } from '../i18n';
 import type { ChannelLabels } from '../history';
 import { ScaleInput } from './ScaleInput';
@@ -66,6 +66,23 @@ interface ScaleProps {
   readonly labels?: ChannelLabels | undefined;
   readonly onOverrides: (next: ExtractionOverrides) => void;
   readonly onLabel?: (ch: ChannelId, label: string) => void;
+  readonly math?: MathField | undefined;
+}
+
+export interface MathField {
+  readonly config: MathConfig | null;
+  readonly result: MathTraceResult | null;
+  readonly onChange: (config: MathConfig | null) => void;
+}
+
+const MATH_OPS: readonly (readonly [MathOp, string])[] = [
+  ['sub', '−'],
+  ['add', '+'],
+  ['mul', '×'],
+];
+
+export function mathAutoLabel(config: Pick<MathConfig, 'a' | 'b' | 'op'>): string {
+  return `${config.a} ${config.op === 'sub' ? '-' : config.op === 'add' ? '+' : '×'} ${config.b}`;
 }
 
 function LabelInput({ id, label, placeholder, value, onCommit }: { id: string; label: string; placeholder: string; value: string; onCommit: (v: string) => void }) {
@@ -112,7 +129,7 @@ function LabelInput({ id, label, placeholder, value, onCommit }: { id: string; l
 
 type ChannelPatch = { enabled?: boolean; voltsPerDiv?: number; offsetVolts?: number };
 
-export function ScaleControls({ tx, locale, result, overrides, disabled, labels, onOverrides, onLabel }: ScaleProps) {
+export function ScaleControls({ tx, locale, result, overrides, disabled, labels, onOverrides, onLabel, math }: ScaleProps) {
   const secPerDiv = overrides.secPerDiv ?? result?.timebase.secPerDiv ?? null;
   const patchChannel = (ch: ChannelId, patch: ChannelPatch): void => {
     const prev = overrides.channels?.[ch] ?? {};
@@ -127,6 +144,9 @@ export function ScaleControls({ tx, locale, result, overrides, disabled, labels,
   });
   const active = rows.filter((r) => r.enabled);
   const inactive = rows.filter((r) => !r.enabled);
+  const sources = active.filter((r) => r.trace?.settings.enabled).map((r) => r.ch);
+  const canAddMath = Boolean(math && !math.config && result && !disabled && sources.length >= 2);
+  const mathConfig = math?.config ?? null;
   return (
     <section>
       <ScaleInput
@@ -144,8 +164,19 @@ export function ScaleControls({ tx, locale, result, overrides, disabled, labels,
       />
       <div className="section-head">
         <h2>{tx.channels}</h2>
-        {inactive.length > 0 && (
+        {(inactive.length > 0 || canAddMath) && (
           <div className="chips">
+            {canAddMath && math && (
+              <button
+                type="button"
+                className="btn chip"
+                aria-label={tx.addMath}
+                title={tx.addMath}
+                onClick={() => math.onChange({ op: 'sub', a: sources[0]!, b: sources[1]! })}
+              >
+                + M
+              </button>
+            )}
             {inactive.map((c) => (
               <button
                 key={c.ch}
@@ -210,8 +241,78 @@ export function ScaleControls({ tx, locale, result, overrides, disabled, labels,
               </fieldset>
             );
           })}
+          {math && mathConfig && (
+            <MathCard tx={tx} locale={locale} field={math} config={mathConfig} sources={sources} disabled={disabled || !result} />
+          )}
         </div>
       )}
     </section>
+  );
+}
+
+interface MathCardProps {
+  readonly tx: Dict;
+  readonly locale: Locale;
+  readonly field: MathField;
+  readonly config: MathConfig;
+  readonly sources: readonly ChannelId[];
+  readonly disabled: boolean;
+}
+
+function MathCard({ tx, locale, field, config, sources, disabled }: MathCardProps) {
+  const set = (patch: Partial<MathConfig>): void => field.onChange({ ...config, ...patch });
+  const options = (current: ChannelId) => (sources.includes(current) ? sources : [current, ...sources]);
+  const unit = config.op === 'mul' ? 'V²' : 'V';
+  return (
+    <fieldset className="channel math" disabled={disabled}>
+      <legend>
+        <label className="inline" title={tx.removeMath}>
+          <input type="checkbox" checked aria-label={tx.removeMath} onChange={() => field.onChange(null)} />
+          <span className="ch">M</span>
+        </label>
+        <LabelInput
+          id="label-M"
+          label={tx.mathLabel}
+          placeholder={mathAutoLabel(config)}
+          value={config.label ?? ''}
+          onCommit={(v) => {
+            const { label: _drop, ...rest } = config;
+            field.onChange(v ? { ...rest, label: v } : rest);
+          }}
+        />
+      </legend>
+      <div className="math-row">
+        <select aria-label={tx.mathA} value={config.a} onChange={(e) => set({ a: e.target.value as ChannelId })}>
+          {options(config.a).map((c) => (
+            <option key={c}>{c}</option>
+          ))}
+        </select>
+        <select aria-label={tx.mathOp} className="op" value={config.op} onChange={(e) => set({ op: e.target.value as MathOp })}>
+          {MATH_OPS.map(([op, sym]) => (
+            <option key={op} value={op}>
+              {sym}
+            </option>
+          ))}
+        </select>
+        <select aria-label={tx.mathB} value={config.b} onChange={(e) => set({ b: e.target.value as ChannelId })}>
+          {options(config.b).map((c) => (
+            <option key={c}>{c}</option>
+          ))}
+        </select>
+      </div>
+      <ScaleInput
+        id="vdiv-M"
+        label={tx.mathVdiv}
+        value={config.voltsPerDiv ?? field.result?.voltsPerDiv ?? null}
+        unit={unit}
+        locale={locale}
+        stepper
+        disabled={disabled || !field.result}
+        decLabel={tx.decreaseScale('M')}
+        incLabel={tx.increaseScale('M')}
+        hint={config.voltsPerDiv === undefined ? tx.mathAuto : null}
+        onChange={(v) => set({ voltsPerDiv: v })}
+      />
+    </fieldset>
   );
 }

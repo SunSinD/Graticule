@@ -11,6 +11,16 @@ import type { BodeGateOptions, BodeRejectedCapture, BodeResult, ExtractionOverri
 
 export { recomputeBodeResult } from './bode.js';
 export type { BodeOverrides } from './bode.js';
+export { compareWithScopeCsv, parseScopeCsv } from './compare.js';
+export type { ScopeComparisonMetrics, ScopeComparisonOptions, ScopeComparisonResult, ScopeCsvData } from './compare.js';
+export { computeMathTrace } from './math.js';
+export type { MathConfig, MathOp, MathTraceResult } from './types.js';
+export { computeSpectrum, renderSpectrumCsv, renderSpectrumSvg, renderSpectrumTable } from './spectrum.js';
+export type { SpectrumBin, SpectrumHarmonic, SpectrumOptions, SpectrumResult, SpectrumSvgOptions, SpectrumWindow, ThdReason } from './spectrum.js';
+export { decodeUart } from './uart.js';
+export type { UartDecodeResult, UartFrame, UartOptions } from './uart.js';
+export { computeXyPlot, renderXyCsv, renderXySvg } from './xy.js';
+export type { XyAxisId, XyPoint, XyResult, XySvgOptions, XyValidPoint } from './xy.js';
 
 export function analyzeCapture(source: RgbaImage, fileName: string, overrides: ExtractionOverrides = {}): ExtractionResult {
   const start = performance.now();
@@ -25,17 +35,23 @@ export function analyzeCapture(source: RgbaImage, fileName: string, overrides: E
   const metadata = readScopeMetadata(image, detection);
   const timebase = makeTimebase(metadata, overrides, detection.grid.hDivs);
   const { scopeReadings, topFrequencyHz, topFrequencyRaw } = metadata;
-  const mask = buildOverlayMask(image, detection.grid, detection.profileId);
+  const mask = buildOverlayMask(image, detection.grid, detection.profileId, metadata.digital);
   const { traces, warnings } = extractTraces(image, detection, metadata, mask, timebase, overrides);
   const measurements = traces.map(trace => measureChannel(trace, detection.grid.pxPerVDiv));
-  const referenceFrequency = scopeFrequency(scopeReadings, 'C1', topFrequencyHz, topFrequencyRaw)
-    ?? measurements.find(measurement => measurement.channel === 'C1')?.frequencyHz ?? null;
+  const frequency = (channel: (typeof traces)[number]['channel']) => timebase.source === 'default' ? null
+    : scopeFrequency(scopeReadings, channel, topFrequencyHz, topFrequencyRaw)
+      ?? measurements.find(measurement => measurement.channel === channel)?.frequencyHz ?? null;
+  const phaseC1ToC2 = measurePhase(traces, frequency('C1'));
+  const [first, second] = traces.filter(trace => trace.settings.enabled);
+  const phase = first && second ? first.channel === 'C1' && second.channel === 'C2' ? phaseC1ToC2
+    : measurePhase(traces, frequency(first.channel) ?? frequency(second.channel), first.channel, second.channel) : null;
   return {
     fileName, imageWidth: image.width, imageHeight: image.height,
     ...(quad && { sourceWidth: source.width, sourceHeight: source.height, sourceQuad: quad }),
     detection: warnings.length ? { ...detection, warnings: [...detection.warnings, ...warnings] } : detection,
     timebase, topFrequencyHz, topFrequencyRaw, traces,
-    measurements, phaseC1ToC2: measurePhase(traces, timebase.source === 'default' ? null : referenceFrequency), scopeReadings,
+    measurements, phaseC1ToC2, scopeReadings,
+    ...(phase?.phaseDeg != null && { phasePair: { from: phase.refChannel, to: phase.targetChannel, phaseDeg: phase.phaseDeg } }),
     comparisons: compareScope(scopeReadings, measurements, traces, topFrequencyHz, topFrequencyRaw),
     maskCoveragePct: mask.coveragePct, elapsedMs: performance.now() - start,
   };

@@ -17,6 +17,7 @@ const CALLOUT = 4;
 const LANE = 8;
 const PILL = 16;
 const VISITED = 32;
+const DIGITAL = 64;
 
 function findRuns(from: number, to: number, ink: (index: number) => boolean): Run[] {
   const runs: Run[] = [];
@@ -47,7 +48,7 @@ function hasDashPattern(runs: readonly Run[], span: number): boolean {
   return most >= Math.max(5, dashes.length * 0.38);
 }
 
-export function buildOverlayMask(image: RgbaImage, grid: GridGeometry, profile: ProfileId): OverlayMask {
+export function buildOverlayMask(image: RgbaImage, grid: GridGeometry, profile: ProfileId, digital = false): OverlayMask {
   const { width, height, data } = image;
   const pixels = new Uint8Array(width * height);
   const features = new Uint8Array(pixels.length);
@@ -70,17 +71,22 @@ export function buildOverlayMask(image: RgbaImage, grid: GridGeometry, profile: 
       const b = data[i + 2]!;
       let bits = 0;
       if (inverted) {
-        if (r >= 172 && r <= 188 && g >= 172 && g <= 188 && b <= 9) bits |= YELLOW;
+        if (b <= 9 && ((r >= 172 && r <= 188 && g >= 172 && g <= 188) || (siglent && r >= 245 && g >= 245))) bits |= YELLOW;
         if (r < 10 && g > 245 && b > 245) bits |= RED;
         if (siglent && r === g && g === b && (r === 241 || r === 242)) bits |= CALLOUT;
         if (siglent && r >= 245 && g >= 58 && g <= 69 && b <= 10) bits |= LANE;
-        if (siglent && x < left + 23 && r === 220 && g === 187 && b === 185) bits |= PILL;
+        if (siglent && x < left + 23 && (r === 220 || r === 221) && g === 187 && (b === 184 || b === 185)) bits |= PILL;
       } else {
         if (r >= 245 && g >= 245 && b < 12) bits |= YELLOW;
         if (r > 245 && g < 15 && b < 15) bits |= RED;
         if (siglent && r === 14 && g === 14 && b === 14) bits |= CALLOUT;
         if (siglent && r <= 8 && g >= 185 && g <= 198 && b >= 248) bits |= LANE;
         if (siglent && x < left + 23 && r === 35 && g === 68 && b === 70) bits |= PILL;
+      }
+      if (siglent && digital) {
+        const red = inverted ? 255 - r : r, green = inverted ? 255 - g : g, blue = inverted ? 255 - b : b;
+        if ((red === 193 && green === 0 && blue === 0) || (red === 205 && green === 80 && blue === 80)) pixels[i / 4] = OVERLAY;
+        if (red === 23 && green === 76 && blue === 223) bits |= DIGITAL;
       }
       features[i / 4] = bits;
     }
@@ -133,6 +139,27 @@ export function buildOverlayMask(image: RgbaImage, grid: GridGeometry, profile: 
   }
 
   if (siglent) {
+    const callouts: { minX: number; maxX: number; minY: number; maxY: number }[] = [];
+    if (digital) {
+      const ink = inverted ? 0 : 255;
+      const digitalInk = (x: number, y: number) => {
+        const i = at(image, x, y);
+        return data[i] === ink && data[i + 1] === ink && data[i + 2] === ink;
+      };
+      for (let y = top; y + 16 <= bottom; y++) {
+        const borders = [...findRuns(left, left + 92, x => digitalInk(x, y)),
+          ...findRuns(right - 92, right, x => digitalInk(x, y))];
+        for (const run of borders) {
+          if (run.end - run.start < 15 || (run.start > left + 3 && run.end < right - 3)) continue;
+          for (let h = 15; h <= 22 && y + h <= bottom; h++) {
+            if (!digitalInk(run.start + 2, y + h) || !digitalInk(run.end - 2, y + h)
+                || !digitalInk(run.start, y + (h >> 1)) || !digitalInk(run.end, y + (h >> 1))) continue;
+            fill(run.start, y, run.end, y + h, OVERLAY);
+            break;
+          }
+        }
+      }
+    }
     if (grid.layoutVariant === 'decode-table') {
       const whiteSpan = (y: number) => {
         let count = 0;
@@ -177,7 +204,7 @@ export function buildOverlayMask(image: RgbaImage, grid: GridGeometry, profile: 
           fill(run.start, y, run.end, y + 18, CURSOR);
         }
       }
-      if (y > grid.centerY + grid.pxPerVDiv * 1.5) {
+      if (y > grid.centerY + grid.height * 3 / 16) {
         let lane = 0;
         let pill = 0;
         for (let x = left + 24; x < right; x += 4) if (has(x, y, LANE)) lane++;
@@ -187,7 +214,8 @@ export function buildOverlayMask(image: RgbaImage, grid: GridGeometry, profile: 
       }
 
       for (let x = left; x <= right; x++) {
-        if (!has(x, y, CALLOUT) || has(x, y, VISITED)) continue;
+        const feature = has(x, y, DIGITAL) ? DIGITAL : CALLOUT;
+        if (!has(x, y, feature) || has(x, y, VISITED)) continue;
         const fifo = [y * width + x];
         features[fifo[0]!] = features[fifo[0]!]! | VISITED;
         let minX = x;
@@ -203,7 +231,7 @@ export function buildOverlayMask(image: RgbaImage, grid: GridGeometry, profile: 
           minY = Math.min(minY, py);
           maxY = Math.max(maxY, py);
           for (const next of [i - 1, i + 1, i - width, i + width]) {
-            if (((features[next] ?? 0) & (CALLOUT | VISITED)) === CALLOUT) {
+            if (((features[next] ?? 0) & (feature | VISITED)) === feature) {
               features[next] = features[next]! | VISITED;
               fifo.push(next);
             }
@@ -211,8 +239,22 @@ export function buildOverlayMask(image: RgbaImage, grid: GridGeometry, profile: 
         }
         const boxWidth = maxX - minX + 1;
         const boxHeight = maxY - minY + 1;
-        if (boxWidth >= 45 && boxWidth <= 220 && boxHeight >= 13 && boxHeight <= 55 && fifo.length >= boxWidth * boxHeight * 0.55) {
+        const pill = feature === DIGITAL && boxWidth >= 12 && boxWidth <= 100 && boxHeight >= 8 && boxHeight <= 24;
+        const callout = feature === CALLOUT && boxWidth >= 45 && boxWidth <= 220 && boxHeight >= 13 && boxHeight <= 55;
+        if ((pill || callout) && fifo.length >= boxWidth * boxHeight * 0.55) {
           fill(minX, minY, maxX, maxY, OVERLAY);
+          if (inverted && callout) callouts.push({ minX, maxX, minY, maxY });
+        }
+      }
+    }
+    // A vertical grid line can split an inverted callout into two gray regions
+    // and leave yellow ink from the callout exposed along the seam.
+    for (const { minX, maxX, minY, maxY } of callouts) {
+      for (const x of [minX - 1, maxX + 1]) {
+        if (x <= left || x >= right) continue;
+        for (let y = minY; y <= maxY; y++) {
+          const i = y * width + x;
+          if (has(x, y, YELLOW) && (pixels[i - 1]! & pixels[i + 1]! & OVERLAY)) pixels[i] = pixels[i]! | OVERLAY;
         }
       }
     }

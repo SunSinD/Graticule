@@ -238,7 +238,7 @@ function measureEdges(samples: readonly TraceSample[], pixelVoltage: number, spa
   };
 }
 
-export function measureChannel(trace: ChannelTrace, pxPerVDiv: number): ChannelMeasurements {
+export function measureChannel(trace: ChannelTrace, pxPerVDiv: number, quantization?: number): ChannelMeasurements {
   const values = trace.samples.filter(valid).map(s => s.voltage).sort((a, b) => a - b);
   const vmin = values[0] ?? null;
   const vmax = values.at(-1) ?? null;
@@ -246,7 +246,7 @@ export function measureChannel(trace: ChannelTrace, pxPerVDiv: number): ChannelM
   const scale = peak > Math.sqrt(Number.MAX_VALUE) ? peak : 1;
   const levels = scale === 1 ? values : values.map(value => value / scale);
   const samples = scale === 1 ? trace.samples : trace.samples.map(sample => valid(sample) ? { ...sample, voltage: sample.voltage / scale } : sample);
-  const pixelVoltage = trace.settings.voltsPerDiv / scale / pxPerVDiv;
+  const pixelVoltage = quantization === undefined ? trace.settings.voltsPerDiv / scale / pxPerVDiv : quantization / scale;
   const minimumAmplitude = 4 * pixelVoltage;
   const [low, high] = waveformLevels(levels, minimumAmplitude);
   const amplitude = high - low;
@@ -308,16 +308,17 @@ export function scopeFrequency(readings: readonly ScopeMeasureReading[], channel
   return scope?.value ?? (topFrequencyRaw?.replace(/\s+/g, '').startsWith(`f(${channel})=`) ? topFrequencyHz : null);
 }
 
-export function measurePhase(traces: readonly ChannelTrace[], frequencyHz: number | null): PhaseMeasurement | null {
-  const ref = traces.find(trace => trace.channel === 'C1');
-  const target = traces.find(trace => trace.channel === 'C2');
+export function measurePhase(traces: readonly ChannelTrace[], frequencyHz: number | null,
+  from: ChannelTrace['channel'] = 'C1', to: ChannelTrace['channel'] = 'C2'): PhaseMeasurement | null {
+  const ref = traces.find(trace => trace.channel === from && trace.settings.enabled);
+  const target = traces.find(trace => trace.channel === to && trace.settings.enabled);
   if (!ref || !target) return null;
   const fit = frequencyHz ? fitShared(ref, target, frequencyHz) : null;
   const reason = !fit ? 'frequency_unconfirmed'
     : !fit.sufficientCoverage || !fit.input || !fit.output ? 'insufficient_shared_samples'
       : fit.input.r2 < 0.85 || fit.output.r2 < 0.85 ? 'poor_sine_fit' : null;
   return {
-    refChannel: 'C1', targetChannel: 'C2',
+    refChannel: from, targetChannel: to,
     phaseDeg: reason === null && fit?.input && fit.output ? wrapPhase(fit.output.phaseDeg - fit.input.phaseDeg) : null,
     frequencyHz, r2Ref: fit?.input?.r2 ?? null, r2Target: fit?.output?.r2 ?? null,
     completeCycles: Math.floor(fit?.cycles ?? 0), reason,

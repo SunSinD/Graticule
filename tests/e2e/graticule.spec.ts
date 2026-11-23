@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { strFromU8, unzipSync } from 'fflate';
 import { test, expect, type Page } from '@playwright/test';
 
 const FIXTURES = path.resolve('tests/fixtures/samples');
@@ -72,11 +73,11 @@ test('cold load completes quickly with no errors, no external requests and no ex
 
 test('adding a file never extracts until Extract is clicked', async ({ page }) => {
   await addFiles(page, SINE);
-  await expect(page.getByRole('button', { name: 'Original' })).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('button', { name: 'Clean Plot' })).toBeDisabled();
-  await page.waitForTimeout(500);
-  await expect(page.getByRole('button', { name: 'Clean Plot' })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Extract', exact: true })).toBeEnabled();
+  await expect(page.getByRole('group', { name: 'View' })).toHaveCount(0);
+  await page.waitForTimeout(500);
+  await expect(page.getByRole('button', { name: 'Clean Plot' })).toHaveCount(0);
+  await expect(page.locator('.stage img')).toBeVisible();
 
   await page.getByRole('button', { name: 'Extract', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Clean Plot' })).toHaveAttribute('aria-pressed', 'true', { timeout: 5_000 });
@@ -88,7 +89,8 @@ test('Siglent comparison and 1:1 overlay controls work', async ({ page }) => {
   await expect(page.getByText(/Scope\s*\/\s*Graticule/i)).toBeVisible();
   await expect(page.getByText(/MEASURE/i)).toBeVisible();
 
-  const overlay = page.getByRole('button', { name: /1:1 Overlay/i });
+  const overlay = page.getByRole('button', { name: 'Overlay', exact: true });
+  await expect(overlay).toHaveAttribute('title', '1:1 Overlay (T)');
   await overlay.click();
   await expect(overlay).toHaveAttribute('aria-pressed', 'true');
   await page.keyboard.press('t');
@@ -142,8 +144,10 @@ test('1-2-5 scale editing recomputes an extracted capture', async ({ page }) => 
 
 test('Bode batch mode extracts on click and renders gain, phase, cutoff and live edits', async ({ page }) => {
   await addFiles(page, SWEEP);
+  await expect(page.getByRole('button', { name: 'Extract Bode (10)' })).toBeVisible();
   await expect(page.locator('[aria-label="Gain plot"]')).toHaveCount(0);
-  await extractSweep(page);
+  await page.getByRole('button', { name: 'Extract Bode (10)' }).click();
+  await expect(page.locator('[aria-label="Gain plot"]')).toBeVisible({ timeout: 10_000 });
   await expect(page.locator('[aria-label="Phase plot"]')).toBeVisible();
   await expect(page.getByText(/-3 dB/i)).toBeVisible();
   await expect(page.getByRole('slider', { name: 'Zoom' })).toHaveAttribute('max', '250');
@@ -338,7 +342,9 @@ test('auto detected universal captures can dismiss the crop box and show the cle
   await page.getByRole('button', { name: 'Clean Plot' }).click();
   await expect(page.getByRole('button', { name: 'Clean Plot' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('.paper svg').first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Crop', exact: true })).toHaveCount(0);
 
+  await page.getByRole('button', { name: 'Original', exact: true }).click();
   const cropToggle = page.getByRole('button', { name: 'Crop', exact: true });
   await cropToggle.click();
   await expect(crop).toBeVisible();
@@ -378,6 +384,7 @@ test('measurement cursors toggle with C, move with the keyboard and go into the 
 
 test('crop switches between rectangle and 4 corners and applies a perspective box', async ({ page }) => {
   await extractSine(page);
+  await page.getByRole('button', { name: 'Original', exact: true }).click();
   await page.getByRole('button', { name: 'Crop', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Rectangle' })).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('[data-testid="crop-box"]')).toBeVisible();
@@ -485,7 +492,7 @@ test('desktop 1440x900 fits in English and French with cursors and every export 
 
   await page.getByRole('button', { name: 'FR', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Curseurs' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Superposition 1:1' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Calque', exact: true })).toHaveAttribute('title', 'Superposition 1:1 (T)');
   await expect(page.getByRole('group', { name: 'Langue' })).toBeVisible();
   for (const name of ['SVG', 'PNG 2x', 'CSV', 'Copier', 'Word', 'Markdown', 'LaTeX', 'TSV']) {
     await expect(page.locator('.exports').getByRole('button', { name, exact: true })).toBeVisible();
@@ -623,7 +630,7 @@ test('unticking or removing Bode captures opens the one left, never the capture 
   await page.locator('.file-row', { hasText: 'sweep_01.png' }).click();
   await expect(page.locator('.file-row[aria-current="true"]')).toContainText('sweep_01.png');
 
-  const tick = (name: string) => page.getByRole('checkbox', { name: `Select for Bode ${name}` });
+  const tick = (name: string) => page.getByRole('checkbox', { name: `Select ${name}` });
   await tick('sweep_02.png').check();
   await tick('sweep_03.png').check();
   await expect(page.getByRole('button', { name: 'Extract Bode (2)' })).toBeVisible();
@@ -721,6 +728,7 @@ test('the 4 corners warning gets a wide row in French on phones and narrow scree
 
 test('Escape closes the crop box while the Crop button still has focus', async ({ page }) => {
   await extractSine(page);
+  await page.keyboard.press('1');
   const crop = page.getByRole('button', { name: 'Crop', exact: true });
   await crop.click();
   await expect(page.locator('[data-testid="crop-box"]')).toBeVisible();
@@ -853,4 +861,215 @@ test('a custom title goes into the downloaded CSV', async ({ page }) => {
   const csv = await fs.readFile((await download.path())!, 'utf8');
   expect(csv).toContain('# title: Lab 5 RC filter');
   expect(csv).toContain('# file: sine_schmitt.png');
+});
+
+const viewTab = (page: Page, name: string) => page.getByRole('group', { name: /^(View|Vue)$/ }).getByRole('button', { name, exact: true });
+
+async function download(page: Page, button: string): Promise<{ name: string; text: string }> {
+  const pending = page.waitForEvent('download');
+  await page.locator('.exports').getByRole('button', { name: button, exact: true }).click();
+  const file = await pending;
+  const text = await fs.readFile((await file.path())!, 'utf8');
+  return { name: file.suggestedFilename(), text };
+}
+
+test('one view switcher holds Original, Overlay, Clean, XY and FFT and follows keys 1 to 5', async ({ page }) => {
+  await extractSine(page);
+  const group = page.getByRole('group', { name: 'View' });
+  await expect(group.getByRole('button')).toHaveText(['Original', 'Overlay', 'Clean', 'XY', 'FFT']);
+  await expect(viewTab(page, 'Clean Plot')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: 'Cursors' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Crop', exact: true })).toHaveCount(0);
+
+  const steps: readonly (readonly [string, string])[] = [
+    ['1', 'Original'],
+    ['2', 'Overlay'],
+    ['4', 'XY'],
+    ['5', 'FFT'],
+    ['3', 'Clean Plot'],
+  ];
+  for (const [key, name] of steps) {
+    await page.keyboard.press(key);
+    await expect(viewTab(page, name)).toHaveAttribute('aria-pressed', 'true');
+  }
+
+  await page.keyboard.press('1');
+  await expect(page.getByRole('button', { name: 'Crop', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Cursors' })).toHaveCount(0);
+  await page.keyboard.press('t');
+  await expect(viewTab(page, 'Overlay')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.overlay svg')).toBeVisible();
+  await page.keyboard.press('c');
+  await expect(viewTab(page, 'Clean Plot')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('[data-testid="cursor-readout"]')).toBeVisible();
+
+  await page.getByRole('button', { name: 'FR', exact: true }).click();
+  await expect(page.getByRole('group', { name: 'Vue' }).getByRole('button')).toHaveText(['Original', 'Calque', 'Propre', 'XY', 'FFT']);
+  await expect(viewTab(page, 'Calque')).toHaveAttribute('title', 'Superposition 1:1 (T)');
+});
+
+test('the + M chip adds a math channel to the plot, the Results and the CSV', async ({ page }) => {
+  await extractSine(page);
+  await page.getByRole('button', { name: 'Add math channel' }).click();
+  await expect(page.getByRole('combobox', { name: 'Math operation' })).toHaveValue('sub');
+  await expect(page.getByRole('combobox', { name: 'Math first channel' })).toHaveValue('C1');
+  await expect(page.getByRole('combobox', { name: 'Math second channel' })).toHaveValue('C2');
+  await expect(page.locator('[data-testid="measurement-summary"] thead')).toContainText('C1 - C2');
+  await expect(page.locator('[data-testid="clean-plot"] svg')).toContainText('C1 - C2');
+  await expect(page.getByRole('button', { name: 'Add math channel' })).toHaveCount(0);
+
+  const csv = await download(page, 'CSV');
+  expect(csv.text).toContain('# M: C1 - C2 C1 sub C2');
+  expect(csv.text).toMatch(/,m_v,m_status/);
+
+  await viewTab(page, 'XY').click();
+  await expect(page.getByRole('combobox', { name: 'X axis channel' }).locator('option')).toHaveText(['C1', 'C2', 'C1 - C2']);
+
+  await viewTab(page, 'Clean Plot').click();
+  await page.getByRole('checkbox', { name: 'Remove math channel' }).click();
+  await expect(page.locator('[data-testid="measurement-summary"] thead')).not.toContainText('C1 - C2');
+  await expect(page.getByRole('button', { name: 'Add math channel' })).toBeVisible();
+});
+
+test('XY view plots, swaps axes and exports XY data, FFT view shows harmonics and switches scale', async ({ page }) => {
+  await extractSine(page);
+  await viewTab(page, 'XY').click();
+  await expect(page.locator('[data-testid="xy-plot"] svg')).toBeVisible();
+  const x = page.getByRole('combobox', { name: 'X axis channel' });
+  const y = page.getByRole('combobox', { name: 'Y axis channel' });
+  await expect(x).toHaveValue('C1');
+  await expect(y).toHaveValue('C2');
+  await expect(page.locator('[data-testid="xy-summary"]')).toContainText('X range');
+  await page.getByRole('button', { name: 'Swap', exact: true }).click();
+  await expect(x).toHaveValue('C2');
+  await expect(y).toHaveValue('C1');
+  await expect(page.locator('.exports').getByRole('button', { name: 'Word', exact: true })).toBeDisabled();
+
+  const xyCsv = await download(page, 'CSV');
+  expect(xyCsv.name).toBe('sine_schmitt_xy.csv');
+  expect(xyCsv.text).toContain('# x: C2 (V), y: C1 (V)');
+  const xySvg = await download(page, 'SVG');
+  expect(xySvg.name).toBe('sine_schmitt_xy.svg');
+  expect(xySvg.text).toContain('fill="#fff"');
+
+  await viewTab(page, 'FFT').click();
+  const plot = page.locator('[data-testid="fft-plot"] svg');
+  await expect(plot).toBeVisible();
+  await expect(plot).toContainText('dBV');
+  const summary = page.locator('[data-testid="fft-summary"]');
+  await expect(summary).toContainText('Fundamental');
+  await expect(summary.locator('dt', { hasText: /^THD$/ })).toBeVisible();
+  await expect(summary).toContainText('Values below the dashed line are pixel noise');
+  await expect(summary.locator('dt', { hasText: /^H2$/ })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Lin', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Lin', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(plot).toContainText('V RMS');
+  await page.getByRole('combobox', { name: 'FFT window' }).selectOption('flattop');
+  const fftCsv = await download(page, 'CSV');
+  expect(fftCsv.name).toBe('sine_schmitt_fft.csv');
+  expect(fftCsv.text).toContain('window=flattop');
+  expect(fftCsv.text).toContain('frequency_hz,vrms,dbv');
+  await expect(page.locator('.exports').getByRole('button', { name: 'Markdown', exact: true })).toBeEnabled();
+
+  await page.getByRole('button', { name: 'FR', exact: true }).click();
+  await expect(page.locator('[data-testid="fft-summary"]')).toContainText('Les valeurs sous la ligne pointillée sont du bruit de pixel');
+});
+
+test('selecting captures offers a Bode plot or a zip lab report with every capture', async ({ page }) => {
+  await addFiles(page, SWEEP.slice(0, 3));
+  await expect(page.getByText('3 captures selected', { exact: false })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Extract Bode (3)' })).toBeVisible();
+  await expect(page.getByRole('checkbox', { name: 'Select sweep_01.png' })).toBeChecked();
+
+  const pending = page.waitForEvent('download', { timeout: 20_000 });
+  await page.getByRole('button', { name: 'Export all (.zip)' }).click();
+  const zip = await pending;
+  expect(zip.suggestedFilename()).toBe('graticule-report.zip');
+  const files = unzipSync(new Uint8Array(await fs.readFile((await zip.path())!)));
+  const names = Object.keys(files);
+  for (const name of ['report.md', 'report.tex', 'report.html']) expect(names).toContain(name);
+  for (const n of ['01', '02', '03']) {
+    expect(names).toContain(`captures/sweep_${n}.svg`);
+    expect(names).toContain(`captures/sweep_${n}.csv`);
+  }
+  expect(strFromU8(files['report.md']!)).toContain('## sweep');
+  await expect(page.locator('[data-testid="export-feedback"]')).toHaveText('Report downloaded');
+  await expect(page.locator('.file-row .dot.on')).toHaveCount(3);
+});
+
+test('a Bode title names the Bode SVG and CSV downloads', async ({ page }) => {
+  await extractSweep(page);
+  const title = page.getByRole('textbox', { name: 'Title' });
+  await expect(title).toHaveAttribute('placeholder', 'Bode');
+  expect((await download(page, 'SVG')).name).toBe('bode.svg');
+  await title.fill('Lab 4 RC low pass');
+  await title.press('Enter');
+  const svg = await download(page, 'SVG');
+  expect(svg.name).toBe('Lab 4 RC low pass.svg');
+  expect(svg.text).toContain('Lab 4 RC low pass');
+  expect((await download(page, 'CSV')).name).toBe('Lab 4 RC low pass.csv');
+});
+
+test('desktop empty state hides the right panel and a small phone gets a capture switcher', async ({ page, browser }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await expect(page.locator('.zone.right')).toBeHidden();
+  await addFiles(page, SINE);
+  await expect(page.locator('.zone.right')).toBeVisible();
+  await expect(page.getByRole('combobox', { name: 'Capture' })).toHaveCount(0);
+
+  const ctx = await browser.newContext(SMALL_PHONE);
+  const phone = await ctx.newPage();
+  await phone.goto('/');
+  await addFiles(phone, SWEEP.slice(0, 3));
+  const switcher = phone.getByRole('combobox', { name: 'Capture' });
+  await expect(switcher).toBeVisible();
+  const box = await switcher.boundingBox();
+  expect(box?.y ?? 999).toBeLessThan(160);
+  await switcher.selectOption({ label: 'sweep_02.png' });
+  await expect(phone.getByRole('button', { name: 'Extract', exact: true })).toBeVisible();
+  await expect(phone.locator('.file-row[aria-current="true"]')).toContainText('sweep_02.png');
+
+  await phone.getByRole('button', { name: 'Extract', exact: true }).click();
+  await expect(phone.locator('.paper svg')).toBeVisible({ timeout: 10_000 });
+  const settings = phone.locator('details.settings');
+  await expect(settings).not.toHaveAttribute('open', '');
+  await expect(phone.locator('[data-testid="measurement-summary"]')).toBeVisible();
+  await expect(phone.locator('.exports')).toBeVisible();
+  await settings.locator('summary').click();
+  await expect(phone.getByRole('combobox', { name: 'Profile' })).toBeVisible();
+  const status = await phone.locator('.status').boundingBox();
+  const plot = await phone.locator('.capture').boundingBox();
+  expect(Boolean(status && plot && status.y < plot.y)).toBe(true);
+  expect(await phone.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+  await ctx.close();
+});
+
+test('every view fits without sideways scrolling from phone to desktop in English and French', async ({ page }) => {
+  await extractSine(page);
+  await page.getByRole('button', { name: /theme/i }).click();
+  const sizes = [
+    { width: 360, height: 640 },
+    { width: 390, height: 844 },
+    { width: 768, height: 1024 },
+    { width: 1280, height: 720 },
+    { width: 1440, height: 900 },
+  ];
+  for (const locale of ['EN', 'FR']) {
+    await page.getByRole('button', { name: locale, exact: true }).click();
+    for (const size of sizes) {
+      await page.setViewportSize(size);
+      for (const key of ['1', '3', '4', '5']) {
+        await page.keyboard.press(key);
+        const report = await page.evaluate(() => {
+          const width = document.documentElement.clientWidth;
+          const toolbar = document.querySelector('.capture > .toolbar') as HTMLElement;
+          const right = Math.max(...Array.from(toolbar.querySelectorAll('*')).map((el) => el.getBoundingClientRect().right));
+          return { page: document.documentElement.scrollWidth - width, toolbar: Math.ceil(right - toolbar.getBoundingClientRect().right) };
+        });
+        expect(report.page, `${locale} ${size.width}x${size.height} key ${key}`).toBeLessThanOrEqual(0);
+        expect(report.toolbar, `${locale} ${size.width}x${size.height} key ${key} toolbar`).toBeLessThanOrEqual(1);
+      }
+    }
+  }
 });

@@ -4,7 +4,7 @@ import type { OverlayMask } from './mask.js';
 import type { ScopeMetadata } from './ocr.js';
 import { at, CHANNELS, channelColor } from './pixels.js';
 import type { ChannelColor } from './pixels.js';
-import { colorsFor, getNativeProfile } from './profiles.js';
+import { colorsFor, getNativeProfile, invertTraceColors, makeGrid } from './profiles.js';
 import type { ChannelId, ChannelSettings, ChannelTrace, ExtractionOverrides, GapStatus, GridGeometry, ProfileDetection,
   RgbaImage, TimebaseSettings, TraceSample } from './types.js';
 
@@ -44,7 +44,8 @@ function markerYs(image: RgbaImage, detection: ProfileDetection, colors: readonl
   const profile = getNativeProfile(detection.profileId);
   if (!profile) return [null, null, null, null];
   const { x, y, width, height } = profile.zeroMarkerStrip;
-  const { bottom, centerY, inverted } = detection.grid;
+  const { bottom, centerY } = detection.grid;
+  const inverted = invertTraceColors(image, detection.profileId, detection.grid.inverted);
   const lastRow = profile.raster ? Math.min(bottom, y + height - 1) : bottom;
   if (profile.id === 'keysight-dsox1000') {
     const arrows: (number | null)[] = CHANNELS.map(() => null);
@@ -192,8 +193,11 @@ interface TraceColumns {
 
 function plotAnnotations(image: RgbaImage, detection: ProfileDetection, markers: readonly (number | null)[]): Uint8Array | null {
   const { profileId, grid } = detection;
-  const { left, right, top, bottom, hLines } = grid;
+  const { left, right, top, bottom } = grid;
   if (profileId !== 'rigol-dho924' && profileId !== 'rohde-schwarz-rtb2004' && profileId !== 'siglent-sds800x-hd') return null;
+  const native = getNativeProfile(profileId)!.graticule;
+  const { hLines, vLines } = grid.hDivs === native.hDivs && grid.vDivs === native.vDivs ? grid
+    : makeGrid(left, top, right, bottom, native.hDivs, native.vDivs, grid.layoutVariant, grid.inverted);
   const pixels = new Uint8Array(image.width * image.height);
   const fill = (x1: number, y1: number, x2: number, y2: number) => {
     for (let y = Math.max(top, y1); y <= Math.min(bottom, y2); y++) {
@@ -208,7 +212,7 @@ function plotAnnotations(image: RgbaImage, detection: ProfileDetection, markers:
   }
   if (profileId === 'siglent-sds800x-hd') {
     for (const y of hLines.slice(1)) fill(left, Math.round(y) - 12, left + 65, Math.round(y) + 1);
-    for (const x of grid.vLines.slice(1, -1)) fill(x - 32, bottom - 17, x + 32, bottom - 3);
+    for (const x of vLines.slice(1, -1)) fill(Math.round(x) - 32, bottom - 17, Math.round(x) + 32, bottom - 3);
     // A trigger level arrow can obscure samples along the last few columns.
     const base = right - 1;
     const packed = (x: number, y: number) => {
@@ -281,7 +285,7 @@ export function extractTraces(image: RgbaImage, detection: ProfileDetection, met
   const annotations = plotAnnotations(image, detection, markers);
   const plotMask = annotations ? { ...mask, pixels: mask.pixels.map((bits, index) => bits | annotations[index]!) } : mask;
   const native = getNativeProfile(detection.profileId);
-  const inverted = grid.inverted;
+  const inverted = invertTraceColors(image, detection.profileId, grid.inverted);
   const active = CHANNELS.map((channel, i) => !metadata.unsupportedChannels?.has(channel)
     && (overrides.channels?.[channel]?.enabled ?? (!native || metadata.cards.has(channel) || markers[i] !== null)));
   const columns = CHANNELS.map((): (Cluster | null)[] => []);

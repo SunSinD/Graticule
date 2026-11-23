@@ -1,4 +1,4 @@
-import type { BodePoint, BodeResult, ChannelId, ChannelTrace, ExtractionResult, TraceSample } from '../types.js';
+import type { BodePoint, BodeResult, ChannelId, ChannelTrace, ExtractionResult, MathTraceResult, TraceSample } from '../types.js';
 import { GRATICULE_VERSION, csvNumber, spreadsheetText } from './format.js';
 
 const EOL = '\n';
@@ -29,7 +29,8 @@ function channelComment(trace: ChannelTrace): string {
   ].join(' ');
 }
 
-export function renderWaveformCsv(result: ExtractionResult, channelLabels?: Partial<Record<ChannelId, string>>, title?: string): string {
+export function renderWaveformCsv(result: ExtractionResult, channelLabels?: Partial<Record<ChannelId, string>>, title?: string,
+  math?: MathTraceResult | null): string {
   const traces = result.traces.filter((t) => t.settings.enabled);
   const tb = result.timebase;
   const grid = result.detection.grid;
@@ -57,6 +58,8 @@ export function renderWaveformCsv(result: ExtractionResult, channelLabels?: Part
       `fall_limited=${m.fallLimited ?? false}`,
     ].join(' '));
   }
+  if (math) lines.push(`# M: ${comment(math.label)} ${math.config.a} ${math.config.op} ${math.config.b} unit=${math.unit}`
+    + ` scale_per_div=${csvNumber(math.voltsPerDiv)} offset=${csvNumber(math.offsetVolts)} warnings=${math.warnings.join('|')}`);
   lines.push('# a blank voltage cell means no trustworthy data at that time, see the status column');
 
   const header = ['time_s'];
@@ -65,15 +68,13 @@ export function renderWaveformCsv(result: ExtractionResult, channelLabels?: Part
     const id = label?.trim() ? (spreadsheetText(label) === label ? label.trim() : label.trimEnd()) : t.channel.toLowerCase();
     header.push(csvField(`${id}_v`), csvField(`${id}_status`));
   }
+  if (math) header.push(math.unit === 'V²' ? 'm_v2' : 'm_v', 'm_status');
   lines.push(header.join(','));
 
-  const byCol: Map<number, TraceSample>[] = traces.map((t) => {
-    const m = new Map<number, TraceSample>();
-    for (const s of t.samples) m.set(s.col, s);
-    return m;
-  });
+  const series = math ? [...traces.map(t => t.samples), math.samples] : traces.map(t => t.samples);
+  const byCol = series.map(samples => new Map<number, TraceSample>(samples.map(s => [s.col, s])));
   const cols = new Set<number>();
-  for (const t of traces) for (const s of t.samples) cols.add(s.col);
+  for (const samples of series) for (const s of samples) cols.add(s.col);
   const sortedCols = [...cols].sort((a, b) => a - b);
 
   for (const col of sortedCols) {
@@ -127,7 +128,7 @@ export function renderBodeCsv(result: BodeResult): string {
     ...(result.cutoffHighHz == null ? [] : [`# cutoff_high_hz_minus_3db: ${csvNumber(result.cutoffHighHz, 6)}`]),
     `# accepted: ${result.acceptedCount}`,
     `# rejected: ${result.rejectedCount}`,
-    'file,frequency_hz,vin_vpp,vout_vpp,gain_db,phase_deg,cycles,r2_in,r2_out,accepted,reasons',
+    'file,frequency_hz,vin_vpp,vout_vpp,gain_db,phase_deg,cycles,r2_in,r2_out,accepted,reasons,warnings',
   ];
   for (const p of sortBodePoints(result.points)) {
     lines.push(
@@ -143,6 +144,7 @@ export function renderBodeCsv(result: BodeResult): string {
         csvNumber(p.r2Out, 6),
         p.accepted ? 'true' : 'false',
         csvField(p.rejectionReasons.join(' | ')),
+        csvField(p.warnings.join(' | ')),
       ].join(','),
     );
   }

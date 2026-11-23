@@ -1,12 +1,28 @@
-import type { BodeGateOptions, BodeResult, ChannelId, ChannelMeasurements, ExtractionResult, GapStatus, Locale } from '../../core/types';
+import type {
+  BodeGateOptions,
+  BodeResult,
+  ChannelId,
+  ChannelMeasurements,
+  ExtractionResult,
+  GapStatus,
+  Locale,
+  MathTraceResult,
+} from '../../core/types';
+import type { SpectrumResult } from '../../core/spectrum';
+import type { XyResult } from '../../core/xy';
 import { formatMetric, metricValue } from '../../core/export/table';
-import { metricLabel, toMetricKey } from '../../core/export/labels';
+import { METRIC_UNITS, metricLabel, toMetricKey } from '../../core/export/labels';
 import type { MetricKey } from '../../core/export/labels';
-import { EMPTY_CELL, METRIC_LABELS, ROW_LABELS, formatEng, formatPercent, gapLabel } from '../i18n';
+import { EMPTY_CELL, METRIC_LABELS, ROW_LABELS, formatEng, formatFixed, formatPercent, gapLabel } from '../i18n';
 import type { Dict, RowKey } from '../i18n';
 import type { ChannelLabels } from '../history';
 
 const ROWS: readonly RowKey[] = ['vpp', 'vmax', 'vmin', 'vavg', 'vrms', 'period', 'freq', 'duty', 'rise', 'fall', 'overshoot'];
+
+function hasValue(m: ChannelMeasurements, key: RowKey): boolean {
+  const value = metricValue(m, key);
+  return value !== null && Number.isFinite(value);
+}
 
 function cellText(m: ChannelMeasurements, key: RowKey, locale: Locale): string {
   const value = metricValue(m, key);
@@ -14,6 +30,29 @@ function cellText(m: ChannelMeasurements, key: RowKey, locale: Locale): string {
   if (value === null || !Number.isFinite(value)) return text;
   if ((key === 'rise' && m.riseLimited) || (key === 'fall' && m.fallLimited)) return `< ${text}`;
   return text;
+}
+
+function mathText(math: MathTraceResult, key: RowKey, locale: Locale): string {
+  const value = metricValue(math.measurement, key);
+  return METRIC_UNITS[key] === 'V' ? formatEng(value, math.unit, locale, { sig: 3, signed: true }) : formatMetric(value, key, '', locale);
+}
+
+interface PhaseRow {
+  readonly from: ChannelId;
+  readonly to: ChannelId;
+  readonly deg: number;
+}
+
+function phaseRow(result: ExtractionResult | null, enabled: ReadonlySet<ChannelId>): PhaseRow | null {
+  if (!result) return null;
+  const legacy = result.phaseC1ToC2;
+  const ph =
+    legacy?.phaseDeg != null
+      ? { from: legacy.refChannel, to: legacy.targetChannel, deg: legacy.phaseDeg }
+      : result.phasePair
+        ? { from: result.phasePair.from, to: result.phasePair.to, deg: result.phasePair.phaseDeg }
+        : null;
+  return ph && Number.isFinite(ph.deg) && enabled.has(ph.from) && enabled.has(ph.to) ? ph : null;
 }
 const GAP_KINDS: readonly Exclude<GapStatus, 'ok'>[] = [
   'clipped_high',
@@ -29,58 +68,157 @@ interface Props {
   readonly locale: Locale;
   readonly result: ExtractionResult | null;
   readonly labels?: ChannelLabels | undefined;
+  readonly math?: MathTraceResult | null;
+  readonly xy?: XyResult | null;
+  readonly spectrum?: SpectrumResult | null;
+  readonly axisLabel?: (axis: string) => string;
 }
 
-export function MeasurementsPanel({ tx, locale, result, labels }: Props) {
+export function MeasurementsPanel({ tx, locale, result, labels, math = null, xy = null, spectrum = null, axisLabel }: Props) {
   const enabled = new Set(result?.traces.filter((t) => t.settings.enabled).map((t) => t.channel) ?? []);
   const ms = result?.measurements.filter((m) => enabled.has(m.channel)) ?? [];
-  const ph = result?.phaseC1ToC2 ?? null;
-  const showPhase = ph !== null && enabled.has(ph.refChannel) && enabled.has(ph.targetChannel);
+  const ph = phaseRow(result, enabled);
+  const label = (ch: ChannelId) => labels?.[ch]?.trim() || ch;
+  const rows = ROWS.filter((key) => ms.some((m) => hasValue(m, key)) || (math !== null && hasValue(math.measurement, key)));
+  const name = axisLabel ?? ((axis: string) => axis);
 
   return (
     <section>
       <h2>{tx.results}</h2>
+      {xy && <XyBlock tx={tx} locale={locale} xy={xy} name={name} />}
+      {spectrum && <SpectrumBlock tx={tx} locale={locale} spec={spectrum} name={name} />}
       <div data-testid="measurement-summary" className="table-wrap">
-        <table className="grid-table compact values">
-          <thead>
-            <tr>
-              <th>{tx.quantity}</th>
-              {ms.length === 0 ? <th className="r">{EMPTY_CELL}</th> : ms.map((m) => <th key={m.channel} className="r">{labels?.[m.channel]?.trim() || m.channel}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {ROWS.map((key) => (
-              <tr key={key}>
-                <th scope="row">{ROW_LABELS[locale][key]}</th>
-                {ms.length === 0 ? (
-                  <td className="r num">{EMPTY_CELL}</td>
-                ) : (
-                  ms.map((m) => (
+        {!result ? (
+          <p className="muted small">{tx.notExtracted}</p>
+        ) : (
+          <table className="grid-table compact values">
+            <thead>
+              <tr>
+                <th>{tx.quantity}</th>
+                {ms.map((m) => (
+                  <th key={m.channel} className="r">
+                    {label(m.channel)}
+                  </th>
+                ))}
+                {math && <th className="r">{math.label}</th>}
+                {ms.length === 0 && !math && <th className="r">{EMPTY_CELL}</th>}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((key) => (
+                <tr key={key}>
+                  <th scope="row">{ROW_LABELS[locale][key]}</th>
+                  {ms.map((m) => (
                     <td key={m.channel} className="r num">
                       {cellText(m, key, locale)}
                     </td>
-                  ))
-                )}
-              </tr>
-            ))}
-            <tr>
-              <th scope="row">{tx.phaseRow}</th>
-              {ms.length === 0 ? (
-                <td className="r num">{EMPTY_CELL}</td>
-              ) : (
-                ms.map((m) => (
-                  <td key={m.channel} className="r num">
-                    {showPhase && ph && m.channel === ph.targetChannel ? formatEng(ph.phaseDeg, '°', locale) : EMPTY_CELL}
-                  </td>
-                ))
+                  ))}
+                  {math && <td className="r num">{mathText(math, key, locale)}</td>}
+                </tr>
+              ))}
+              {ph && (
+                <tr>
+                  <th scope="row">
+                    {tx.phase} {label(ph.from)}→{label(ph.to)}
+                  </th>
+                  {ms.map((m) => (
+                    <td key={m.channel} className="r num">
+                      {m.channel === ph.to ? formatEng(ph.deg, '°', locale, { signed: true }) : EMPTY_CELL}
+                    </td>
+                  ))}
+                  {math && <td className="r num">{EMPTY_CELL}</td>}
+                </tr>
               )}
-            </tr>
-          </tbody>
-        </table>
+            </tbody>
+          </table>
+        )}
       </div>
       {result && <GapList tx={tx} locale={locale} result={result} />}
       {result && result.comparisons.length > 0 && <Comparison tx={tx} locale={locale} result={result} />}
     </section>
+  );
+}
+
+function XyBlock({ tx, locale, xy, name }: { tx: Dict; locale: Locale; xy: XyResult; name: (axis: string) => string }) {
+  const range = (lo: number | null, hi: number | null, unit: string) =>
+    lo === null || hi === null ? EMPTY_CELL : `${formatEng(lo, unit, locale, { sig: 3 })} … ${formatEng(hi, unit, locale, { sig: 3 })}`;
+  const h = xy.hysteresis;
+  return (
+    <div className="block-top" data-testid="xy-summary">
+      <h3>
+        {tx.xyResults} {name(xy.xAxis)} / {name(xy.yAxis)}
+      </h3>
+      <dl className="kv small">
+        <div>
+          <dt>{tx.xRange}</dt>
+          <dd>{range(xy.xMin, xy.xMax, xy.xUnit)}</dd>
+        </div>
+        <div>
+          <dt>{tx.yRange}</dt>
+          <dd>{range(xy.yMin, xy.yMax, xy.yUnit)}</dd>
+        </div>
+        {xy.lissajousPhaseDeg !== null && (
+          <div>
+            <dt>{tx.lissajous}</dt>
+            <dd>{formatEng(xy.lissajousPhaseDeg, '°', locale, { signed: true })}</dd>
+          </div>
+        )}
+        {h && (
+          <>
+            <div>
+              <dt>{tx.hystLow}</dt>
+              <dd>{formatEng(h.lowThresholdV, 'V', locale, { sig: 3 })}</dd>
+            </div>
+            <div>
+              <dt>{tx.hystHigh}</dt>
+              <dd>{formatEng(h.highThresholdV, 'V', locale, { sig: 3 })}</dd>
+            </div>
+            <div>
+              <dt>
+                {tx.hysteresis} ({tx.hystWidth.toLowerCase()})
+              </dt>
+              <dd>{formatEng(h.widthV, 'V', locale, { sig: 3 })}</dd>
+            </div>
+          </>
+        )}
+      </dl>
+      {xy.gapCount > 0 && <p className="muted small">{tx.xyGaps(xy.gapCount)}</p>}
+      {(xy.clippedX || xy.clippedY) && <p className="muted small">{tx.xyClipped}</p>}
+    </div>
+  );
+}
+
+function SpectrumBlock({ tx, locale, spec, name }: { tx: Dict; locale: Locale; spec: SpectrumResult; name: (axis: string) => string }) {
+  const thd =
+    spec.thdPct === null
+      ? tx.thdReasons[spec.thdReason ?? ''] ?? EMPTY_CELL
+      : spec.thdBelowFloor
+        ? tx.thdBelow
+        : `${formatFixed(spec.thdPct, 2, locale)}%`;
+  const harmonics = spec.harmonics.filter((h) => h.order >= 2 && h.order <= 5);
+  return (
+    <div className="block-top" data-testid="fft-summary">
+      <h3>
+        {tx.fftResults} {name(spec.channel)}
+      </h3>
+      <dl className="kv small">
+        <div>
+          <dt>{tx.fundamental}</dt>
+          <dd>{spec.fundamental ? formatEng(spec.fundamental.frequencyHz, 'Hz', locale, { sig: 4 }) : EMPTY_CELL}</dd>
+        </div>
+        <div>
+          <dt>{tx.thd}</dt>
+          <dd>{thd}</dd>
+        </div>
+        {harmonics.map((h) => (
+          <div key={h.order}>
+            <dt>H{h.order}</dt>
+            <dd>{h.dbc === null ? EMPTY_CELL : `${formatFixed(h.dbc, 1, locale)} dBc`}</dd>
+          </div>
+        ))}
+      </dl>
+      <p className="muted small">{tx.noiseNote}</p>
+    </div>
   );
 }
 

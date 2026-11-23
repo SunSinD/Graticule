@@ -3,7 +3,7 @@ import { compactGlyphs, glyphs as siglentFont, labels as siglentLabels } from '.
 import { glyphs as rigolFont } from './font/rigolFont.js';
 import { rasterFonts } from './font/rasterFonts.js';
 import { at, CHANNELS } from './pixels.js';
-import { findNativeCards, getNativeProfile, hasCompactSiglentHeader, isRasterProfile, rigolCardInk, rigolScaleRoi } from './profiles.js';
+import { findNativeCards, getNativeProfile, hasCompactSiglentHeader, invertTraceColors, isRasterProfile, rigolCardInk, rigolScaleRoi } from './profiles.js';
 import type { ChannelColor, PixelPredicate } from './pixels.js';
 import type { ChannelId, ChannelSettings, ProfileDetection, Rect, RgbaImage, ScopeMeasureReading } from './types.js';
 
@@ -25,6 +25,7 @@ export interface ScopeMetadata {
   readonly topFrequencyRaw: string | null;
   readonly scopeReadings: readonly ScopeMeasureReading[];
   readonly colors?: readonly ChannelColor[];
+  readonly digital?: boolean;
   readonly unsupportedChannels?: ReadonlySet<ChannelId>;
 }
 
@@ -153,6 +154,7 @@ export function readScopeMetadata(image: RgbaImage, detection: ProfileDetection)
   const siglent = profile.id === 'siglent-sds2000x-plus';
   const compact = siglent && hasCompactSiglentHeader(image, inverted);
   const native = findNativeCards(image, profile, inverted, compact);
+  const invertColors = invertTraceColors(image, profile.id, inverted);
   const unsupportedChannels = new Set<ChannelId>();
   const ink: PixelPredicate = siglent
     ? (r, g, b) => inverted ? 255 - Math.max(r, g, b) >= (compact ? 158 : 250)
@@ -176,7 +178,7 @@ export function readScopeMetadata(image: RgbaImage, detection: ProfileDetection)
       const rawScaleText = read(box(slot.x + 55, 560, 65, 13));
       const rawOffsetText = read(box(slot.x + 55, 577, 65, 15));
       const probeText = read(box(slot.x + 1, 560, 39, 13));
-      const couplingText = read(box(slot.x + 65, 543, 54, 13), (r, g, b) => inverted
+      const couplingText = read(box(slot.x + 65, 543, 54, 13), (r, g, b) => invertColors
         ? analogColor(channel, 255 - r, 255 - g, 255 - b) : analogColor(channel, r, g, b));
       const attenuation = /^(\d+(?:\.\d+)?)X$/.exec(probeText ?? '');
       cards.set(channel, {
@@ -213,7 +215,7 @@ export function readScopeMetadata(image: RgbaImage, detection: ProfileDetection)
       if (!rawText) continue;
       const suffix = /\((C[1-4])\)$/.exec(label);
       const channel = detection.digitalOnly || rawText === '***' ? null
-        : (suffix?.[1] as ChannelId | undefined) ?? inferChannel(image, labelRoi, inverted);
+        : (suffix?.[1] as ChannelId | undefined) ?? inferChannel(image, labelRoi, invertColors);
       const metric = measureMetrics[label.replace(/\(.*\)$/, '').toLowerCase()] ?? 'other';
       const quantity = parseQuantity(rawText);
       scopeReadings.push({ label, metric, channel, rawText, value: quantity?.value ?? null, unit: quantity?.unit ?? '' });
@@ -222,6 +224,6 @@ export function readScopeMetadata(image: RgbaImage, detection: ProfileDetection)
 
   return {
     cards, secPerDiv: parseScale(rawTimebase, 's'), triggerOffsetSec: parseQuantity(delay ?? '')?.value ?? null,
-    rawTimebase, topFrequencyHz, topFrequencyRaw, scopeReadings, colors: native.colors, unsupportedChannels,
+    rawTimebase, topFrequencyHz, topFrequencyRaw, scopeReadings, colors: native.colors, digital: native.digital, unsupportedChannels,
   };
 }

@@ -7,10 +7,14 @@ import type {
   ExtractionOverrides,
   ExtractionResult,
   Locale,
+  MathConfig,
+  MathTraceResult,
   PlotCursors,
   Quad,
   Rect,
+  XyAxisId,
 } from '../core/types';
+import type { SpectrumWindow } from '../core/spectrum';
 import { decodePng } from '../core/png';
 import { assessPhotoQuality } from '../core/photoQuality';
 import type { PhotoQualityReport } from '../core/photoQuality';
@@ -29,10 +33,10 @@ import type { AppMode } from './components/TopBar';
 import { EmptyState } from './components/EmptyState';
 import { FilePanel } from './components/FilePanel';
 import { CaptureView } from './components/CaptureView';
-import type { CaptureMode } from './components/CaptureView';
+import type { AxisOption, CaptureMode, FftControls, SpectrumScale, XyControls } from './components/CaptureView';
 import { BodeView } from './components/BodeView';
-import { ProfilePanel, ScaleControls } from './components/Controls';
-import type { ProfileChoice } from './components/Controls';
+import { ProfilePanel, ScaleControls, mathAutoLabel } from './components/Controls';
+import type { MathField, ProfileChoice } from './components/Controls';
 import { BodeSummary, MeasurementsPanel } from './components/Measurements';
 import { ExportPanel } from './components/Exports';
 import type { ExportSource, TitleField } from './components/Exports';
@@ -43,6 +47,7 @@ type Theme = 'light' | 'dark';
 type PointOverrides = Readonly<Record<string, BodePointOverride>>;
 type Source = 'pick' | 'camera';
 type MetaPatch = Pick<Partial<HistoryItem>, 'title' | 'channelLabels' | 'cursors'>;
+type Analysis = typeof import('./analysis');
 
 interface BodeSession {
   readonly state: ItemState;
@@ -52,6 +57,46 @@ interface BodeSession {
   readonly points: PointOverrides;
   readonly pointItems: Readonly<Record<string, string>>;
   readonly profile?: ProfileChoice;
+  readonly title?: string;
+}
+
+interface BatchProgress {
+  readonly phase: 'extract' | 'zip';
+  readonly done: number;
+  readonly total: number;
+}
+
+interface FftSettings {
+  readonly channel: XyAxisId | null;
+  readonly window: SpectrumWindow;
+  readonly scale: SpectrumScale;
+}
+
+const VIEW_KEYS: Readonly<Record<string, CaptureMode>> = { '1': 'original', '2': 'overlay', '3': 'clean', '4': 'xy', '5': 'fft' };
+
+function useMedia(query: string): boolean {
+  const [match, setMatch] = useState(() => typeof window.matchMedia === 'function' && window.matchMedia(query).matches);
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia(query);
+    const on = (): void => setMatch(mq.matches);
+    on();
+    mq.addEventListener('change', on);
+    return () => mq.removeEventListener('change', on);
+  }, [query]);
+  return match;
+}
+
+function enabledChannels(result: ExtractionResult | null): ChannelId[] {
+  return result ? result.traces.filter((tr) => tr.settings.enabled).map((tr) => tr.channel) : [];
+}
+
+/** Keeps a saved math setup usable when one of its channels was turned off since. */
+function usableMath(config: MathConfig | null | undefined, channels: readonly ChannelId[]): MathConfig | null {
+  if (!config || channels.length < 2) return null;
+  const a = channels.includes(config.a) ? config.a : channels.find((c) => c !== config.b) ?? channels[0]!;
+  const b = channels.includes(config.b) && config.b !== a ? config.b : channels.find((c) => c !== a) ?? channels[1]!;
+  return a === config.a && b === config.b ? config : { ...config, a, b };
 }
 
 const STAGED_SESSION: BodeSession = { state: 'staged', result: null, error: null, gate: {}, points: {}, pointItems: {} };
@@ -148,6 +193,16 @@ function hasManualBox(o: ExtractionOverrides): boolean {
   return Boolean(o.manualCrop || o.manualQuad);
 }
 
+function SettingsFold({ compact, label, children }: { compact: boolean; label: string; children: React.ReactNode }) {
+  if (!compact) return <>{children}</>;
+  return (
+    <details className="settings">
+      <summary>{label}</summary>
+      {children}
+    </details>
+  );
+}
+
 export function App() {
   const [locale, setLocale] = useState<Locale>(() => (readPref('graticule.locale') === 'fr' ? 'fr' : 'en'));
   const [theme, setTheme] = useState<Theme | null>(() => {
@@ -169,7 +224,12 @@ export function App() {
   const [historyReady, setHistoryReady] = useState(false);
 
   const [view, setView] = useState<CaptureMode>('original');
-  const [overlay, setOverlay] = useState(false);
+  const [mathById, setMathById] = useState<Readonly<Record<string, MathConfig>>>({});
+  const [xyAxes, setXyAxes] = useState<readonly [XyAxisId, XyAxisId] | null>(null);
+  const [fftSettings, setFftSettings] = useState<FftSettings>({ channel: null, window: 'hann', scale: 'dbv' });
+  const [analysis, setAnalysis] = useState<Analysis | null>(null);
+  const [batch, setBatch] = useState<BatchProgress | null>(null);
+  const compact = useMedia('(max-width: 1000px)');
   const [cropOpen, setCropOpen] = useState(false);
   const [forceQuad, setForceQuad] = useState(false);
   const [cropDismissed, setCropDismissed] = useState<ReadonlySet<string>>(() => new Set());
@@ -418,7 +478,6 @@ export function App() {
 
   const resetCaptureView = (nextView: CaptureMode): void => {
     setView(nextView);
-    setOverlay(false);
     setCropOpen(false);
     setForceQuad(false);
     setInspectedId(null);
@@ -729,7 +788,117 @@ export function App() {
   const autoCrop =
     isUniversal && activeItem !== null && !hasManualBox(activeItem.overrides) && !cropDismissed.has(activeItem.id);
   const cropVisible = mode === 'single' && activeItem !== null && (cropOpen || autoCrop);
-  const cursorsShown = cursorsOn && mode === 'single' && view === 'clean' && !cropVisible && Boolean(activeItem?.result);
+
+  const hasAnyResult = capture !== null || items.some((i) => i.result !== null);
+  useEffect(() => {
+    if (!hasAnyResult || analysis) return;
+    let live = true;
+    void import('./analysis').then(
+      (mod) => live && setAnalysis(mod),
+      () => undefined,
+    );
+    return () => {
+      live = false;
+    };
+  }, [hasAnyResult, analysis]);
+
+  const channels = useMemo(() => enabledChannels(capture), [capture]);
+  const storedMath = captureItem ? mathById[captureItem.id] ?? null : null;
+  const mathConfig = useMemo(() => usableMath(storedMath, channels), [storedMath, channels]);
+  const math: MathTraceResult | null = useMemo(() => {
+    if (!analysis || !capture || !mathConfig) return null;
+    try {
+      return analysis.computeMathTrace(capture, { ...mathConfig, label: mathConfig.label?.trim() || mathAutoLabel(mathConfig) });
+    } catch {
+      return null;
+    }
+  }, [analysis, capture, mathConfig]);
+  const axisName = useCallback(
+    (axis: string): string => (axis === 'M' ? math?.label ?? 'M' : captureLabels?.[axis as ChannelId]?.trim() || axis),
+    [math, captureLabels],
+  );
+  const axes: readonly AxisOption[] = useMemo(() => {
+    const ids: XyAxisId[] = [...channels, ...(math ? (['M'] as const) : [])];
+    return ids.map((id) => ({ id, label: axisName(id) }));
+  }, [channels, math, axisName]);
+  const axisIds = axes.map((a) => a.id);
+  const xyReady = axes.length >= 2;
+  const effectiveView: CaptureMode = !capture ? 'original' : view === 'xy' && !xyReady ? 'clean' : view;
+  const xyX: XyAxisId = xyAxes && axisIds.includes(xyAxes[0]) ? xyAxes[0] : axisIds[0] ?? 'C1';
+  const xyY: XyAxisId =
+    xyAxes && axisIds.includes(xyAxes[1]) && xyAxes[1] !== xyX ? xyAxes[1] : axisIds.find((a) => a !== xyX) ?? 'C2';
+  const fftChannel: XyAxisId =
+    fftSettings.channel && axisIds.includes(fftSettings.channel) ? fftSettings.channel : axisIds[0] ?? 'C1';
+
+  const xyResult = useMemo(() => {
+    if (!analysis || !capture || effectiveView !== 'xy' || !xyReady) return null;
+    try {
+      return analysis.computeXyPlot(capture, xyX, xyY, math);
+    } catch {
+      return null;
+    }
+  }, [analysis, capture, effectiveView, xyReady, xyX, xyY, math]);
+  const hasAxes = axisIds.length > 0;
+  const spectrum = useMemo(() => {
+    if (!analysis || !capture || effectiveView !== 'fft' || !hasAxes) return null;
+    try {
+      return analysis.computeSpectrum(capture, { channel: fftChannel, window: fftSettings.window, math });
+    } catch {
+      return null;
+    }
+  }, [analysis, capture, effectiveView, hasAxes, fftChannel, fftSettings.window, math]);
+
+  const xyTitle = `${captureTitle} (XY)`;
+  const fftTitle = `${captureTitle} (FFT ${axisName(fftChannel)})`;
+  const xyLabelX = axisName(xyX);
+  const xyLabelY = axisName(xyY);
+  const xySvg = useMemo(
+    () =>
+      analysis && xyResult
+        ? analysis.renderXySvg(xyResult, { locale, title: xyTitle, xLabel: xyLabelX, yLabel: xyLabelY, theme: dark ? 'dark' : 'light' })
+        : '',
+    [analysis, xyResult, dark, locale, xyTitle, xyLabelX, xyLabelY],
+  );
+  const fftSvg = useMemo(
+    () =>
+      analysis && spectrum
+        ? analysis.renderSpectrumSvg(spectrum, { locale, title: fftTitle, scale: fftSettings.scale, theme: dark ? 'dark' : 'light' })
+        : '',
+    [analysis, spectrum, dark, locale, fftTitle, fftSettings.scale],
+  );
+  const xyControls: XyControls | null = xyReady
+    ? { axes, x: xyX, y: xyY, svg: xySvg, onAxes: (x, y) => setXyAxes([x, y]) }
+    : null;
+  const fftControls: FftControls | null =
+    axes.length > 0
+      ? {
+          axes,
+          channel: fftChannel,
+          window: fftSettings.window,
+          scale: fftSettings.scale,
+          svg: fftSvg,
+          onChannel: (channel) => setFftSettings((s) => ({ ...s, channel })),
+          onWindow: (window) => setFftSettings((s) => ({ ...s, window })),
+          onScale: (scale) => setFftSettings((s) => ({ ...s, scale })),
+        }
+      : null;
+  const mathField: MathField | undefined = captureItem
+    ? {
+        config: mathConfig,
+        result: math,
+        onChange: (config) => {
+          const id = captureItem.id;
+          setMathById((all) => {
+            const next = { ...all };
+            if (config) next[id] = config;
+            else delete next[id];
+            return next;
+          });
+        },
+      }
+    : undefined;
+
+  const cursorsShown = cursorsOn && mode === 'single' && effectiveView === 'clean' && !cropVisible && Boolean(activeItem?.result);
   const cursors: PlotCursors | null =
     cursorsShown && activeItem?.result ? resolveCursors(activeItem.result, activeItem.cursors) : null;
 
@@ -753,16 +922,20 @@ export function App() {
 
   dismissCropRef.current = dismissCrop;
 
+  const selectView = (v: CaptureMode): void => {
+    if (v !== 'original' && v !== 'overlay' && cropVisible) dismissCrop(false);
+    setView(v);
+  };
+  const selectViewRef = useRef(selectView);
+  selectViewRef.current = selectView;
+
   const shownPointId = inspected?.id ?? null;
   useEffect(() => {
     if (shownPointId !== null) backRef.current?.focus();
   }, [shownPointId]);
 
   const toggleOverlay = useCallback(() => {
-    setOverlay((o) => {
-      if (!o) setView('original');
-      return !o;
-    });
+    setView((v) => (v === 'overlay' ? 'clean' : 'overlay'));
   }, []);
 
   const toggleCursors = useCallback(() => {
@@ -774,11 +947,74 @@ export function App() {
     }
     if (cropVisible) return;
     setView('clean');
-    setOverlay(false);
     setCropOpen(false);
     setForceQuad(false);
     setCursorsOn(true);
   }, [cursorsShown, cropVisible]);
+
+  const batchRef = useRef(false);
+  const exportAll = useCallback(
+    async (list: readonly HistoryItem[]) => {
+      if (batchRef.current || list.length === 0) return;
+      batchRef.current = true;
+      const total = list.length;
+      const ready: { item: HistoryItem; result: ExtractionResult }[] = [];
+      const failed: string[] = [];
+      setNotice(null);
+      setFileNote(null);
+      setBatch({ phase: 'extract', done: 0, total });
+      try {
+        for (const [index, original] of list.entries()) {
+          const item = itemsRef.current.find((i) => i.id === original.id) ?? original;
+          let result = item.result;
+          if (!result) {
+            const id = item.id;
+            const req = (singleReq.current.get(id) ?? 0) + 1;
+            singleReq.current.set(id, req);
+            patchItem(id, { state: 'extracting', error: null });
+            try {
+              result = await analyzeSingle(item.bytes, item.name, withProfile(item.overrides, item.profile));
+              if (singleReq.current.get(id) === req) patchItem(id, { state: 'extracted', result, error: null });
+            } catch (e) {
+              if (singleReq.current.get(id) === req) patchItem(id, { state: 'error', result: null, error: message(e) });
+              failed.push(item.name);
+            }
+          }
+          if (!mountedRef.current) return;
+          if (result) ready.push({ item, result });
+          setBatch({ phase: 'extract', done: index + 1, total });
+        }
+        if (ready.length === 0) {
+          setFileNote(tx.filesUnreadable(failed));
+          return;
+        }
+        const { buildBatchReportZip, svgToPngBytes } = await import('./batchExport');
+        setBatch({ phase: 'zip', done: 0, total: ready.length });
+        const zip = await buildBatchReportZip(
+          ready.map(({ item, result }) => ({
+            fileName: item.name,
+            result,
+            ...(item.title ? { title: item.title } : {}),
+            ...(item.channelLabels ? { channelLabels: item.channelLabels } : {}),
+          })),
+          {
+            locale,
+            renderPng: (svg) => svgToPngBytes(svg, 2),
+            onProgress: (done, count) => setBatch({ phase: 'zip', done, total: count }),
+          },
+        );
+        downloadBlob(new Blob([zip as Uint8Array<ArrayBuffer>], { type: 'application/zip' }), 'graticule-report.zip');
+        flash(tx.zipReady);
+        if (failed.length > 0) setFileNote(tx.zipSkipped(failed));
+      } catch (e) {
+        if (mountedRef.current) setNotice(message(e));
+      } finally {
+        batchRef.current = false;
+        if (mountedRef.current) setBatch(null);
+      }
+    },
+    [patchItem, locale, tx, flash],
+  );
 
   const extractActive = useCallback(() => {
     const item = itemsRef.current.find((i) => i.id === activeRef.current);
@@ -789,31 +1025,73 @@ export function App() {
     if (showCapture && capture) {
       const labels = captureLabels;
       const svgCursors = cursors ?? undefined;
+      const base = baseName(captureTitle);
+      if (effectiveView === 'xy') {
+        if (!analysis || !xyResult) return null;
+        const xy = xyResult;
+        return {
+          baseName: `${base}_xy`,
+          svg: () => analysis.renderXySvg(xy, { locale, title: xyTitle, xLabel: xyLabelX, yLabel: xyLabelY }),
+          csv: () => analysis.renderXyCsv(xy, captureTitle || undefined),
+        };
+      }
+      if (effectiveView === 'fft') {
+        if (!analysis || !spectrum) return null;
+        const spec = spectrum;
+        return {
+          baseName: `${base}_fft`,
+          svg: () => analysis.renderSpectrumSvg(spec, { locale, title: fftTitle, scale: fftSettings.scale }),
+          csv: () => analysis.renderSpectrumCsv(spec, captureTitle || undefined),
+          table: (f) => analysis.renderSpectrumTable(spec, locale, f, fftTitle),
+        };
+      }
       return {
-        baseName: baseName(captureTitle),
+        baseName: base,
         svg: () =>
           renderWaveformSvg(capture, {
             locale,
             title: captureTitle,
+            math,
             ...(labels ? { channelLabels: labels } : {}),
             ...(svgCursors ? { cursors: svgCursors } : {}),
           }),
-        csv: () => renderWaveformCsv(capture, labels, captureTitle || undefined),
-        table: (f) => renderMeasurementsTable(capture, f, locale, labels, captureTitle),
+        csv: () => renderWaveformCsv(capture, labels, captureTitle || undefined, math),
+        table: (f) => renderMeasurementsTable(capture, f, locale, labels, captureTitle, math),
       };
     }
     // An inspected Bode capture with no extraction has nothing to export, never the whole Bode plot.
     if (showCapture) return null;
     if (mode === 'bode' && bode) {
+      const named = session?.title?.trim() ?? '';
       return {
-        baseName: 'bode',
-        svg: () => renderBodeSvg(bode, { locale, title: 'Bode' }),
+        baseName: named ? baseName(named) : 'bode',
+        svg: () => renderBodeSvg(bode, { locale, title: named || 'Bode' }),
         csv: () => renderBodeCsv(bode),
         table: (f) => renderBodeTable(bode, f, locale),
       };
     }
     return null;
-  }, [showCapture, capture, captureName, captureTitle, captureLabels, cursors, mode, bode, locale]);
+  }, [
+    showCapture,
+    capture,
+    captureTitle,
+    captureLabels,
+    cursors,
+    mode,
+    bode,
+    session?.title,
+    locale,
+    effectiveView,
+    analysis,
+    xyResult,
+    spectrum,
+    xyTitle,
+    xyLabelX,
+    xyLabelY,
+    fftTitle,
+    fftSettings.scale,
+    math,
+  ]);
 
   const copyPlot = useCallback(
     (src: ExportSource) => {
@@ -870,11 +1148,16 @@ export function App() {
       } else if (k === 'c' && mode === 'single' && capture && !cropVisible) {
         e.preventDefault();
         toggleCursors();
+      } else if (VIEW_KEYS[k] && showCapture && capture) {
+        const next = VIEW_KEYS[k]!;
+        if (next === 'xy' && !xyReady) return;
+        e.preventDefault();
+        selectViewRef.current(next);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [help, openPicker, showCapture, capture, toggleOverlay, toggleCursors, mode, exportSource, copyPlot, cropVisible]);
+  }, [help, openPicker, showCapture, capture, toggleOverlay, toggleCursors, mode, exportSource, copyPlot, cropVisible, xyReady]);
 
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
@@ -902,8 +1185,11 @@ export function App() {
   };
 
   const extracting = mode === 'single' ? activeItem?.state === 'extracting' : session?.state === 'extracting';
-  const status =
-    adding || extracting
+  const status = batch
+    ? batch.phase === 'extract'
+      ? tx.extractingProgress(batch.done, batch.total)
+      : tx.exportingProgress(batch.done, batch.total)
+    : adding || extracting
       ? tx.working
       : mode === 'single' && activeItem?.result && activeItem.state === 'extracted'
         ? tx.extractedSingle(
@@ -930,7 +1216,13 @@ export function App() {
           placeholder: activeItem.name,
           onCommit: (v) => updateMeta(activeItem.id, { title: v || undefined }),
         }
-      : null;
+      : mode === 'bode' && bodeKey && bode && !inspected
+        ? {
+            value: session?.title ?? '',
+            placeholder: 'Bode',
+            onCommit: (v) => setSession(bodeKey, { title: v || undefined }),
+          }
+        : null;
 
   const setLabel = (ch: ChannelId, label: string): void => {
     if (!activeItem) return;
@@ -1016,6 +1308,26 @@ export function App() {
         )}
         {mode === 'empty' && adding && <p className="muted center-msg">{tx.working}</p>}
 
+        {compact && items.length >= 2 && (
+          <select
+            className="switcher"
+            aria-label={tx.captureSwitch}
+            value={mode === 'single' && activeId ? activeId : ''}
+            onChange={(e) => {
+              if (e.target.value) openItem(e.target.value);
+            }}
+          >
+            {(mode !== 'single' || !activeId) && (
+              <option value="">{mode === 'bode' ? tx.nSelected(selected.length) : tx.captureSwitch}</option>
+            )}
+            {items.map((i) => (
+              <option key={i.id} value={i.id}>
+                {i.title?.trim() || i.name}
+              </option>
+            ))}
+          </select>
+        )}
+
         {quality && activeItem && (
           <div className="banner" role="alert">
             <p className="banner-title">{tx.photoTitle}</p>
@@ -1042,7 +1354,6 @@ export function App() {
                   onClick={() => {
                     patchItem(activeItem.id, { quality: null });
                     setView('original');
-                    setOverlay(false);
                     setForceQuad(true);
                     setCropOpen(true);
                   }}
@@ -1099,8 +1410,10 @@ export function App() {
             channelLabels={captureLabels}
             result={capture}
             extracting={mode === 'single' && activeItem?.state === 'extracting'}
-            view={view}
-            overlay={overlay}
+            view={effectiveView}
+            math={math}
+            xy={xyControls}
+            fft={fftControls}
             cropOpen={cropVisible}
             canCrop={mode === 'single'}
             isPhoto={captureItem.isPhoto === true}
@@ -1108,12 +1421,7 @@ export function App() {
             overrides={mode === 'single' ? activeItem?.overrides ?? {} : {}}
             cursors={cursors}
             onExtract={mode === 'single' && !quality ? extractActive : null}
-            onView={(v) => {
-              if (v === 'clean' && cropVisible) dismissCrop(false);
-              setView(v);
-              if (v === 'clean') setOverlay(false);
-            }}
-            onOverlay={toggleOverlay}
+            onView={selectView}
             onCursors={mode === 'single' ? toggleCursors : null}
             onCursorsChange={(c) => activeItem && updateMeta(activeItem.id, { cursors: c })}
             onCropOpen={(open) => {
@@ -1146,14 +1454,24 @@ export function App() {
         {mode === 'bode' && bodeKey && !bode && (
           <div className="empty">
             <p className="empty-lead">{tx.bodeStaged(selectedItems.length)}</p>
-            <button
-              type="button"
-              className="btn primary"
-              disabled={session?.state === 'extracting'}
-              onClick={() => runBode(bodeKey, selectedItems, sessionProfile)}
-            >
-              {session?.state === 'extracting' ? tx.working : tx.extractBode(selectedItems.length)}
-            </button>
+            <div className="btn-row pair">
+              <button
+                type="button"
+                className="btn primary"
+                disabled={session?.state === 'extracting' || batch !== null}
+                onClick={() => runBode(bodeKey, selectedItems, sessionProfile)}
+              >
+                {session?.state === 'extracting' ? tx.working : tx.extractBode(selectedItems.length)}
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={session?.state === 'extracting' || batch !== null}
+                onClick={() => void exportAll(selectedItems)}
+              >
+                {tx.exportAll}
+              </button>
+            </div>
           </div>
         )}
 
@@ -1189,7 +1507,6 @@ export function App() {
               setReturnFocusId(null);
               setInspectedId(id);
               setView('clean');
-              setOverlay(false);
             }}
             onReset={() => recompute(bodeKey, bode, session.gate, {})}
           />
@@ -1214,6 +1531,7 @@ export function App() {
 
       <aside className="zone right" aria-label={tx.profile}>
         <div className="right-scroll">
+          <SettingsFold compact={compact} label={tx.settings}>
           <ProfilePanel
             tx={tx}
             choice={profileChoice}
@@ -1239,6 +1557,20 @@ export function App() {
               }
             }}
           />
+          {mode !== 'bode' && (
+            <ScaleControls
+              tx={tx}
+              locale={locale}
+              result={activeItem?.result ?? null}
+              overrides={activeItem?.overrides ?? {}}
+              disabled={false}
+              labels={activeItem?.channelLabels}
+              onOverrides={(next) => activeItem && updateItem(activeItem.id, { overrides: next })}
+              onLabel={activeItem ? setLabel : undefined}
+              math={mode === 'single' ? mathField : undefined}
+            />
+          )}
+          </SettingsFold>
           {mode === 'bode' && (
             <BodeSummary
               tx={tx}
@@ -1252,19 +1584,18 @@ export function App() {
               }}
             />
           )}
-          {mode !== 'bode' && (
-            <ScaleControls
+          {(mode !== 'bode' || inspected) && (
+            <MeasurementsPanel
               tx={tx}
               locale={locale}
-              result={activeItem?.result ?? null}
-              overrides={activeItem?.overrides ?? {}}
-              disabled={false}
-              labels={activeItem?.channelLabels}
-              onOverrides={(next) => activeItem && updateItem(activeItem.id, { overrides: next })}
-              onLabel={activeItem ? setLabel : undefined}
+              result={capture}
+              labels={captureLabels}
+              math={math}
+              xy={effectiveView === 'xy' ? xyResult : null}
+              spectrum={effectiveView === 'fft' ? spectrum : null}
+              axisLabel={axisName}
             />
           )}
-          {(mode !== 'bode' || inspected) && <MeasurementsPanel tx={tx} locale={locale} result={capture} labels={captureLabels} />}
         </div>
         <ExportPanel
           ref={exportsRef}
@@ -1301,9 +1632,11 @@ export function App() {
           }}
           onCopyPlot={copyPlot}
           onCopyTable={(src, f) => {
+            const table = src.table;
+            if (!table) return;
             let job: Promise<void>;
             try {
-              job = f === 'html' ? copyRich(src.table('html'), src.table('tsv')) : copyPlain(src.table(f));
+              job = f === 'html' ? copyRich(table('html'), table('tsv')) : copyPlain(table(f));
             } catch {
               flash(tx.copyFailed);
               return;

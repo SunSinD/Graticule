@@ -22,7 +22,7 @@ describe('command line', () => {
   test('writes the --title argument immediately after the filename in waveform CSV', () => {
     const result = cli(input, '--csv', '--title', 'Bench capture');
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.split('\n').slice(0, 3)).toEqual(['# Graticule v1.1.3', '# file: capture.png', '# title: Bench capture']);
+    expect(result.stdout.split('\n').slice(0, 3)).toEqual(['# Graticule v2.0.0', '# file: capture.png', '# title: Bench capture']);
   });
 
   test('exports LaTeX and dark SVG and creates nested output directories', () => {
@@ -59,6 +59,49 @@ describe('command line', () => {
     });
   }, 15_000);
 
+  test('calibrates native divisions and offsets while exporting a math product', () => {
+    const result = cli(input, '--json', '--hdivs', '12', '--vdivs', '6', '--offset', 'C1=0.2V', '--trigger-offset=-1ms',
+      '--math', 'mul', '--math-a', 'C1', '--math-b', 'C2');
+    expect(result.status, result.stderr).toBe(0);
+    const parsed: unknown = JSON.parse(result.stdout);
+    expect(parsed).toMatchObject({
+      detection: { profileId: 'siglent-sds2000x-plus', grid: { hDivs: 12, vDivs: 6 } },
+      timebase: { triggerOffsetSec: -0.001 },
+      traces: expect.arrayContaining([expect.objectContaining({ settings: expect.objectContaining({ channel: 'C1', offsetVolts: 0.2, zeroSource: 'manual' }) })]),
+      math: { label: 'M', unit: 'V²', config: { op: 'mul', a: 'C1', b: 'C2' } },
+    });
+  });
+
+  test('uses math in XY, FFT and multiple JSON analysis modes', () => {
+    const math = ['--math', 'add', '--math-a', 'C1', '--math-b', 'C2'];
+    const xy = cli(input, ...math, '--xy', 'M,C2', '--csv');
+    expect(xy.status, xy.stderr).toBe(0);
+    expect(xy.stdout).toContain('column,time_s,x_v,y_v,x_status,y_status');
+    const fft = cli(input, ...math, '--fft', 'M', '--window', 'blackman', '--scale', 'linear', '--svg');
+    expect(fft.status, fft.stderr).toBe(0);
+    expect(fft.stdout).toContain('V RMS');
+    const combined = cli(input, ...math, '--xy', 'C1,M', '--fft', 'C1', '--decode', 'uart', '--channel', 'C2', '--baud', '9600', '--json');
+    expect(combined.status, combined.stderr).toBe(0);
+    const parsed: unknown = JSON.parse(combined.stdout);
+    expect(parsed).toMatchObject({
+      xy: { xAxis: 'C1', yAxis: 'M' }, spectrum: { window: 'hann', channel: 'C1' },
+      uart: { channel: 'C2', baud: 9600 }, math: { config: { op: 'add' } },
+    });
+  }, 20_000);
+
+  test('compares a capture to a reference and protects the scope CSV from being overwritten', () => {
+    const scope = join(root, 'reference.csv');
+    writeFileSync(scope, 'time_s,CH1,CH2\n-0.003,0,1\n0,0,1\n0.003,0,1\n');
+    const result = cli('compare', input, scope, '--channel', 'C2', '--json');
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      channel: 'C2', csvColumn: 'CH2', unaligned: { lagPx: 0, coverage: 1, rmseV: expect.any(Number) },
+    });
+    const collision = cli('compare', input, scope, '--json', '--out', scope);
+    expect(collision.status).toBe(1);
+    expect(collision.stderr).toContain('Output would overwrite an input file');
+  }, 15_000);
+
   test.each([
     ['--theme', 'blue', /--theme/], ['--format', 'pdf', /--format/], ['--profile', 'unlisted', /Unknown profile/],
     ['--vdiv', 'C5=1V', /--vdiv/], ['--sec-per-div', '2mV', /--sec-per-div/],
@@ -66,10 +109,37 @@ describe('command line', () => {
     ['--vdiv', 'C1=1e308V', /Invalid --vdiv.*exceeds the numeric range/],
     ['--sec-per-div', '1 2 ms', /Invalid --sec-per-div/], ['--vdiv', 'C1=1 2 V', /Invalid --vdiv/],
     ['--deskew', '0,0,100,100,100,0,0,100', /deskew corners/],
+    ['--hdivs', '0', /--hdivs/], ['--vdivs', '1.5', /--vdivs/],
+    ['--offset', 'C1=2ms', /--offset/], ['--trigger-offset', '2mV', /--trigger-offset/],
+    ['--offset', 'C1=2V /DIV', /--offset/], ['--trigger-offset', '2ms/div', /--trigger-offset/],
+    ['--xy', 'C1', /--xy/], ['--fft', 'M', /Axis M requires/],
   ] as const)('rejects invalid %s input', (flag, value, message) => {
     const result = cli(input, flag, value);
     expect(result.status).toBe(1);
     expect(result.stderr).toMatch(message);
+    expect(result.stdout).toBe('');
+  });
+
+  test.each([
+    ['--xy', 'C1,C3'], ['--fft', 'C3'], ['--decode', 'uart', '--channel', 'C3'],
+  ] as const)('rejects an absent channel requested by %s', (...args) => {
+    const result = cli(input, ...args, '--json');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/requires channel C3, which is missing/);
+    expect(result.stdout).toBe('');
+  });
+
+  test('rejects UART SVG even when JSON is requested', () => {
+    const result = cli(input, '--decode', 'uart', '--svg', '--json');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/--svg is unsupported with --decode uart/);
+    expect(result.stdout).toBe('');
+  });
+
+  test('rejects a timebase whose FFT sample rate overflows', () => {
+    const result = cli(input, '--fft', 'C1', '--sec-per-div', '1e-307s', '--json');
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/--fft timebase.*sample rate exceeds the numeric range/);
     expect(result.stdout).toBe('');
   });
 

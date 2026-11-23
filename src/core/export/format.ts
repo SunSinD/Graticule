@@ -1,6 +1,6 @@
 import type { Locale } from '../types.js';
 
-export const GRATICULE_VERSION = '1.1.3';
+export const GRATICULE_VERSION = '2.0.0';
 export const EMPTY_CELL = '\u2014';
 
 export function spreadsheetText(text: string): string {
@@ -102,6 +102,11 @@ export function formatEng(
     if (options.trim) text = trimTrailingZeros(text);
     text = withSign(text, value, options.signed);
     return `${localizeDecimal(text, locale)}${fixed.space ? ' ' : ''}${unit}`;
+  }
+  if (unit === 'V²') {
+    const raw = cleanNegativeZero(value.toPrecision(options.sig ?? 4));
+    const text = withSign(options.trim ? trimTrailingZeros(raw) : raw, value, options.signed);
+    return `${localizeDecimal(text, locale)} ${unit}`;
   }
   const { mantissa, prefix } = engParts(value, options.sig ?? 4);
   let text = options.trim ? trimTrailingZeros(mantissa) : mantissa;

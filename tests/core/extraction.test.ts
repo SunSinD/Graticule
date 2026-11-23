@@ -77,6 +77,7 @@ describe('column extraction and waveform measurements', () => {
     expect(result.measurements[0]!.vpp).toBeCloseTo(3.68, 8);
     expect(result.measurements[0]!.dutyCyclePct).toBeNull();
     expect(result.phaseC1ToC2?.phaseDeg).toBeCloseTo(-45, 0);
+    expect(result.phasePair).toMatchObject({ from: 'C1', to: 'C2', phaseDeg: expect.closeTo(-45, 0) });
     expect(result.phaseC1ToC2?.r2Ref).toBeGreaterThan(0.998);
   });
 
@@ -161,6 +162,56 @@ describe('column extraction and waveform measurements', () => {
     expect(c1.samples[200]).toMatchObject({ timeSec: 0.001, voltage: 0.8 });
     expect(result.traces).toHaveLength(1);
   });
+});
+
+test('reports a signed phase for the first enabled channels when they are C1 and C3', () => {
+  const image = bitmap(421, 221);
+  plot(image, yellow, col => 72 - 25 * Math.cos(2 * Math.PI * col / 80));
+  plot(image, [40, 230, 230], col => 151 - 30 * Math.cos(2 * Math.PI * col / 80 + Math.PI / 3));
+  const result = analyzeCapture(image, 'phase13.png', overrides);
+  expect(result.phaseC1ToC2).toBeNull();
+  expect(result.phasePair).toMatchObject({ from: 'C1', to: 'C3', phaseDeg: expect.closeTo(60, 0) });
+});
+
+test('keeps native yellow and magenta on the white Siglent print background', () => {
+  const image = decodePng(sample('sine_schmitt.png'));
+  const { grid } = detectProfile(image);
+  for (let y = 0; y < image.height; y++) for (let x = 0; x < image.width; x++) {
+    const i = (y * image.width + x) * 4;
+    const r = image.data[i]!, g = image.data[i + 1]!, b = image.data[i + 2]!;
+    const chroma = Math.max(r, g, b) - Math.min(r, g, b);
+    if (chroma > 30 && y >= 540) {
+      pixel(image, x, y, [Math.round(0.7 * r), Math.round(0.7 * g), Math.round(0.7 * b)]);
+    } else if (chroma > 30 && y >= grid.top && y <= grid.bottom) {
+      pixel(image, x, y, [255, 255, 255]);
+    } else {
+      pixel(image, x, y, [255 - r, 255 - g, 255 - b]);
+    }
+  }
+  const a = (col: number) => 135 + Math.round(20 * Math.sin(col / 40));
+  const b = (col: number) => 350 + Math.round(20 * Math.cos(col / 40));
+  for (let col = 0; col <= grid.width; col++) {
+    const x = grid.left + col;
+    pixel(image, x, a(col) - 1, [120, 120, 0]);
+    pixel(image, x, a(col) + 1, [120, 120, 0]);
+    pixel(image, x, b(col) - 1, [120, 0, 60]);
+    pixel(image, x, b(col) + 1, [120, 0, 60]);
+    if (col !== 200) {
+      pixel(image, x, a(col), yellow);
+      pixel(image, x, b(col), magenta);
+    }
+    if (col % 10 < 3) pixel(image, x, 240, [179, 179, 0]);
+  }
+  const result = analyzeCapture(image, 'print-mode.png');
+  expect(result.detection).toMatchObject({ profileId: 'siglent-sds2000x-plus', grid: { inverted: true } });
+  expect(result.traces.map(t => t.channel)).toEqual(['C1', 'C2']);
+  expect(result.traces.map(t => t.settings.scaleSource)).toEqual(['ocr', 'ocr']);
+  expect(result.maskCoveragePct).toBeGreaterThan(0);
+  for (const [index, fn] of [a, b].entries()) {
+    const trace = result.traces[index]!;
+    expect(trace.validCount).toBe(grid.width + 1);
+    for (const col of [0, 200, 400, 800]) expect(trace.samples[col]?.yPx).toBeCloseTo(fn(col), 8);
+  }
 });
 
 test('reads Schmitt scope measurements and compares them in base units', () => {

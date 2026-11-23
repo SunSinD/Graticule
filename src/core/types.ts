@@ -18,6 +18,31 @@ export type ProfileId = 'siglent-sds2000x-plus' | 'rigol-ds1054z' | 'siglent-sds
   | 'siglent-sds800x-hd' | 'keysight-dsox1000' | 'universal-fallback';
 
 export type ChannelId = 'C1' | 'C2' | 'C3' | 'C4';
+export type XyAxisId = ChannelId | 'M';
+
+export type MathOp = 'sub' | 'add' | 'mul';
+
+export interface MathConfig {
+  readonly op: MathOp;
+  readonly a: ChannelId;
+  readonly b: ChannelId;
+  readonly label?: string;
+  readonly voltsPerDiv?: number;
+  readonly offsetVolts?: number;
+}
+
+export interface MathTraceResult {
+  readonly config: MathConfig;
+  readonly unit: 'V' | 'V²';
+  readonly label: string;
+  readonly samples: readonly TraceSample[];
+  readonly voltsPerDiv: number;
+  readonly offsetVolts: number;
+  readonly validCount: number;
+  readonly gapCount: number;
+  readonly measurement: ChannelMeasurements;
+  readonly warnings: readonly string[];
+}
 
 export type LayoutVariant = 'no-measure' | 'measure-1row' | 'measure-2row' | 'measure-3row'
   | 'measure-stats' | 'decode-table' | 'standard' | 'fft' | 'manual';
@@ -190,6 +215,7 @@ export interface ExtractionResult {
   readonly traces: readonly ChannelTrace[];
   readonly measurements: readonly ChannelMeasurements[];
   readonly phaseC1ToC2: PhaseMeasurement | null;
+  readonly phasePair?: { readonly from: ChannelId; readonly to: ChannelId; readonly phaseDeg: number };
   readonly scopeReadings: readonly ScopeMeasureReading[];
   readonly comparisons: readonly ScopeComparisonRow[];
   readonly maskCoveragePct: number;
@@ -283,4 +309,5 @@ export interface SvgExportOptions {
   readonly theme?: PlotTheme;
   readonly cursors?: PlotCursors;
   readonly channelLabels?: Partial<Record<ChannelId, string>>;
+  readonly math?: MathTraceResult | null;
 }

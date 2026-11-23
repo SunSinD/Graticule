@@ -41,6 +41,7 @@ export function ShortcutsModal({ tx, onClose }: Props) {
     ['O', tx.shortcutOpen],
     ['Ctrl+V', tx.shortcutPaste],
     ['E', tx.shortcutExport],
+    ['1 2 3 4 5', tx.shortcutViews],
     ['T', tx.shortcutOverlay],
     ['C', tx.shortcutCursors],
     ['Ctrl+C', tx.shortcutCopy],

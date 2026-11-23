@@ -1,11 +1,20 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { configDefaults, defineConfig } from 'vitest/config';
 import type { Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 
 const portable = process.env.GRATICULE_PORTABLE === '1';
+
+function listBundledAssets(directory: string, prefix = 'assets'): string[] {
+  const absolute = resolve(directory);
+  return readdirSync(absolute).flatMap((name) => {
+    const path = resolve(absolute, name);
+    if (statSync(path).isDirectory()) return listBundledAssets(path, `${prefix}/${name}`);
+    return name.endsWith('.js') || name.endsWith('.css') ? [`${prefix}/${name}`] : [];
+  });
+}
 
 function precachePlugin(): Plugin {
   return {
@@ -17,8 +26,8 @@ function precachePlugin(): Plugin {
       const root = resolve(process.cwd());
       const dist = resolve(root, 'dist');
       const assetsDir = resolve(dist, 'assets');
-      const assets = readdirSync(assetsDir)
-        .filter((name) => name.endsWith('.js') || name.endsWith('.css'))
+      const assets = listBundledAssets(assetsDir)
+        .map((asset) => asset.slice('assets/'.length))
         .sort();
       const version = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')).version as string;
       const digest = createHash('sha256')

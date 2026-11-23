@@ -6,7 +6,7 @@ export interface ExportSource {
   readonly baseName: string;
   readonly svg: () => string;
   readonly csv: () => string;
-  readonly table: (format: TableFormat) => string;
+  readonly table?: ((format: TableFormat) => string) | undefined;
 }
 
 export interface TitleField {
@@ -117,7 +117,7 @@ export const ExportPanel = forwardRef<HTMLElement, Props>(function ExportPanel(p
       <p className="label">{tx.copyTable}</p>
       <div className="btn-grid">
         {tables.map(([format, label]) => (
-          <button key={format} type="button" className="btn" disabled={off} onClick={() => source && props.onCopyTable(source, format)}>
+          <button key={format} type="button" className="btn" disabled={off || !source?.table} onClick={() => source && props.onCopyTable(source, format)}>
             {label}
           </button>
         ))}

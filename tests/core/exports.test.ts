@@ -12,7 +12,7 @@ const result = analyzePngBytes(sample('sine_schmitt.png'), 'Capture_A&B%#_1.png'
 
 describe('waveform exports', () => {
   test('formats engineering scales with optional units per division and rejects overflow', () => {
-    expect(GRATICULE_VERSION).toBe('1.1.3');
+    expect(GRATICULE_VERSION).toBe('2.0.0');
     expect(parseEngineering('5 mV/div')).toBe(0.005);
     expect(parseEngineering('2,5 ms / div')).toBe(0.0025);
     expect(parseEngineering('2/div')).toBe(2);
@@ -138,11 +138,13 @@ describe('waveform exports', () => {
     const batch = analyzeBodeBatch([result]);
     const point = batch.points[0]!;
     const bode = { ...batch, points: [
-      { ...point, fileName: '#sample.png', gainDb: -5.2 },
+      { ...point, fileName: '#sample.png', gainDb: -5.2, warnings: ['low_swing', 'check,probe'] },
       { ...point, fileName: '@sample.png', gainDb: -4.5 },
       { ...point, fileName: '[sample.png' },
     ] };
     const csv = renderBodeCsv(bode);
+    expect(csv).toContain('accepted,reasons,warnings\n');
+    expect(csv).toContain('"low_swing | check,probe"');
     expect(csv.split('\n').filter(line => !line.startsWith('#'))).toEqual(expect.arrayContaining([
       expect.stringMatching(/^"#sample\.png",.*,-5\.2,/), expect.stringMatching(/^'@sample\.png,.*,-4\.5,/),
     ]));

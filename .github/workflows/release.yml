@@ -11,6 +11,7 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,20 +23,37 @@ jobs:
       - run: npm test
       - run: npm run check:prose
       - run: npm run build
+        timeout-minutes: 10
       - run: npm run build:portable
+        timeout-minutes: 10
       - name: Validate release tag
         env:
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
           node --input-type=module -e "import fs from 'node:fs'; const expected = 'v' + JSON.parse(fs.readFileSync('package.json', 'utf8')).version; if (process.env.GITHUB_REF_NAME !== expected) throw new Error('Release tag does not match package.json version (expected ' + expected + ')');"
       - run: npm run verify:parity
-      - name: Verify gzipped web bundle size
-        run: |
-          node --input-type=module -e "import fs from 'node:fs'; import zlib from 'node:zlib'; import path from 'node:path'; const dir='dist/assets'; const bytes=fs.readdirSync(dir).filter((n)=>/\.m?js$/.test(n)||n.endsWith('.css')).reduce((n,f)=>n+zlib.gzipSync(fs.readFileSync(path.join(dir,f))).length,0); console.log('Gzipped JS+CSS:',bytes,'bytes'); if(bytes>=300*1024) throw new Error('Gzipped JS+CSS bundle is 300 KB or larger');"
+        timeout-minutes: 5
+      - run: npm run check:bundle -- --portable
+        timeout-minutes: 5
       - name: Install Playwright Chromium
-        run: npx playwright install --with-deps chromium
+        run: |
+          npx playwright install --with-deps chromium
+        timeout-minutes: 10
       - run: npx playwright test tests/e2e/portable.spec.ts
+        timeout-minutes: 10
       - run: npm pack --pack-destination dist-portable
+        timeout-minutes: 10
+      - name: Smoke test standalone CLI tarball
+        run: |
+          set -euo pipefail
+          smoke_dir="$(mktemp -d /tmp/graticule-cli-smoke.XXXXXX)"
+          cd "$smoke_dir"
+          npm init -y >/dev/null
+          npm install --omit=dev --ignore-scripts "$GITHUB_WORKSPACE/dist-portable"/graticule-*.tgz
+          ./node_modules/.bin/graticule --help >/dev/null
+          ./node_modules/.bin/graticule --csv --out "$smoke_dir/sine-schmitt.csv" "$GITHUB_WORKSPACE/tests/fixtures/samples/sine_schmitt.png"
+          test -s "$smoke_dir/sine-schmitt.csv"
+        timeout-minutes: 10
       - name: Generate SHA256SUMS
         run: |
           cd dist-portable

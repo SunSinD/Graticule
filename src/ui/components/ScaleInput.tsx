@@ -7,7 +7,7 @@ interface Props {
   readonly id: string;
   readonly label: string;
   readonly value: number | null;
-  readonly unit: 'V' | 's';
+  readonly unit: 'V' | 'V²' | 's';
   readonly locale: Locale;
   readonly disabled?: boolean;
   readonly stepper?: boolean;

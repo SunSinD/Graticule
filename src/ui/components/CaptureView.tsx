@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { Crop } from 'lucide-react';
-import type { ExtractionOverrides, ExtractionResult, Locale, PlotCursors, Quad, Rect } from '../../core/types';
+import { ArrowLeftRight, Crop } from 'lucide-react';
+import type { ExtractionOverrides, ExtractionResult, Locale, MathTraceResult, PlotCursors, Quad, Rect, XyAxisId } from '../../core/types';
+import type { SpectrumWindow } from '../../core/spectrum';
 import { renderOverlaySvg, renderWaveformSvg, waveformFrame } from '../../core/export/svg';
 import { validateQuad } from '../../core/deskew';
 import type { Dict } from '../i18n';
@@ -10,7 +11,34 @@ import { CropBox, QuadBox } from './CropBox';
 import { CursorOverlay, CursorReadout } from './Cursors';
 import { svgRatio, useCtrlWheelZoom, ZoomControl } from './ZoomControl';
 
-export type CaptureMode = 'original' | 'clean';
+export type CaptureMode = 'original' | 'overlay' | 'clean' | 'xy' | 'fft';
+export type SpectrumScale = 'dbv' | 'linear';
+
+export interface AxisOption {
+  readonly id: XyAxisId;
+  readonly label: string;
+}
+
+export interface XyControls {
+  readonly axes: readonly AxisOption[];
+  readonly x: XyAxisId;
+  readonly y: XyAxisId;
+  readonly svg: string;
+  readonly onAxes: (x: XyAxisId, y: XyAxisId) => void;
+}
+
+export interface FftControls {
+  readonly axes: readonly AxisOption[];
+  readonly channel: XyAxisId;
+  readonly window: SpectrumWindow;
+  readonly scale: SpectrumScale;
+  readonly svg: string;
+  readonly onChannel: (channel: XyAxisId) => void;
+  readonly onWindow: (window: SpectrumWindow) => void;
+  readonly onScale: (scale: SpectrumScale) => void;
+}
+
+const WINDOWS: readonly SpectrumWindow[] = ['hann', 'rect', 'flattop', 'blackman'];
 export type CropMode = 'rect' | 'quad';
 
 const ZOOM_MAX = 300;
@@ -26,7 +54,9 @@ interface Props {
   readonly result: ExtractionResult | null;
   readonly extracting: boolean;
   readonly view: CaptureMode;
-  readonly overlay: boolean;
+  readonly math: MathTraceResult | null;
+  readonly xy: XyControls | null;
+  readonly fft: FftControls | null;
   readonly cropOpen: boolean;
   readonly canCrop: boolean;
   readonly isPhoto: boolean;
@@ -35,7 +65,6 @@ interface Props {
   readonly cursors: PlotCursors | null;
   readonly onExtract: (() => void) | null;
   readonly onView: (view: CaptureMode) => void;
-  readonly onOverlay: () => void;
   readonly onCursors: (() => void) | null;
   readonly onCursorsChange: (cursors: PlotCursors) => void;
   readonly onCropOpen: (open: boolean) => void;
@@ -97,7 +126,7 @@ function intOr(text: string, fallback: number): number {
 }
 
 export function CaptureView(props: Props) {
-  const { tx, locale, dark, url, fileName, title, channelLabels, result, extracting, view, overlay, cropOpen, canCrop, overrides, onExtract } =
+  const { tx, locale, dark, url, fileName, title, channelLabels, result, extracting, view, math, xy, fft, cropOpen, canCrop, overrides, onExtract } =
     props;
   const [size, setSize] = useState<Size | null>(result ? sourceSize(result) : null);
   const [rect, setRect] = useState<Rect | null>(null);
@@ -148,19 +177,28 @@ export function CaptureView(props: Props) {
     setQuad(q);
   };
 
-  const overlaySvg = useMemo(() => (result && overlay ? renderOverlaySvg(result) : ''), [result, overlay]);
+  const shown: CaptureMode = !result ? 'original' : cropOpen ? (view === 'overlay' ? 'overlay' : 'original') : view;
+  const overlaySvg = useMemo(() => (result && shown === 'overlay' ? renderOverlaySvg(result) : ''), [result, shown]);
   const cleanSvg = useMemo(
     () =>
-      result && view === 'clean'
-        ? renderWaveformSvg(result, { locale, title, theme: dark ? 'dark' : 'light', ...(channelLabels ? { channelLabels } : {}) })
+      result && shown === 'clean'
+        ? renderWaveformSvg(result, {
+            locale,
+            title,
+            theme: dark ? 'dark' : 'light',
+            math,
+            ...(channelLabels ? { channelLabels } : {}),
+          })
         : '',
-    [result, view, locale, title, dark, channelLabels],
+    [result, shown, locale, title, dark, channelLabels, math],
   );
-  const frame = useMemo(() => (result ? waveformFrame(result, { locale, title }) : null), [result, locale, title]);
+  const frame = useMemo(() => (result ? waveformFrame(result, { locale, title, math }) : null), [result, locale, title, math]);
 
-  const showClean = view === 'clean' && !cropOpen && result !== null;
+  const plotSvg = shown === 'clean' ? cleanSvg : shown === 'xy' ? xy?.svg ?? '' : shown === 'fft' ? fft?.svg ?? '' : '';
+  const showPlot = shown !== 'original' && shown !== 'overlay' && plotSvg !== '';
+  const showClean = shown === 'clean' && showPlot;
   const ratio = size && size.width > 0 && size.height > 0 ? size.width / size.height : 5 / 3;
-  const cleanRatio = svgRatio(cleanSvg, 5 / 3);
+  const plotRatio = svgRatio(plotSvg, 5 / 3);
   const hDivs = intOr(hText, 10);
   const vDivs = intOr(vText, 8);
   const z = zoom / 100;
@@ -176,6 +214,14 @@ export function CaptureView(props: Props) {
     }
   };
   const cancel = (): void => props.onCropOpen(false);
+  type Tab = readonly [CaptureMode, string, string, Record<string, string>];
+  const tabs: Tab[] = [
+    ['original', tx.original, '1', {}],
+    ['overlay', tx.tabOverlay, '2 T', { title: `${tx.overlay} (T)` }],
+    ['clean', tx.tabClean, '3', { 'aria-label': tx.cleanPlot }],
+  ];
+  if (xy) tabs.push(['xy', tx.tabXy, '4', {}]);
+  tabs.push(['fft', tx.tabFft, '5', {}]);
 
   return (
     <div className="capture">
@@ -185,43 +231,73 @@ export function CaptureView(props: Props) {
             {extracting ? tx.working : tx.extract}
           </button>
         )}
-        <div className="seg" role="group" aria-label={tx.cleanPlot}>
-          <button type="button" className="btn" aria-pressed={showClean} disabled={!result} onClick={() => props.onView('clean')}>
-            {tx.cleanPlot}
-          </button>
-          <button type="button" className="btn" aria-pressed={!showClean} onClick={() => props.onView('original')}>
-            {tx.original}
-          </button>
-        </div>
-        <button
-          type="button"
-          className="btn"
-          aria-pressed={overlay}
-          aria-keyshortcuts="T"
-          disabled={!result}
-          onClick={props.onOverlay}
-          title={`${tx.overlay} (T)`}
-        >
-          {tx.overlay}
-        </button>
-        {canCrop && (
+        {result && (
+          <div className="seg tabs" role="group" aria-label={tx.view}>
+            {tabs.map(([mode, label, key, extra]) => (
+              <button
+                key={mode}
+                type="button"
+                className="btn"
+                aria-pressed={shown === mode}
+                aria-keyshortcuts={key}
+                onClick={() => props.onView(mode)}
+                {...extra}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+        {(shown === 'original' || shown === 'overlay') && canCrop && (
           <button type="button" className="btn" aria-pressed={cropOpen} onClick={() => props.onCropOpen(!cropOpen)} title={tx.cropTitle}>
             <Crop size={16} aria-hidden="true" />
             <span>{tx.crop}</span>
           </button>
         )}
-        {props.onCursors && (
+        {shown === 'clean' && props.onCursors && (
           <button
             type="button"
             className="btn"
             aria-pressed={cursorsVisible}
             aria-keyshortcuts="C"
-            disabled={!result || cropOpen}
             onClick={props.onCursors}
             title={tx.cursorsTitle}
           >
             {tx.cursors}
           </button>
+        )}
+        {shown === 'xy' && xy && (
+          <>
+            <AxisSelect label={tx.xAxis} aria={tx.xAxisLabel} axes={xy.axes} value={xy.x} onChange={(x) => xy.onAxes(x, x === xy.y ? xy.x : xy.y)} />
+            <AxisSelect label={tx.yAxis} aria={tx.yAxisLabel} axes={xy.axes} value={xy.y} onChange={(y) => xy.onAxes(y === xy.x ? xy.y : xy.x, y)} />
+            <button type="button" className="btn" onClick={() => xy.onAxes(xy.y, xy.x)} title={tx.swapAxesTitle}>
+              <ArrowLeftRight size={16} aria-hidden="true" />
+              <span>{tx.swapAxes}</span>
+            </button>
+          </>
+        )}
+        {shown === 'fft' && fft && (
+          <>
+            <AxisSelect label={tx.fftChannel} aria={tx.fftChannelLabel} axes={fft.axes} value={fft.channel} onChange={fft.onChannel} />
+            <label className="ctl">
+              <span>{tx.fftWindow}</span>
+              <select aria-label={tx.fftWindowLabel} value={fft.window} onChange={(e) => fft.onWindow(e.target.value as SpectrumWindow)}>
+                {WINDOWS.map((w) => (
+                  <option key={w} value={w}>
+                    {tx.windows[w] ?? w}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="seg" role="group" aria-label={tx.fftScale}>
+              <button type="button" className="btn" aria-pressed={fft.scale === 'dbv'} onClick={() => fft.onScale('dbv')}>
+                {tx.scaleDbv}
+              </button>
+              <button type="button" className="btn" aria-pressed={fft.scale === 'linear'} onClick={() => fft.onScale('linear')}>
+                {tx.scaleLin}
+              </button>
+            </div>
+          </>
         )}
         <span className="grow" />
         <ZoomControl tx={tx} value={zoom} max={ZOOM_MAX} onChange={setZoom} />
@@ -287,10 +363,10 @@ export function CaptureView(props: Props) {
         />
       )}
 
-      <div ref={viewport} className={`viewport${showClean ? ' paper' : ' stage-wrap'}`}>
-        {showClean ? (
-          <div className="canvas plot" style={{ '--ar': cleanRatio, '--z': z } as CSSProperties}>
-            <div className="plot-svg" dangerouslySetInnerHTML={{ __html: cleanSvg }} />
+      <div ref={viewport} className={`viewport${showPlot ? ' paper' : ' stage-wrap'}`}>
+        {showPlot ? (
+          <div className="canvas plot" style={{ '--ar': plotRatio, '--z': z } as CSSProperties}>
+            <div className="plot-svg" data-testid={`${shown}-plot`} dangerouslySetInnerHTML={{ __html: plotSvg }} />
             {cursorsVisible && props.cursors && frame && (
               <CursorOverlay tx={tx} frame={frame} cursors={props.cursors} onChange={props.onCursorsChange} />
             )}
@@ -306,7 +382,7 @@ export function CaptureView(props: Props) {
                 setSize({ width: img.naturalWidth, height: img.naturalHeight });
               }}
             />
-            {overlay && overlaySvg && !cropOpen && <div className="overlay" dangerouslySetInnerHTML={{ __html: overlaySvg }} />}
+            {overlaySvg && !cropOpen && <div className="overlay" dangerouslySetInnerHTML={{ __html: overlaySvg }} />}
             {cropOpen && cropMode === 'rect' && rect && size && (
               <CropBox
                 tx={tx}
@@ -338,5 +414,28 @@ export function CaptureView(props: Props) {
         )}
       </div>
     </div>
+  );
+}
+
+interface AxisSelectProps {
+  readonly label: string;
+  readonly aria: string;
+  readonly axes: readonly AxisOption[];
+  readonly value: XyAxisId;
+  readonly onChange: (axis: XyAxisId) => void;
+}
+
+function AxisSelect({ label, aria, axes, value, onChange }: AxisSelectProps) {
+  return (
+    <label className="ctl">
+      <span>{label}</span>
+      <select aria-label={aria} value={value} onChange={(e) => onChange(e.target.value as XyAxisId)}>
+        {axes.map((a) => (
+          <option key={a.id} value={a.id}>
+            {a.label}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
