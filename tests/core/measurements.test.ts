@@ -78,6 +78,27 @@ describe('step edge measurements', () => {
     expect(result).toMatchObject({ riseTimeSec: 2 * dt, fallTimeSec: 2 * dt, overshootPct: 0 });
   });
 
+  test('times a trapezoid with a 4 µs high dwell and 10 µs ramps', () => {
+    const result = measure(Array.from({ length: 85 }, (_, i) => Math.max(0, Math.min(1, (i - 30) / 10, (54 - i) / 10))));
+    expect(result.riseTimeSec).toBeCloseTo(8 * dt, 12);
+    expect(result.fallTimeSec).toBeCloseTo(8 * dt, 12);
+    expect(result).toMatchObject({ riseLimited: false, fallLimited: false, overshootPct: 0 });
+  });
+
+  test('times an underdamped step with 22 cycles of visible settling', () => {
+    const damping = 0.1;
+    const ratio = damping / Math.sqrt(1 - damping ** 2);
+    const response = Array.from({ length: 22 * 40 }, (_, i) => {
+      const phase = i * Math.PI / 20;
+      return 1 - Math.exp(-ratio * phase) * (Math.cos(phase) + ratio * Math.sin(phase));
+    });
+    const result = measure([...Array<number>(40).fill(0), ...response]);
+    expect(result.riseTimeSec).toBeGreaterThan(6 * dt);
+    expect(result.riseTimeSec).toBeLessThan(8 * dt);
+    expect(result.overshootPct).toBeCloseTo(100 * Math.exp(-ratio * Math.PI), 2);
+    expect(result.fallTimeSec).toBeNull();
+  });
+
   test('uses the settled voltage of a damped step to measure overshoot', () => {
     const damping = 0.2;
     const dampedFrequency = Math.sqrt(1 - damping ** 2);

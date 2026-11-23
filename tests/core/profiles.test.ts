@@ -3,10 +3,11 @@ import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import configuration from '../../src/core/profiles.json';
 import { glyphs as rigolGlyphs, logo as rigolLogo } from '../../src/core/font/rigolFont.js';
+import { rasterFonts } from '../../src/core/font/rasterFonts.js';
 import { parseQuantity } from '../../src/core/font/matcher.js';
-import { analyzeCapture, analyzePngBytes } from '../../src/core/pipeline.js';
+import { analyzeCapture, analyzePngBytes, compareWithScopeCsv, parseScopeCsv } from '../../src/core/pipeline.js';
 import { decodePng } from '../../src/core/png.js';
-import { detectProfile, validateProfiles } from '../../src/core/profiles.js';
+import { detectProfile, getNativeProfile, validateProfiles } from '../../src/core/profiles.js';
 import { bitmap, paint, pixel, sample, yellow } from './fixtures.js';
 
 describe('native capture profiles', () => {
@@ -121,6 +122,42 @@ describe('native capture profiles', () => {
       fallbackReason: 'manual_crop', grid: { left: 50, right: 350, top: 55, bottom: 247, pxPerHDiv: 25, pxPerVDiv: 32 },
     });
     expect(analyzeCapture(bitmap(1, 1), 'tiny.png').detection.profileId).toBe('universal-fallback');
+  });
+
+  test('preserves the cropped RTB2004 horizontal calibration and compares all visible columns', () => {
+    const id = 'rohde-schwarz-rtb2004';
+    const profile = getNativeProfile(id)!;
+    const { anchors, graticule, raster } = profile;
+    const { left, top, hDivs, vDivs, pxPerHDiv } = graticule;
+    const { bottom, right } = graticule.variants.find(variant => variant.id === 'measure-1row')!;
+    const width = right! - left + 1, height = bottom - top + 1;
+    const image = bitmap(profile.width, profile.height);
+    paint(image, anchors.topBarRoi, raster!.headerInk);
+    paint(image, anchors.bottomBarRoi, raster!.footerInk);
+    rasterFonts[id].logo.forEach((row, y) => [...row].forEach((bit, x) => {
+      if (bit === '1') pixel(image, anchors.logoRoi.x + x, anchors.logoRoi.y + y, raster!.logoInk);
+    }));
+    for (let i = 1; i < vDivs; i++) {
+      paint(image, { x: left, y: top + Math.round(i * (height - 1) / vDivs), width, height: 1 }, raster!.lineInk[0]!);
+    }
+    for (let i = 1; i < hDivs; i++) {
+      paint(image, { x: left + i * pxPerHDiv, y: top, width: 1, height }, raster!.lineInk[0]!);
+    }
+    paint(image, { x: left, y: top, width, height: 1 }, raster!.topEdgeInk);
+    paint(image, { x: left, y: bottom, width, height: 1 }, raster!.bottomEdgeInk);
+    for (const x of [left, right!]) paint(image, { x, y: top, width: 1, height }, raster!.sideEdgeInk);
+    paint(image, { x: left, y: 400, width, height: 1 }, yellow);
+
+    const analyze = (vDivs?: number) => analyzeCapture(image, 'rtb-cropped.png', { vDivs, channels: { C1: { enabled: true } } });
+    const result = analyze();
+    expect(result.detection.profileId).toBe(id);
+    expect(analyze(8).detection.grid).toMatchObject({
+      layoutVariant: 'measure-1row', pxPerHDiv: 100, centerX: 639, vDivs: 8, pxPerVDiv: 642 / 8,
+      vLines: result.detection.grid.vLines,
+    });
+    const rows = result.traces[0]!.samples.map(sample => `${sample.timeSec},${sample.voltage ?? ''}`);
+    const comparison = compareWithScopeCsv(result, parseScopeCsv(['Time (s),C1', ...rows].join('\n')));
+    expect(comparison).toMatchObject({ totalCount: 1165, usableCount: 1165, unaligned: { matchedCount: 1165, rmseV: 0 } });
   });
 });
 

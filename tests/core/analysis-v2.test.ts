@@ -70,11 +70,28 @@ describe('math trace', () => {
     const result = { ...source, traces: [{ ...first!, samples: [...first!.samples].reverse().filter(s => s.col !== 8) }, second!] };
     const math = computeMathTrace(result, { op: 'sub', a: 'C1', b: 'C2' })!;
     expect(math.samples.map(s => s.status)).toEqual([
-      'ok', 'clipped_low', 'overlap_ambiguous', 'masked_cursor', 'masked_overlay', 'clipped_high', 'ok', 'unresolved', 'unresolved',
+      'ok', 'clipped_high', 'overlap_ambiguous', 'masked_cursor', 'masked_overlay', 'clipped_high', 'ok', 'unresolved', 'unresolved',
     ]);
     expect(math.samples.map(s => s.voltage)).toEqual([-0.5, null, null, null, null, null, -0.5, null, null]);
     expect(math).toMatchObject({ offsetVolts: -0.5, validCount: 2, gapCount: 7, label: 'M', unit: 'V' });
     expect(computeMathTrace(result, { op: 'sub', a: 'C1', b: 'C3' })).toBeNull();
+  });
+
+  test('flips both clip polarities on subtraction and multiplication by a negative value', () => {
+    const result = capture(8, 0.001, {
+      wave: i => i < 2 ? -2 : 2,
+      faults: { 4: 'clipped_high', 5: 'clipped_low', 6: 'clipped_high', 7: 'clipped_low' },
+    }, {
+      wave: i => i < 6 ? -3 : 3,
+      faults: { 0: 'clipped_high', 1: 'clipped_low', 2: 'clipped_high', 3: 'clipped_low' },
+    });
+    const statuses = (op: 'sub' | 'mul') => computeMathTrace(result, { op, a: 'C1', b: 'C2' })!.samples.map(s => s.status);
+    expect(statuses('sub')).toEqual([
+      'clipped_low', 'clipped_high', 'clipped_low', 'clipped_high', 'clipped_high', 'clipped_low', 'clipped_high', 'clipped_low',
+    ]);
+    expect(statuses('mul')).toEqual([
+      'clipped_low', 'clipped_high', 'clipped_high', 'clipped_low', 'clipped_low', 'clipped_high', 'clipped_high', 'clipped_low',
+    ]);
   });
 
   test('warns about cancellation and incompatible additive scales and withholds timing measurements', () => {
@@ -159,6 +176,39 @@ describe('XY analysis', () => {
     expect(xy.hysteresis).toBeNull();
   });
 
+  test('rejects window comparator transitions on the same X slope', () => {
+    const wave = (i: number) => (i % 200) / 100;
+    const xy = computeXyPlot(capture(801, 0.001, { wave }, {
+      wave: i => Number(wave(i) >= 0.8 && wave(i) < 1.2),
+    }), 'C1', 'C2');
+    expect(xy.hysteresis).toBeNull();
+  });
+
+  test('measures asymmetric Schmitt thresholds when the high pulse occupies about 6% of the cycle', () => {
+    const wave = (i: number) => Math.max(0, 1 - Math.abs((i % 2000) / 500 - 1));
+    let high = false;
+    const xy = computeXyPlot(capture(6000, 0.001, { wave }, {
+      wave: i => {
+        const x = wave(i);
+        if (x >= 0.95) high = true;
+        if (x <= 0.8) high = false;
+        return Number(high);
+      },
+    }), 'C1', 'C2');
+    expect(xy.hysteresis).toMatchObject({
+      lowThresholdV: expect.closeTo(0.8, 2), highThresholdV: expect.closeTo(0.95, 2), widthV: expect.closeTo(0.15, 2),
+    });
+  });
+
+  test('withholds Lissajous phase when either waveform is triangular', () => {
+    const triangle = (i: number) => 2 / Math.PI * Math.asin(sine(i, 120));
+    const a = { wave: triangle };
+    const b = { wave: (i: number) => sine(i - 20, 120) };
+    for (const pair of [[a, b], [b, a], [a, { wave: (i: number) => triangle(i - 20) }]] as const) {
+      expect(computeXyPlot(capture(601, 0.001, ...pair), 'C1', 'C2').lissajousPhaseDeg).toBeNull();
+    }
+  });
+
   test('uses M for either axis and serializes its actual units', () => {
     const result = capture(101, 0.001, { wave: sine }, { wave: () => 2, faults: { 20: 'overlap_ambiguous' } });
     const math = computeMathTrace(result, { a: 'C1', b: 'C2', op: 'mul' })!;
@@ -217,6 +267,18 @@ describe('spectrum and harmonic THD', () => {
     expect(spec.thdReason).toBe('insufficient_resolution');
   });
 
+  test('keeps the linear spectrum axis finite at a 1.7e308 V Nyquist amplitude', () => {
+    const spec = computeSpectrum(capture(128, 0.0001, { wave: i => i % 2 ? -1.7e308 : 1.7e308 }), {
+      channel: 'C1', window: 'rect',
+    });
+    expect(spec.bins.at(-1)!.vrms).toBe(1.7e308);
+    const svg = renderSpectrumSvg(spec, { scale: 'linear' });
+    expect(svg).not.toMatch(/NaN|Infinity/);
+    expect(svg).toContain('e+299 GV');
+    const coordinates = /<polyline points="([^"]+)"/.exec(svg)![1]!.split(' ');
+    expect(coordinates.at(-1)!.split(',')[1]).not.toBe(coordinates[0]!.split(',')[1]);
+  });
+
   test.each([['rect', 5.05], ['flattop', 3.3]] as const)('finds a short %s-window tone without mistaking sidelobes for subharmonics', (window, cycles) => {
     const dt = 1 / 20_000, count = 512, f0 = cycles / (count * dt);
     const result = capture(count, dt, { wave: i => 1.4 * sine(i + 0.1, count / cycles) });
@@ -231,6 +293,31 @@ describe('spectrum and harmonic THD', () => {
     const spec = computeSpectrum(result, { channel: 'C1' });
     expect(spec.fundamental?.frequencyHz).toBeCloseTo(f0, 1);
     expect(spec.thdPct).toBeCloseTo(300, 2);
+  });
+
+  test.each([[2, 12], [6, 2]] as const)('finds the fundamental under an H%i with %i× its amplitude', (order, ratio) => {
+    const spec = computeSpectrum(capture(512, 1 / 20_000, {
+      wave: i => sine(i, 64) + ratio * sine(i + 0.19, 64 / order),
+    }), { channel: 'C1' });
+    expect(spec.fundamental?.frequencyHz).toBeCloseTo(312.5, 3);
+    expect(spec.fundamental?.vrms).toBeCloseTo(Math.SQRT1_2, 4);
+    expect(spec.thdPct).toBeCloseTo(ratio * 100, 2);
+  });
+
+  test.each(['rect', 'flattop'] as const)('recovers the frequency and RMS of a 3.5-cycle %s-window tone', window => {
+    const spec = computeSpectrum(capture(512, 1 / 20_000, {
+      wave: i => 3 + 2 * sine(i, 512 / 3.5),
+    }), { channel: 'C1', window });
+    expect(spec.fundamental?.frequencyHz).toBeCloseTo(136.71875, 3);
+    expect(spec.fundamental?.vrms).toBeCloseTo(Math.SQRT2, 4);
+    expect(spec.bins[0]).toEqual({ frequencyHz: 0, vrms: 0, dbv: null });
+    if (window === 'flattop') expect(spec.bins[1]!.vrms).toBeCloseTo(0.101323605621, 9);
+  });
+
+  test('finds a 1 V sine on a 1e10 V DC offset', () => {
+    const spec = computeSpectrum(capture(512, 1 / 20_000, { wave: i => 1e10 + sine(i, 64) }), { channel: 'C1' });
+    expect(spec.fundamental?.frequencyHz).toBeCloseTo(312.5, 3);
+    expect(spec.fundamental?.vrms).toBeCloseTo(Math.SQRT1_2, 5);
   });
 
   test('fits off-bin harmonics jointly on observed columns and bridges only short cursor gaps', () => {
@@ -296,6 +383,55 @@ describe('spectrum and harmonic THD', () => {
     expect(spec.thdReason).toBeNull();
     expect(spec.thdPct).toBeCloseTo(10, 3);
     expect(spec.harmonics.map(h => h.order)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  test('includes an 8.75 kHz harmonic when sampling at 20 kHz', () => {
+    const spec = computeSpectrum(capture(512, 1 / 20_000, {
+      wave: i => sine(i, 16) + 0.1 * sine(i + 0.17, 16 / 7),
+    }), { channel: 'C1' });
+    expect(spec.fundamental?.frequencyHz).toBeCloseTo(1250, 3);
+    expect(spec.thdPct).toBeCloseTo(10, 3);
+  });
+
+  test('uses round, evenly spaced dBV labels', () => {
+    const spec = computeSpectrum(capture(512, 1 / 20_000, { wave: i => sine(i, 64) }), { channel: 'C1' });
+    const ticks = Array.from(renderSpectrumSvg(spec).matchAll(/text-anchor="end">(-?\d+)<\/text>/g), match => Number(match[1]));
+    expect(ticks).toHaveLength(9);
+    const step = ticks[1]! - ticks[0]!;
+    expect([5, 10]).toContain(step);
+    expect(ticks.every((tick, i) => tick === ticks[0]! + i * step && tick % step === 0)).toBe(true);
+  });
+
+  test('exports a squared-voltage spectrum and sanitizes titles in FFT and XY CSV comments', () => {
+    const result = capture(512, 1 / 20_000, { wave: i => sine(i, 64) }, { wave: () => 2 });
+    const math = computeMathTrace(result, { op: 'mul', a: 'C1', b: 'C2' });
+    const spec = computeSpectrum(result, { channel: 'M', math });
+    const xy = computeXyPlot(result, 'C1', 'C2');
+    const spectrumCsv = renderSpectrumCsv(spec, 'Scan, =1+1');
+    expect(spectrumCsv).toContain('frequency_hz,v2_rms,db_re_1v2\n');
+    expect(spectrumCsv).toContain('# noise_floor_db_re_1v2:');
+    expect(spectrumCsv).toContain("# title: Scan,' =1+1\n");
+    expect(renderXyCsv(xy, 'Scan, =1+1')).toContain("# title: Scan,' =1+1\n");
+    expect(renderXyCsv(xy, 'Scan, trial 2')).toContain('# title: Scan, trial 2\n');
+  });
+
+  test.each([
+    ['clipped', 'clipped signal', 'signal écrêté'],
+    ['insufficient_cycles', 'too few cycles', 'trop peu de cycles'],
+    ['insufficient_resolution', 'too few points per cycle', 'trop peu de points par cycle'],
+    ['insufficient_swing', 'signal too small', 'signal trop faible'],
+    ['insufficient_samples', 'too few samples', 'trop peu d’échantillons'],
+    ['no_fundamental', 'no fundamental found', 'aucune fondamentale'],
+    ['fit_failed', 'could not fit the signal', 'ajustement impossible'],
+  ] as const)('localizes %s and uses four digits for the fundamental', (thdReason, en, fr) => {
+    const spec = computeSpectrum(capture(512, 1 / 20_000, {
+      wave: i => sine(i, 64), faults: { 511: 'clipped_low' },
+    }), { channel: 'C1' });
+    const spectrum = { ...spec, thdReason };
+    expect(renderSpectrumTable(spectrum, 'en', 'tsv')).toContain('Fundamental\t312.5 Hz\n');
+    expect(renderSpectrumTable(spectrum, 'en', 'tsv')).toContain('THD\t' + en);
+    expect(renderSpectrumTable(spectrum, 'fr', 'tsv')).toContain('Fondamentale\t312,5 Hz\n');
+    expect(renderSpectrumTable(spectrum, 'fr', 'tsv')).toContain('THD\t' + fr);
   });
 
   test('rejects an overflowing reciprocal sample interval', () => {

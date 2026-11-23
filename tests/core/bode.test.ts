@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { frequencyFromFileName } from '../../src/core/bode.js';
-import { measurePhase } from '../../src/core/measurements.js';
+import { measureChannel, measurePhase } from '../../src/core/measurements.js';
 import { renderBodeCsv } from '../../src/core/export/csv.js';
 import { renderBodeSvg } from '../../src/core/export/svg.js';
 import { renderBodeTable } from '../../src/core/export/table.js';
@@ -50,6 +50,17 @@ function pair(frequencyHz: number, gain: number, phase: number, options: SineOpt
 
 describe('Bode sine fit', () => {
   const response = (f: number) => pair(f, 2 / Math.hypot(1, f / 1000), -Math.atan(f / 1000) * 180 / Math.PI);
+
+  test('rejects confirmed input and output frequencies that differ by more than 1%', () => {
+    const capture = pair(1000, 2, -20);
+    const measurements = capture.traces.map(trace => measureChannel(trace, capture.detection.grid.pxPerVDiv));
+    const at = (frequencyHz: number) => ({
+      ...capture, measurements: [{ ...measurements[0]!, frequencyHz: 1000 }, { ...measurements[1]!, frequencyHz }],
+    });
+    expect(analyzeBodeBatch([at(1010)]).points[0]?.accepted).toBe(true);
+    expect(analyzeBodeBatch([at(1020)]).points[0])
+      .toMatchObject({ accepted: false, phaseDeg: null, rejectionReasons: ['frequency_mismatch'] });
+  });
 
   test('keeps valid captures when individual PNGs fail decoding or analysis', () => {
     const png = sample('sine_schmitt.png');

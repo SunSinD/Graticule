@@ -197,6 +197,7 @@ export function CaptureView(props: Props) {
   const plotSvg = shown === 'clean' ? cleanSvg : shown === 'xy' ? xy?.svg ?? '' : shown === 'fft' ? fft?.svg ?? '' : '';
   const showPlot = shown !== 'original' && shown !== 'overlay' && plotSvg !== '';
   const showClean = shown === 'clean' && showPlot;
+  const plotPending = (shown === 'xy' || shown === 'fft') && plotSvg === '';
   const ratio = size && size.width > 0 && size.height > 0 ? size.width / size.height : 5 / 3;
   const plotRatio = svgRatio(plotSvg, 5 / 3);
   const hDivs = intOr(hText, 10);
@@ -221,7 +222,7 @@ export function CaptureView(props: Props) {
     ['clean', tx.tabClean, '3', { 'aria-label': tx.cleanPlot }],
   ];
   if (xy) tabs.push(['xy', tx.tabXy, '4', {}]);
-  tabs.push(['fft', tx.tabFft, '5', {}]);
+  if (fft) tabs.push(['fft', tx.tabFft, '5', {}]);
 
   return (
     <div className="capture">
@@ -363,8 +364,12 @@ export function CaptureView(props: Props) {
         />
       )}
 
-      <div ref={viewport} className={`viewport${showPlot ? ' paper' : ' stage-wrap'}`}>
-        {showPlot ? (
+      <div ref={viewport} className={`viewport${showPlot || plotPending ? ' paper' : ' stage-wrap'}`}>
+        {plotPending ? (
+          <p className="plot-pending muted small" role="status" data-testid={`${shown}-pending`}>
+            {tx.working}
+          </p>
+        ) : showPlot ? (
           <div className="canvas plot" style={{ '--ar': plotRatio, '--z': z } as CSSProperties}>
             <div className="plot-svg" data-testid={`${shown}-plot`} dangerouslySetInnerHTML={{ __html: plotSvg }} />
             {cursorsVisible && props.cursors && frame && (

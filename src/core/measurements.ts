@@ -183,9 +183,9 @@ function measureEdges(samples: readonly TraceSample[], pixelVoltage: number, spa
       for (let k = i + 1; k < levels.length; k++) {
         const candidate = levels[k]!;
         const fraction = (candidate.voltage - start) / initialChange;
-        if (fraction < 0.4 || (fraction - 1) * Math.abs(initialChange) > span * 0.55
+        if (fraction < 0.25 || (fraction - 1) * Math.abs(initialChange) > span * 0.55
             || segment.slice(levels[k - 1]!.end + 1, candidate.start)
-              .some(sample => (sample.voltage - start) / initialChange < 0.3)) break;
+              .some(sample => (sample.voltage - start) / initialChange < 0.2)) break;
         if (candidate.duration > after.duration * 1.5) after = candidate;
       }
       const change = after.voltage - start;
@@ -206,8 +206,11 @@ function measureEdges(samples: readonly TraceSample[], pixelVoltage: number, spa
       }
       if (t10 === null || t90 === null) continue;
       const duration = t90 - t10;
-      // Quantized slopes can form short plateaus. A step spends longer at each level than in transition.
-      if (duration <= 0 || Math.min(before.duration, after.duration) < duration) continue;
+      // Allow a shorter dwell on a well-resolved pulse. Coarse quantized slopes
+      // can look like plateaus, so they still need a dwell as long as the edge.
+      const dwell = Math.min(before.duration, after.duration);
+      const minDwell = Math.abs(change) >= 8 * pixelVoltage ? duration / 2 - sampleInterval : duration;
+      if (duration <= 0 || dwell < minDwell) continue;
       const overshoot = 100 * Math.max(0, extreme - 1);
       (change > 0 ? rises : falls).push({ duration, overshoot: change > 0 ? overshoot : null });
       i = levels.indexOf(after, i);

@@ -156,8 +156,10 @@ export function decodePng(bytes: Uint8Array): RgbaImage {
       colorType = chunk[9] ?? 0;
       interlace = chunk[12] ?? 0;
     } else if (type === 'PLTE') {
+      if (palette || idatChunks.length) throw new Error('Invalid PNG: duplicate or late PLTE chunk');
       palette = chunk;
     } else if (type === 'tRNS') {
+      if (idatChunks.length || (colorType === 3 && !palette)) throw new Error('Invalid PNG: out-of-order tRNS chunk');
       trns = chunk;
     } else if (type === 'IDAT') {
       idatChunks.push(chunk);

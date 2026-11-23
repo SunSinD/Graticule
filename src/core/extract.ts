@@ -40,12 +40,12 @@ export function makeTimebase(metadata: ScopeMetadata, overrides: ExtractionOverr
   };
 }
 
-function markerYs(image: RgbaImage, detection: ProfileDetection, colors: readonly ChannelColor[]): (number | null)[] {
+function markerYs(image: RgbaImage, detection: ProfileDetection, colors: readonly ChannelColor[],
+  inverted: boolean): (number | null)[] {
   const profile = getNativeProfile(detection.profileId);
   if (!profile) return [null, null, null, null];
   const { x, y, width, height } = profile.zeroMarkerStrip;
   const { bottom, centerY } = detection.grid;
-  const inverted = invertTraceColors(image, detection.profileId, detection.grid.inverted);
   const lastRow = profile.raster ? Math.min(bottom, y + height - 1) : bottom;
   if (profile.id === 'keysight-dsox1000') {
     const arrows: (number | null)[] = CHANNELS.map(() => null);
@@ -277,15 +277,20 @@ function maskedAt(image: RgbaImage, mask: OverlayMask, grid: GridGeometry, x: nu
 }
 
 export function extractTraces(image: RgbaImage, detection: ProfileDetection, metadata: ScopeMetadata, mask: OverlayMask,
-  timebase: TimebaseSettings, overrides: ExtractionOverrides): { traces: ChannelTrace[]; warnings: string[] } {
-  if (detection.digitalOnly) return { traces: [], warnings: [] };
+  timebase: TimebaseSettings, overrides: ExtractionOverrides,
+  inverted = invertTraceColors(image, detection.profileId, detection.grid.inverted)): { traces: ChannelTrace[]; warnings: string[] } {
   const grid = detection.grid;
+  const times = Array.from({ length: grid.width + 1 }, (_, col) =>
+    (grid.left + col - grid.centerX) / grid.pxPerHDiv * timebase.secPerDiv + timebase.triggerOffsetSec);
+  if (times.some((time, col) => !Number.isFinite(time) || (col > 0 && time <= times[col - 1]!))) {
+    throw new Error('Invalid trigger offset or time scale: adjacent columns need distinct timestamps.');
+  }
+  if (detection.digitalOnly) return { traces: [], warnings: [] };
   const colors = metadata.colors ?? colorsFor(detection.profileId);
-  const markers = markerYs(image, detection, colors);
+  const markers = markerYs(image, detection, colors, inverted);
   const annotations = plotAnnotations(image, detection, markers);
   const plotMask = annotations ? { ...mask, pixels: mask.pixels.map((bits, index) => bits | annotations[index]!) } : mask;
   const native = getNativeProfile(detection.profileId);
-  const inverted = invertTraceColors(image, detection.profileId, grid.inverted);
   const active = CHANNELS.map((channel, i) => !metadata.unsupportedChannels?.has(channel)
     && (overrides.channels?.[channel]?.enabled ?? (!native || metadata.cards.has(channel) || markers[i] !== null)));
   const columns = CHANNELS.map((): (Cluster | null)[] => []);
@@ -328,7 +333,7 @@ export function extractTraces(image: RgbaImage, detection: ProfileDetection, met
     const tolerance = Math.min(8, Math.max(2, Math.ceil(trace.thickness / 2)));
     const samples = trace.clusters.map((cluster, col): TraceSample => {
       const xPx = grid.left + col;
-      const timeSec = (xPx - grid.centerX) / grid.pxPerHDiv * timebase.secPerDiv + timebase.triggerOffsetSec;
+      const timeSec = times[col]!;
       let status: GapStatus = 'unresolved';
       if (cluster) {
         if (cluster.low <= grid.top + 1) status = 'clipped_high';

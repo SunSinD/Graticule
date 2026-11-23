@@ -604,8 +604,7 @@ test('Escape in the title field cancels the draft without saving it', async ({ p
   await title.fill('Draft that should vanish');
   await title.press('Escape');
   await expect(title).toHaveValue('');
-  await expect(title).not.toBeFocused();
-  await title.focus();
+  await expect(title).toBeFocused();
   await page.locator('h2', { hasText: 'Profile' }).click();
   await expect(title).toHaveValue('');
   await expect(page.locator('.paper svg').first()).not.toContainText('Draft that should vanish');
@@ -1072,4 +1071,185 @@ test('every view fits without sideways scrolling from phone to desktop in Englis
       }
     }
   }
+});
+
+const mathCell = (page: Page, row: string) =>
+  page
+    .locator('[data-testid="measurement-summary"] tbody tr', { has: page.locator('th', { hasText: row }) })
+    .locator('td')
+    .last();
+
+test('Clear during Export all stops the zip with no download and no stale progress', async ({ page }) => {
+  await addFiles(page, SWEEP);
+  await expect(page.getByRole('button', { name: 'Extract Bode (10)' })).toBeVisible();
+  const downloads: string[] = [];
+  page.on('download', (d) => downloads.push(d.suggestedFilename()));
+  await page.getByRole('button', { name: 'Export all (.zip)' }).click();
+  await expect(page.getByText(/Extracting \d+\/10/)).toBeVisible({ timeout: 5_000 });
+  await page.getByRole('button', { name: 'Clear', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm clear?' }).click();
+  await expect(page.locator('.file-row')).toHaveCount(0);
+  await expect(page.getByText('Drop an oscilloscope screenshot, paste one, or add images.')).toBeVisible();
+  await page.waitForTimeout(4_000);
+  expect(downloads).toEqual([]);
+  await expect(page.getByText(/Extracting \d+\/\d+|Building report \d+\/\d+/)).toHaveCount(0);
+  await expect(page.getByText('Report downloaded')).toHaveCount(0);
+});
+
+test('a V² math channel takes a typed V/div, swaps channels and never signs Vpp or Vrms', async ({ page }) => {
+  await extractSine(page);
+  await page.getByRole('button', { name: 'Add math channel' }).click();
+  const a = page.getByRole('combobox', { name: 'Math first channel' });
+  const b = page.getByRole('combobox', { name: 'Math second channel' });
+  await page.getByRole('combobox', { name: 'Math operation' }).selectOption('mul');
+  await expect(page.locator('[data-testid="measurement-summary"] thead')).toContainText('C1 × C2');
+
+  const vdiv = page.locator('#vdiv-M');
+  await expect(vdiv).toBeEnabled();
+  await vdiv.fill('5 V²');
+  await vdiv.press('Enter');
+  await expect(vdiv).toHaveValue(/^5\s*V²$/);
+  await page.locator('h2', { hasText: 'Profile' }).click();
+  await expect(vdiv).toHaveValue(/^5\s*V²$/);
+
+  await b.selectOption('C1');
+  await expect(a).toHaveValue('C2');
+  await expect(b).toHaveValue('C1');
+  await expect(page.locator('[data-testid="measurement-summary"] thead')).toContainText('C2 × C1');
+  await a.selectOption('C1');
+  await expect(a).toHaveValue('C1');
+  await expect(b).toHaveValue('C2');
+
+  await page.getByRole('combobox', { name: 'Math operation' }).selectOption('sub');
+  await expect(mathCell(page, 'Vpp')).toContainText(/\d/);
+  for (const row of ['Vpp', 'RMS', 'Rise time', 'Fall time']) {
+    const cell = mathCell(page, row);
+    if ((await cell.count()) === 0) continue;
+    await expect(cell, row).not.toContainText('+');
+  }
+  await expect(mathCell(page, 'Vmax')).toHaveText(/^[+−-]/);
+
+  const rise = page.locator('[data-testid="measurement-summary"] tbody tr', { has: page.locator('th', { hasText: 'Rise time' }) });
+  if ((await rise.count()) > 0) {
+    for (const text of await rise.locator('td').allTextContents()) expect(text.trim()).toMatch(/^(< )?\d[\d.,]*\s*\S*s$|^—$/);
+  }
+});
+
+test('a custom Bode title shows on the plot and in the CSV, and Bode zoom survives Inspect', async ({ page }) => {
+  await extractSweep(page);
+  const title = page.getByRole('textbox', { name: 'Title' });
+  await title.fill('Lab 6 RC band pass');
+  await title.press('Enter');
+  await expect(page.locator('.bode .canvas svg').first()).toContainText('Lab 6 RC band pass');
+  const csv = await download(page, 'CSV');
+  expect(csv.name).toBe('Lab 6 RC band pass.csv');
+  expect(csv.text).toContain('Lab 6 RC band pass');
+
+  await page.locator('.bode').getByRole('slider', { name: 'Zoom' }).fill('200');
+  await expect(page.locator('.bode').getByRole('button', { name: 'Reset zoom' })).toHaveText('200%');
+  await page.locator('.bode-table td.file .linklike').nth(1).click();
+  await page.getByRole('button', { name: 'Back to Bode' }).click();
+  await expect(page.locator('.bode').getByRole('button', { name: 'Reset zoom' })).toHaveText('200%');
+});
+
+test('turning off channels that XY or FFT need falls back to Clean and stays there', async ({ page }) => {
+  await extractSine(page);
+  const group = page.getByRole('group', { name: 'View' });
+  await viewTab(page, 'XY').click();
+  await expect(viewTab(page, 'XY')).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('checkbox', { name: 'C2', exact: true }).click();
+  await expect(viewTab(page, 'Clean Plot')).toHaveAttribute('aria-pressed', 'true');
+  await expect(group.getByRole('button', { name: 'XY', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Enable C2' }).click();
+  await expect(group.getByRole('button', { name: 'XY', exact: true })).toBeVisible();
+  await page.waitForTimeout(300);
+  await expect(viewTab(page, 'Clean Plot')).toHaveAttribute('aria-pressed', 'true');
+
+  await viewTab(page, 'FFT').click();
+  await expect(page.locator('[data-testid="fft-plot"] svg')).toBeVisible();
+  await page.getByRole('checkbox', { name: 'C2', exact: true }).click();
+  await expect(viewTab(page, 'FFT')).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('checkbox', { name: 'C1', exact: true }).click();
+  await expect(viewTab(page, 'Clean Plot')).toHaveAttribute('aria-pressed', 'true');
+  await expect(group.getByRole('button', { name: 'FFT', exact: true })).toHaveCount(0);
+  await expect(group.getByRole('button', { name: 'XY', exact: true })).toHaveCount(0);
+});
+
+test('Escape in the title, label and scale fields reverts the draft and keeps focus', async ({ page }) => {
+  await extractSine(page);
+  await page.getByRole('button', { name: 'Add math channel' }).click();
+  const fields = [
+    page.getByRole('textbox', { name: 'Title' }),
+    page.getByRole('textbox', { name: 'Label C1' }),
+    page.getByRole('textbox', { name: 'Label M' }),
+  ];
+  for (const field of fields) {
+    await field.fill('Draft that should vanish');
+    await field.press('Escape');
+    await expect(field).toHaveValue('');
+    await expect(field).toBeFocused();
+    await page.locator('h2', { hasText: 'Profile' }).click();
+    await expect(field).toHaveValue('');
+  }
+  await expect(page.locator('[data-testid="measurement-summary"] thead')).not.toContainText('Draft that should vanish');
+
+  const vdiv = page.locator('#vdiv-C1');
+  const before = await vdiv.inputValue();
+  await vdiv.fill('7');
+  await vdiv.press('Escape');
+  await expect(vdiv).toHaveValue(before);
+  await expect(vdiv).toBeFocused();
+  await page.locator('h2', { hasText: 'Profile' }).click();
+  await expect(vdiv).toHaveValue(before);
+});
+
+test('the French FFT table never shows a raw THD reason code', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await extractSine(page);
+  await page.getByRole('button', { name: 'Add math channel' }).click();
+  await page.getByRole('combobox', { name: 'Math operation' }).selectOption('mul');
+  await viewTab(page, 'FFT').click();
+  await expect(page.locator('[data-testid="fft-plot"] svg')).toBeVisible();
+  await page.getByRole('button', { name: 'FR', exact: true }).click();
+  const channel = page.getByRole('combobox', { name: 'Canal FFT' });
+  const ids = await channel.locator('option').evaluateAll((opts) => opts.map((o) => (o as HTMLOptionElement).value));
+  expect(ids.length).toBeGreaterThan(1);
+  const raw = /\b(clipped|insufficient_\w+|no_fundamental|fit_failed)\b/;
+  for (const id of ids) {
+    await channel.selectOption(id);
+    await expect(page.locator('[data-testid="fft-plot"] svg')).toBeVisible();
+    const thd = page.locator('[data-testid="fft-summary"] div', { has: page.locator('dt', { hasText: /^THD$/ }) }).locator('dd');
+    const shown = (await thd.textContent())?.trim() ?? '';
+    expect(shown).not.toMatch(raw);
+    await page.evaluate(() => navigator.clipboard.writeText(''));
+    await page.locator('.exports').getByRole('button', { name: 'Markdown', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain('THD');
+    const table = await page.evaluate(() => navigator.clipboard.readText());
+    expect(table, id).not.toMatch(raw);
+    expect(table, id).toContain('Fondamentale');
+    if (!/\d/.test(shown) && shown !== '—') expect(table, id).toContain(shown);
+  }
+});
+
+test('math controls have 32px touch targets and no sideways scroll on a 360x640 phone', async ({ browser }) => {
+  const ctx = await browser.newContext(SMALL_PHONE);
+  const phone = await ctx.newPage();
+  await phone.goto('/');
+  await extractSine(phone);
+  await phone.locator('details.settings summary').click();
+  const add = phone.getByRole('button', { name: 'Add math channel' });
+  expect((await add.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(32);
+  await add.click();
+  for (const target of [
+    phone.getByRole('textbox', { name: 'Label M' }),
+    phone.getByRole('textbox', { name: 'Label C1' }),
+    phone.locator('.channel.math legend .inline'),
+    phone.getByRole('combobox', { name: 'Math first channel' }),
+  ]) {
+    expect((await target.boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(32);
+  }
+  await phone.getByRole('checkbox', { name: 'C2', exact: true }).click();
+  expect((await phone.getByRole('button', { name: 'Enable C2' }).boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(32);
+  expect(await phone.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+  await ctx.close();
 });

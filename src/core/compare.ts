@@ -77,22 +77,62 @@ function splitRow(line: string, separator: string): string[] {
 const numeric = (value: string | undefined): number | null =>
   value && /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(value) && Number.isFinite(Number(value)) ? Number(value) : null;
 const clean = (label: string) => label.trim().toLowerCase().replace(/\s+/g, ' ');
-const timeHeader = /^(?:x|time(?:[ _(\[]?s[)\]]?)?|second[s]?)$/i;
-const channelHeader = /^(?:CH?)\s*(\d+)\b/i;
+const timeHeader = /^(?:(?:x(?:-axis)?|time)(?:[\s_]*[(\[]?\s*(?:[mun\u00b5\u03bc]?s|seconds?)\s*[)\]]?)?|seconds?)$/i;
+const channelHeader = /^(?:CH?\s*([1-4])\b|([1-4])(?=$|\s*[([]))/i;
+const timeUnit = /^(?:([mun\u00b5\u03bc]?)s|seconds?)$/i;
+const voltageUnit = /^(?:([muk\u00b5\u03bc]?)v|volts?)$/i;
+const prefixes: Readonly<Record<string, number>> = { m: 1e-3, u: 1e-6, '\u00b5': 1e-6, '\u03bc': 1e-6, n: 1e-9, k: 1e3 };
+
+function unit(label: string, pattern: RegExp): RegExpExecArray | null {
+  return pattern.exec(clean(label).split(/[\s_(\[]+/).at(-1)?.replace(/[)\]]$/, '') ?? '');
+}
+
+function unitScale(pattern: RegExp, header: string, units = ''): number {
+  const prefix = (unit(header, pattern) ?? unit(units, pattern))?.[1];
+  return prefixes[prefix?.toLowerCase() ?? ''] ?? 1;
+}
+
+function tektronixData(row: readonly string[]): boolean {
+  return row.length === 5 && !row[2] && numeric(row[3]) !== null;
+}
+
+interface CsvRow {
+  readonly timeSec: number;
+  readonly values: (number | null)[];
+}
+
+function checkedCsv(format: ScopeCsvData['format'], columns: string[], rows: CsvRow[]): ScopeCsvData {
+  const unique: CsvRow[] = [];
+  for (const row of rows.sort((a, b) => a.timeSec - b.timeSec)) {
+    const previous = unique.at(-1);
+    if (previous?.timeSec === row.timeSec) {
+      for (const [column, value] of row.values.entries()) previous.values[column] ??= value;
+    } else {
+      unique.push(row);
+    }
+  }
+  if (!unique.some(row => row.values.some(value => value !== null))) throw new Error('Scope CSV has no numeric voltage rows.');
+  return { format, columns, rows: unique };
+}
 
 export function parseScopeCsv(text: string): ScopeCsvData {
   const lines = text.replace(/^\uFEFF/, '').split(/\r\n|\n|\r/).filter(line => line.trim() && !line.trimStart().startsWith('#'));
   const separator = [',', ';', '\t'].find(delimiter => lines.some(line => {
     try {
-      const [first, second] = splitRow(line, delimiter);
-      return first && timeHeader.test(first) && second;
+      const row = splitRow(line, delimiter);
+      return (timeHeader.test(row[0] ?? '') && row.slice(1).some(Boolean))
+        || (tektronixData(row) && /^(?:record length|sample interval)$/i.test(row[0]!));
     } catch {
       return false;
     }
   }));
   if (!separator) throw new Error('Scope CSV needs a time column and at least one voltage column.');
   const records = lines.map(line => splitRow(line, separator));
-  const index = records.findIndex(row => row[0] && timeHeader.test(row[0]) && row[1]);
+  const index = records.findIndex(row => timeHeader.test(row[0] ?? '') && row.slice(1).some(Boolean));
+  if (index < 0) {
+    return checkedCsv('generic', ['Volt'], records.filter(tektronixData)
+      .map(row => ({ timeSec: numeric(row[3])!, values: [numeric(row[4])] })));
+  }
   const header = records[index]!;
   const isRigol = /^x$/i.test(header[0]!) && header.slice(1).some(cell => /^ch\s*\d/i.test(cell));
   const format = isRigol ? 'rigol' : /^second/i.test(header[0]!) || records.some(row => /^record length$/i.test(row[0]!))
@@ -117,13 +157,21 @@ export function parseScopeCsv(text: string): ScopeCsvData {
   const data = records.slice(index + 1).filter((row, i) => row !== pair && i + index + 1 !== pairIndex && numeric(row[0]) !== null);
   const indexes = isRigol && start !== null && increment !== null && increment > 0
     && data.every(row => Number.isInteger(numeric(row[0])));
+  const units = records[index + 1];
+  const firstUnit = clean(units?.[0] ?? '');
+  const unitsRow = units && (unit(firstUnit, timeUnit) || firstUnit === 'sequence'
+    || (/^(?:units?)?$/.test(firstUnit) && columnIndices.some(col => unit(units[col] ?? '', voltageUnit)))) ? units : undefined;
+  const timeScale = unitScale(timeUnit, header[0]!, unitsRow?.[0]);
+  const voltageScales = columnIndices.map(col => unitScale(voltageUnit, header[col]!, unitsRow?.[col]));
   const rows = data.map(row => ({
-    timeSec: indexes ? start! + numeric(row[0])! * increment! : numeric(row[0])!,
-    values: columnIndices.map(col => numeric(row[col])),
-  })).filter(row => Number.isFinite(row.timeSec)).sort((a, b) => a.timeSec - b.timeSec);
-  const unique = rows.filter((row, i) => row.timeSec !== rows[i - 1]?.timeSec);
-  if (!unique.some(row => row.values.some(value => value !== null))) throw new Error('Scope CSV has no numeric voltage rows.');
-  return { format, columns, rows: unique };
+    timeSec: (indexes ? start! + numeric(row[0])! * increment! : numeric(row[0])!) * timeScale,
+    values: columnIndices.map((col, i) => {
+      const value = numeric(row[col]);
+      const volts = value === null ? NaN : value * voltageScales[i]!;
+      return Number.isFinite(volts) ? volts : null;
+    }),
+  })).filter(row => Number.isFinite(row.timeSec));
+  return checkedCsv(format, columns, rows);
 }
 
 function referenceAt(csv: ScopeCsvData, column: number, time: number, tolerance: number): number | null {
@@ -146,23 +194,28 @@ function referenceAt(csv: ScopeCsvData, column: number, time: number, tolerance:
 
 export function compareWithScopeCsv(result: ExtractionResult, csv: ScopeCsvData,
   options: ScopeComparisonOptions = {}): ScopeComparisonResult {
-  const trace = options.channel ? result.traces.find(t => t.channel === options.channel && t.settings.enabled)
-    : result.traces.find(t => t.settings.enabled);
+  const available = result.traces.filter(t => t.settings.enabled);
+  const named = csv.columns.map(label => {
+    const match = channelHeader.exec(label);
+    return match?.[1] ?? match?.[2];
+  });
+  const trace = options.channel ? available.find(t => t.channel === options.channel)
+    : (options.csvColumn === undefined ? available.find(t => named.includes(t.channel[1])) : undefined) ?? available[0];
   if (!trace) throw new Error(options.channel ? `Missing enabled channel ${options.channel}.` : 'The screenshot has no enabled analog channel.');
   const { channel, settings } = trace;
-  const channelIndex = csv.columns.findIndex(label => channelHeader.exec(label)?.[1] === channel[1]);
-  if (options.csvColumn === undefined && options.channel && channelIndex < 0 && csv.columns.some(label => channelHeader.test(label))) {
-    throw new Error(`Scope CSV is missing channel ${options.channel}.`);
+  const channelIndex = named.indexOf(channel[1]);
+  if (options.csvColumn === undefined && channelIndex < 0 && named.some(Boolean)) {
+    throw new Error(`Scope CSV is missing channel ${channel}.`);
   }
   const column = options.csvColumn === undefined ? Math.max(channelIndex, 0) : csv.columns.findIndex(label => clean(label) === clean(options.csvColumn!));
   const csvColumn = csv.columns[column];
   if (!csvColumn) throw new Error(`Unknown CSV column ${options.csvColumn ?? channel}.`);
   const grid = result.detection.grid, dt = columnInterval(result), pixel = settings.voltsPerDiv / grid.pxPerVDiv;
-  const start = result.timebase.triggerOffsetSec - grid.width * dt / 2;
-  const end = result.timebase.triggerOffsetSec + grid.width * dt / 2;
+  const start = trace.samples[0]?.timeSec ?? Infinity;
+  const end = trace.samples.at(-1)?.timeSec ?? -Infinity;
   const tolerance = Math.abs(dt) * 1e-8;
   const ref = (time: number) => time >= start - tolerance && time <= end + tolerance ? referenceAt(csv, column, time, tolerance) : null;
-  const usable = trace.samples.filter(s => valid(s) && s.timeSec >= start - tolerance && s.timeSec <= end + tolerance);
+  const usable = trace.samples.filter(valid);
   const requestedLag = options.maxLagPx ?? 2.5;
   const steps = Number.isFinite(requestedLag) ? Math.floor(Math.min(2.5, Math.max(0, requestedLag)) * 10 + 1e-9) : 25;
   const candidates = Array.from({ length: 2 * steps + 1 }, (_, i) => (i - steps) / 10)
@@ -171,13 +224,16 @@ export function compareWithScopeCsv(result: ExtractionResult, csv: ScopeCsvData,
   const alignmentSamples = common.length >= 2 ? common : usable;
   const score = (lag: number) => {
     let sum = 0, count = 0;
+    let first: number | undefined, varying = false;
     for (const sample of alignmentSamples) {
       const voltage = ref(sample.timeSec + lag * dt);
       if (voltage === null) continue;
+      first ??= voltage;
+      varying ||= voltage !== first;
       sum += ((sample.voltage! - voltage) / pixel) ** 2;
       count++;
     }
-    return count >= 2 ? sum / count : Infinity;
+    return count >= 2 && (common.length >= 2 || lag === 0 || varying) ? sum / count : Infinity;
   };
   let bestLag = 0, bestScore = Infinity;
   for (const lag of candidates) {

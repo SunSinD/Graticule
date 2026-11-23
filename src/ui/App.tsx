@@ -238,6 +238,7 @@ export function App() {
   const [bodeProfile, setBodeProfile] = useState<ProfileChoice>('auto');
   const [sessions, setSessions] = useState<Readonly<Record<string, BodeSession>>>({});
   const [inspectedId, setInspectedId] = useState<string | null>(null);
+  const [bodeZoom, setBodeZoom] = useState<Readonly<Record<string, number>>>({});
 
   const fileInput = useRef<HTMLInputElement>(null);
   const cameraInput = useRef<HTMLInputElement>(null);
@@ -250,6 +251,12 @@ export function App() {
   const persisted = useRef<Map<string, HistoryItem>>(new Map());
   const cursorSaves = useRef<Map<string, number>>(new Map());
   const saveSeq = useRef<Map<string, number>>(new Map());
+  const inFlightSave = useRef<Map<string, HistoryItem>>(new Map());
+  const batchRef = useRef(false);
+  const batchTokenRef = useRef(0);
+  const mathByIdRef = useRef<Readonly<Record<string, MathConfig>>>({});
+  const analysisRef = useRef<Analysis | null>(null);
+  const analysisLoad = useRef<Promise<Analysis> | null>(null);
   const liveUrls = useRef<Set<string>>(new Set());
   const mountedRef = useRef(true);
   const flushCursorSaves = useRef<() => void>(() => undefined);
@@ -266,6 +273,8 @@ export function App() {
   activeRef.current = activeId;
   selectedRef.current = selected;
   keepRef.current = keepHistory;
+  mathByIdRef.current = mathById;
+  analysisRef.current = analysis;
 
   const canUseCamera = useMemo(isMobileOrTablet, []);
   const tx = t(locale);
@@ -369,9 +378,16 @@ export function App() {
     };
     const save = (item: HistoryItem): void => {
       const id = item.id;
+      // The same snapshot is already being written, so later renders do not queue it again.
+      if (inFlightSave.current.get(id) === item) return;
+      inFlightSave.current.set(id, item);
+      const settle = (): void => {
+        if (inFlightSave.current.get(id) === item) inFlightSave.current.delete(id);
+      };
       const seq = (saveSeq.current.get(id) ?? 0) + 1;
       saveSeq.current.set(id, seq);
       void store.put(item).then((ok) => {
+        settle();
         if (!ok || storeRef.current !== store) return;
         const latest = itemsRef.current.find((i) => i.id === id);
         // Removed, or history turned off, while the write was running.
@@ -387,7 +403,7 @@ export function App() {
           cancelCursorSave(id);
           save(latest);
         }
-      });
+      }, settle);
     };
     const flushCursor = (id: string): void => {
       cancelCursorSave(id);
@@ -641,12 +657,17 @@ export function App() {
   );
 
   const clearAll = (): void => {
+    // Stops a running Export all: it checks this token after every await.
+    batchTokenRef.current++;
+    batchRef.current = false;
+    setBatch(null);
     singleReq.current.clear();
     bodeReq.current.clear();
     recomputeReq.current.clear();
     sessionsRef.current = {};
     replaceIdRef.current = null;
     persisted.current = new Map();
+    inFlightSave.current.clear();
     for (const timer of cursorSaves.current.values()) window.clearTimeout(timer);
     cursorSaves.current.clear();
     void storeRef.current?.clear();
@@ -654,6 +675,7 @@ export function App() {
     setSelected([]);
     setActiveId(null);
     setSessions({});
+    setBodeZoom({});
     setNotice(null);
     setFileNote(null);
     setCropDismissed(new Set());
@@ -664,6 +686,8 @@ export function App() {
     setKeepHistory(keep);
     writePref('graticule.keepHistory', keep ? '1' : '0');
     persisted.current = new Map();
+    // A write that started before this switch may land before a clear, so the item is written again.
+    inFlightSave.current.clear();
     if (!keep) void storeRef.current?.clear();
   };
 
@@ -789,21 +813,40 @@ export function App() {
     isUniversal && activeItem !== null && !hasManualBox(activeItem.overrides) && !cropDismissed.has(activeItem.id);
   const cropVisible = mode === 'single' && activeItem !== null && (cropOpen || autoCrop);
 
+  // A failed load is forgotten so the next call tries again instead of staying broken.
+  const loadAnalysis = useCallback((): Promise<Analysis> => {
+    if (analysisRef.current) return Promise.resolve(analysisRef.current);
+    if (!analysisLoad.current) {
+      analysisLoad.current = import('./analysis').then(
+        (mod) => {
+          if (mountedRef.current) setAnalysis(mod);
+          return mod;
+        },
+        (e: unknown) => {
+          analysisLoad.current = null;
+          throw e;
+        },
+      );
+    }
+    return analysisLoad.current;
+  }, []);
+
+  const requestAnalysis = useCallback(() => {
+    if (analysisRef.current) return;
+    loadAnalysis().catch((e: unknown) => {
+      if (mountedRef.current) setNotice(message(e));
+    });
+  }, [loadAnalysis]);
+
   const hasAnyResult = capture !== null || items.some((i) => i.result !== null);
   useEffect(() => {
     if (!hasAnyResult || analysis) return;
-    let live = true;
-    void import('./analysis').then(
-      (mod) => live && setAnalysis(mod),
-      () => undefined,
-    );
-    return () => {
-      live = false;
-    };
-  }, [hasAnyResult, analysis]);
+    loadAnalysis().catch(() => undefined);
+  }, [hasAnyResult, analysis, loadAnalysis]);
 
   const channels = useMemo(() => enabledChannels(capture), [capture]);
-  const storedMath = captureItem ? mathById[captureItem.id] ?? null : null;
+  // An inspected Bode capture has no Math controls, so a Math setup from single view stays out of it.
+  const storedMath = mode === 'single' && captureItem ? mathById[captureItem.id] ?? null : null;
   const mathConfig = useMemo(() => usableMath(storedMath, channels), [storedMath, channels]);
   const math: MathTraceResult | null = useMemo(() => {
     if (!analysis || !capture || !mathConfig) return null;
@@ -823,7 +866,16 @@ export function App() {
   }, [channels, math, axisName]);
   const axisIds = axes.map((a) => a.id);
   const xyReady = axes.length >= 2;
-  const effectiveView: CaptureMode = !capture ? 'original' : view === 'xy' && !xyReady ? 'clean' : view;
+  const hasAxes = axes.length > 0;
+  const effectiveView: CaptureMode = !capture
+    ? 'original'
+    : (view === 'xy' && !xyReady) || (view === 'fft' && !hasAxes)
+      ? 'clean'
+      : view;
+  // Stored view drops back to Clean so turning a channel back on later does not jump to XY or FFT.
+  useEffect(() => {
+    if ((view === 'xy' && !xyReady) || (view === 'fft' && !hasAxes)) setView('clean');
+  }, [view, xyReady, hasAxes]);
   const xyX: XyAxisId = xyAxes && axisIds.includes(xyAxes[0]) ? xyAxes[0] : axisIds[0] ?? 'C1';
   const xyY: XyAxisId =
     xyAxes && axisIds.includes(xyAxes[1]) && xyAxes[1] !== xyX ? xyAxes[1] : axisIds.find((a) => a !== xyX) ?? 'C2';
@@ -838,7 +890,6 @@ export function App() {
       return null;
     }
   }, [analysis, capture, effectiveView, xyReady, xyX, xyY, math]);
-  const hasAxes = axisIds.length > 0;
   const spectrum = useMemo(() => {
     if (!analysis || !capture || effectiveView !== 'fft' || !hasAxes) return null;
     try {
@@ -870,7 +921,7 @@ export function App() {
     ? { axes, x: xyX, y: xyY, svg: xySvg, onAxes: (x, y) => setXyAxes([x, y]) }
     : null;
   const fftControls: FftControls | null =
-    axes.length > 0
+    hasAxes
       ? {
           axes,
           channel: fftChannel,
@@ -887,6 +938,7 @@ export function App() {
         config: mathConfig,
         result: math,
         onChange: (config) => {
+          if (config) requestAnalysis();
           const id = captureItem.id;
           setMathById((all) => {
             const next = { ...all };
@@ -924,6 +976,7 @@ export function App() {
 
   const selectView = (v: CaptureMode): void => {
     if (v !== 'original' && v !== 'overlay' && cropVisible) dismissCrop(false);
+    if (v === 'xy' || v === 'fft') requestAnalysis();
     setView(v);
   };
   const selectViewRef = useRef(selectView);
@@ -952,68 +1005,112 @@ export function App() {
     setCursorsOn(true);
   }, [cursorsShown, cropVisible]);
 
-  const batchRef = useRef(false);
   const exportAll = useCallback(
     async (list: readonly HistoryItem[]) => {
       if (batchRef.current || list.length === 0) return;
       batchRef.current = true;
+      const token = ++batchTokenRef.current;
+      // False once Clear ran or the app unmounted, so nothing more is extracted, shown or downloaded.
+      const live = (): boolean => mountedRef.current && batchTokenRef.current === token;
+      const current = (id: string): HistoryItem | undefined => itemsRef.current.find((i) => i.id === id);
+      const cancelled = new Error('cancelled');
       const total = list.length;
-      const ready: { item: HistoryItem; result: ExtractionResult }[] = [];
+      const ready: { id: string; result: ExtractionResult }[] = [];
       const failed: string[] = [];
       setNotice(null);
       setFileNote(null);
       setBatch({ phase: 'extract', done: 0, total });
       try {
         for (const [index, original] of list.entries()) {
-          const item = itemsRef.current.find((i) => i.id === original.id) ?? original;
-          let result = item.result;
-          if (!result) {
-            const id = item.id;
-            const req = (singleReq.current.get(id) ?? 0) + 1;
-            singleReq.current.set(id, req);
-            patchItem(id, { state: 'extracting', error: null });
-            try {
-              result = await analyzeSingle(item.bytes, item.name, withProfile(item.overrides, item.profile));
-              if (singleReq.current.get(id) === req) patchItem(id, { state: 'extracted', result, error: null });
-            } catch (e) {
-              if (singleReq.current.get(id) === req) patchItem(id, { state: 'error', result: null, error: message(e) });
-              failed.push(item.name);
+          const item = current(original.id);
+          // Removed while the batch ran.
+          if (item) {
+            let result = item.result;
+            if (!result) {
+              const id = item.id;
+              const req = (singleReq.current.get(id) ?? 0) + 1;
+              singleReq.current.set(id, req);
+              patchItem(id, { state: 'extracting', error: null });
+              try {
+                result = await analyzeSingle(item.bytes, item.name, withProfile(item.overrides, item.profile));
+                if (singleReq.current.get(id) === req) patchItem(id, { state: 'extracted', result, error: null });
+              } catch (e) {
+                if (singleReq.current.get(id) === req) patchItem(id, { state: 'error', result: null, error: message(e) });
+                result = null;
+                if (live() && current(id)) failed.push(current(id)!.name);
+              }
+              if (!live()) return;
             }
+            if (result && current(item.id)) ready.push({ id: item.id, result });
           }
-          if (!mountedRef.current) return;
-          if (result) ready.push({ item, result });
           setBatch({ phase: 'extract', done: index + 1, total });
         }
         if (ready.length === 0) {
-          setFileNote(tx.filesUnreadable(failed));
+          if (failed.length > 0) setFileNote(tx.filesUnreadable(failed));
           return;
         }
         const { buildBatchReportZip, svgToPngBytes } = await import('./batchExport');
-        setBatch({ phase: 'zip', done: 0, total: ready.length });
-        const zip = await buildBatchReportZip(
-          ready.map(({ item, result }) => ({
+        if (!live()) return;
+        const mathConfigs = mathByIdRef.current;
+        let mathTools: Analysis | null = null;
+        if (ready.some(({ id }) => mathConfigs[id])) {
+          try {
+            mathTools = await loadAnalysis();
+          } catch {
+            mathTools = null;
+          }
+          if (!live()) return;
+        }
+        // Read again now so title, label and Math edits made during the batch are in the report.
+        const entries = ready.flatMap(({ id, result }) => {
+          const item = current(id);
+          if (!item) return [];
+          const config = usableMath(mathConfigs[id], enabledChannels(result));
+          let math: MathTraceResult | null = null;
+          if (mathTools && config) {
+            try {
+              math = mathTools.computeMathTrace(result, { ...config, label: config.label?.trim() || mathAutoLabel(config) });
+            } catch {
+              math = null;
+            }
+          }
+          return [{
             fileName: item.name,
             result,
             ...(item.title ? { title: item.title } : {}),
             ...(item.channelLabels ? { channelLabels: item.channelLabels } : {}),
-          })),
-          {
-            locale,
-            renderPng: (svg) => svgToPngBytes(svg, 2),
-            onProgress: (done, count) => setBatch({ phase: 'zip', done, total: count }),
+            ...(math ? { math } : {}),
+          }];
+        });
+        if (entries.length === 0) return;
+        setBatch({ phase: 'zip', done: 0, total: entries.length });
+        const zip = await buildBatchReportZip(entries, {
+          locale,
+          renderPng: async (svg) => {
+            if (!live()) throw cancelled;
+            const png = await svgToPngBytes(svg, 2);
+            if (!live()) throw cancelled;
+            return png;
           },
-        );
+          onProgress: (done, count) => {
+            if (live()) setBatch({ phase: 'zip', done, total: count });
+          },
+        });
+        if (!live()) return;
         downloadBlob(new Blob([zip as Uint8Array<ArrayBuffer>], { type: 'application/zip' }), 'graticule-report.zip');
         flash(tx.zipReady);
         if (failed.length > 0) setFileNote(tx.zipSkipped(failed));
       } catch (e) {
-        if (mountedRef.current) setNotice(message(e));
+        if (live() && e !== cancelled) setNotice(message(e));
       } finally {
-        batchRef.current = false;
-        if (mountedRef.current) setBatch(null);
+        // After Clear, a newer batch may already own these.
+        if (batchTokenRef.current === token) {
+          batchRef.current = false;
+          if (mountedRef.current) setBatch(null);
+        }
       }
     },
-    [patchItem, locale, tx, flash],
+    [patchItem, locale, tx, flash, loadAnalysis],
   );
 
   const extractActive = useCallback(() => {
@@ -1066,8 +1163,8 @@ export function App() {
       return {
         baseName: named ? baseName(named) : 'bode',
         svg: () => renderBodeSvg(bode, { locale, title: named || 'Bode' }),
-        csv: () => renderBodeCsv(bode),
-        table: (f) => renderBodeTable(bode, f, locale),
+        csv: () => renderBodeCsv(bode, named || undefined),
+        table: (f) => renderBodeTable(bode, f, locale, named || undefined),
       };
     }
     return null;
@@ -1151,13 +1248,14 @@ export function App() {
       } else if (VIEW_KEYS[k] && showCapture && capture) {
         const next = VIEW_KEYS[k]!;
         if (next === 'xy' && !xyReady) return;
+        if (next === 'fft' && !hasAxes) return;
         e.preventDefault();
         selectViewRef.current(next);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [help, openPicker, showCapture, capture, toggleOverlay, toggleCursors, mode, exportSource, copyPlot, cropVisible, xyReady]);
+  }, [help, openPicker, showCapture, capture, toggleOverlay, toggleCursors, mode, exportSource, copyPlot, cropVisible, xyReady, hasAxes]);
 
   useEffect(() => {
     const onPaste = (e: ClipboardEvent) => {
@@ -1412,8 +1510,8 @@ export function App() {
             extracting={mode === 'single' && activeItem?.state === 'extracting'}
             view={effectiveView}
             math={math}
-            xy={xyControls}
-            fft={fftControls}
+            xy={xyReady ? xyControls : null}
+            fft={hasAxes ? fftControls : null}
             cropOpen={cropVisible}
             canCrop={mode === 'single'}
             isPhoto={captureItem.isPhoto === true}
@@ -1481,6 +1579,9 @@ export function App() {
             locale={locale}
             dark={dark}
             result={bode}
+            title={session.title}
+            zoom={bodeZoom[bodeKey] ?? 100}
+            onZoom={(z) => setBodeZoom((all) => ({ ...all, [bodeKey]: z }))}
             overrides={session.points}
             inspectedId={inspectedId}
             focusId={returnFocusId}

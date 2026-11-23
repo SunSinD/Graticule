@@ -1200,6 +1200,12 @@ input.tiny {
   padding: 8px;
 }
 
+.plot-pending {
+  margin: 0;
+  padding: 48px 16px;
+  text-align: center;
+}
+
 .paper svg {
   display: block;
   width: 100%;
@@ -1508,6 +1514,38 @@ input.tiny {
 
   .status {
     margin-top: 0;
+  }
+
+  .ch-chips .btn.chip {
+    height: 32px;
+    min-width: 44px;
+    padding: 0 10px;
+  }
+
+  .channel legend {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+
+  .channel legend .inline {
+    min-height: 32px;
+    padding-right: 4px;
+  }
+
+  .channel legend .inline input[type='checkbox'] {
+    width: 18px;
+    height: 18px;
+  }
+
+  .channel legend input.ch-label {
+    height: 32px;
+    flex: 1 1 96px;
+    width: auto;
+    max-width: 100%;
+  }
+
+  .math-row select {
+    min-height: 32px;
   }
 }
 

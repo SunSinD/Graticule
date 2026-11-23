@@ -32,9 +32,18 @@ function cellText(m: ChannelMeasurements, key: RowKey, locale: Locale): string {
   return text;
 }
 
+const SIGNED_ROWS: ReadonlySet<RowKey> = new Set(['vmax', 'vmin', 'vavg']);
+
 function mathText(math: MathTraceResult, key: RowKey, locale: Locale): string {
-  const value = metricValue(math.measurement, key);
-  return METRIC_UNITS[key] === 'V' ? formatEng(value, math.unit, locale, { sig: 3, signed: true }) : formatMetric(value, key, '', locale);
+  const m = math.measurement;
+  const value = metricValue(m, key);
+  const text =
+    METRIC_UNITS[key] === 'V'
+      ? formatEng(value, math.unit, locale, { sig: 3, signed: SIGNED_ROWS.has(key) })
+      : formatMetric(value, key, '', locale);
+  if (value === null || !Number.isFinite(value)) return text;
+  if ((key === 'rise' && m.riseLimited) || (key === 'fall' && m.fallLimited)) return `< ${text}`;
+  return text;
 }
 
 interface PhaseRow {
@@ -167,17 +176,17 @@ function XyBlock({ tx, locale, xy, name }: { tx: Dict; locale: Locale; xy: XyRes
           <>
             <div>
               <dt>{tx.hystLow}</dt>
-              <dd>{formatEng(h.lowThresholdV, 'V', locale, { sig: 3 })}</dd>
+              <dd>{formatEng(h.lowThresholdV, xy.xUnit, locale, { sig: 3 })}</dd>
             </div>
             <div>
               <dt>{tx.hystHigh}</dt>
-              <dd>{formatEng(h.highThresholdV, 'V', locale, { sig: 3 })}</dd>
+              <dd>{formatEng(h.highThresholdV, xy.xUnit, locale, { sig: 3 })}</dd>
             </div>
             <div>
               <dt>
                 {tx.hysteresis} ({tx.hystWidth.toLowerCase()})
               </dt>
-              <dd>{formatEng(h.widthV, 'V', locale, { sig: 3 })}</dd>
+              <dd>{formatEng(h.widthV, xy.xUnit, locale, { sig: 3 })}</dd>
             </div>
           </>
         )}

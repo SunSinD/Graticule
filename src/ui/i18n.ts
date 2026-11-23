@@ -507,7 +507,7 @@ export const ROW_LABELS: Readonly<Record<Locale, Readonly<Record<RowKey, string>
     period: 'Période (T)',
     freq: 'Fréquence (f)',
     duty: 'Rapport cyclique',
-    rise: 'Temps de montée',
+    rise: 'Temps de montée (10–90%)',
     fall: 'Temps de descente',
     overshoot: 'Dépassement',
   },

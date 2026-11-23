@@ -28,6 +28,7 @@ describe('four-corner deskew', () => {
       for (let x = 0; x < image.width; x++) pixel(image, x, y, [x * 40, y * 40, 0]);
     }
     expect(rectifyGrid(image, [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 4 }, { x: 0, y: 4 }])).toEqual(image);
+    expect(rectifyGrid(image, [{ x: 0, y: 0 }, { x: 6, y: 0 }, { x: 6, y: 5 }, { x: 0, y: 5 }])).toEqual(image);
     const rect = rectifyGrid(image, [{ x: 0.5, y: 0.5 }, { x: 4.5, y: 0.5 }, { x: 4.5, y: 3.5 }, { x: 0.5, y: 3.5 }]);
     expect(rect).toMatchObject({ width: 5, height: 4 });
     expect([...rect.data.slice(0, 4)]).toEqual([20, 20, 0, 255]);

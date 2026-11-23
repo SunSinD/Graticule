@@ -191,10 +191,10 @@ async function run(): Promise<void> {
       }
     }
     const result = analyzeBodeBatch(captures);
-    if (values.csv) formats.push({ extension: 'csv', text: renderBodeCsv(result) });
+    if (values.csv) formats.push({ extension: 'csv', text: renderBodeCsv(result, values.title) });
     if (values.svg) formats.push({ extension: 'svg', text: renderBodeSvg(result, svgOptions) });
     if (values.json) formats.push({ extension: 'json', text: JSON.stringify(result, null, 2) + '\n' });
-    if (table) formats.push({ extension: tableExtensions[format], text: renderBodeTable(result, format, locale) });
+    if (table) formats.push({ extension: tableExtensions[format], text: renderBodeTable(result, format, locale, values.title) });
   } else {
     const input = positionals[comparing ? 1 : 0]!;
     inputs.push(input);
@@ -211,7 +211,7 @@ async function run(): Promise<void> {
         [key, csvNumber(value), csvNumber(comparison.aligned[key as keyof typeof comparison.aligned])]);
       const head = locale === 'fr' ? ['Mesure', 'Sans alignement', 'Aligné'] : ['Measurement', 'Unaligned', 'Aligned'];
       if (table) formats.push({ extension: tableExtensions[format], text: renderTables([{
-        caption: `${comparison.channel} / ${comparison.csvColumn}`, head, rows, numericFrom: 1,
+        caption: values.title ?? `${comparison.channel} / ${comparison.csvColumn}`, head, rows, numericFrom: 1,
       }], format) });
       if (values.csv) formats.push({ extension: 'csv', text: [['metric', 'unaligned', 'aligned'], ...rows].map(row => row.join(',')).join('\n') + '\n' });
     } else {

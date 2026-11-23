@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, describe, expect, test } from 'vitest';
+import { version } from '../../package.json';
 import { sample } from './fixtures.js';
 
 const root = mkdtempSync(join(tmpdir(), 'graticule-cli-'));
@@ -22,7 +23,7 @@ describe('command line', () => {
   test('writes the --title argument immediately after the filename in waveform CSV', () => {
     const result = cli(input, '--csv', '--title', 'Bench capture');
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.split('\n').slice(0, 3)).toEqual(['# Graticule v2.0.0', '# file: capture.png', '# title: Bench capture']);
+    expect(result.stdout.split('\n').slice(0, 3)).toEqual([`# Graticule v${version}`, '# file: capture.png', '# title: Bench capture']);
   });
 
   test('exports LaTeX and dark SVG and creates nested output directories', () => {
@@ -102,6 +103,21 @@ describe('command line', () => {
     expect(collision.stderr).toContain('Output would overwrite an input file');
   }, 15_000);
 
+  test('uses custom titles in Bode CSV and Bode and Compare LaTeX captions', () => {
+    const captures = join(root, 'sweep');
+    mkdirSync(captures);
+    writeFileSync(join(captures, '1kHz.png'), sample('sweep_04.png'));
+    const sweep = cli('--bode', captures, '--csv', '--format', 'latex', '--title', 'Sweep & gain', '--out', captures);
+    expect(sweep.status, sweep.stderr).toBe(0);
+    expect(readFileSync(join(captures, 'bode.csv'), 'utf8')).toContain('# title: Sweep & gain\n');
+    expect(readFileSync(join(captures, 'bode.tex'), 'utf8')).toContain('\\caption{Sweep \\& gain}');
+    const scope = join(root, 'titled-reference.csv');
+    writeFileSync(scope, 'Time (s),C2\n-0.003,1\n0.003,1\n');
+    const comparison = cli('compare', input, scope, '--format', 'latex', '--title', 'Scope_2');
+    expect(comparison.status, comparison.stderr).toBe(0);
+    expect(comparison.stdout).toContain('\\caption{Scope\\_2}');
+  }, 15_000);
+
   test.each([
     ['--theme', 'blue', /--theme/], ['--format', 'pdf', /--format/], ['--profile', 'unlisted', /Unknown profile/],
     ['--vdiv', 'C5=1V', /--vdiv/], ['--sec-per-div', '2mV', /--sec-per-div/],
@@ -112,6 +128,7 @@ describe('command line', () => {
     ['--hdivs', '0', /--hdivs/], ['--vdivs', '1.5', /--vdivs/],
     ['--offset', 'C1=2ms', /--offset/], ['--trigger-offset', '2mV', /--trigger-offset/],
     ['--offset', 'C1=2V /DIV', /--offset/], ['--trigger-offset', '2ms/div', /--trigger-offset/],
+    ['--trigger-offset', '1e30s', /[Tt]rigger offset.*distinct timestamps/],
     ['--xy', 'C1', /--xy/], ['--fft', 'M', /Axis M requires/],
   ] as const)('rejects invalid %s input', (flag, value, message) => {
     const result = cli(input, flag, value);

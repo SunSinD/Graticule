@@ -2,7 +2,7 @@ import type { ChannelId, ExtractionOverrides, ExtractionResult, Locale, MathConf
 import type { Dict } from '../i18n';
 import type { ChannelLabels } from '../history';
 import { ScaleInput } from './ScaleInput';
-import { useRef, useState } from 'react';
+import { useState } from 'react';
 
 export type ProfileChoice = ProfileId | 'auto';
 
@@ -87,13 +87,7 @@ export function mathAutoLabel(config: Pick<MathConfig, 'a' | 'b' | 'op'>): strin
 
 function LabelInput({ id, label, placeholder, value, onCommit }: { id: string; label: string; placeholder: string; value: string; onCommit: (v: string) => void }) {
   const [draft, setDraft] = useState<string | null>(null);
-  const skip = useRef(false);
   const commit = (): void => {
-    if (skip.current) {
-      skip.current = false;
-      setDraft(null);
-      return;
-    }
     if (draft === null) return;
     const next = draft.trim().slice(0, 24);
     setDraft(null);
@@ -118,9 +112,7 @@ function LabelInput({ id, label, placeholder, value, onCommit }: { id: string; l
         } else if (e.key === 'Escape') {
           e.preventDefault();
           e.stopPropagation();
-          skip.current = true;
-          setDraft(null);
-          e.currentTarget.blur();
+          setDraft(value);
         }
       }}
     />
@@ -165,7 +157,7 @@ export function ScaleControls({ tx, locale, result, overrides, disabled, labels,
       <div className="section-head">
         <h2>{tx.channels}</h2>
         {(inactive.length > 0 || canAddMath) && (
-          <div className="chips">
+          <div className="chips ch-chips">
             {canAddMath && math && (
               <button
                 type="button"
@@ -261,6 +253,12 @@ interface MathCardProps {
 
 function MathCard({ tx, locale, field, config, sources, disabled }: MathCardProps) {
   const set = (patch: Partial<MathConfig>): void => field.onChange({ ...config, ...patch });
+  const pick = (side: 'a' | 'b', ch: ChannelId): void => {
+    const other = side === 'a' ? 'b' : 'a';
+    if (ch === config[side]) return;
+    if (ch === config[other]) field.onChange({ ...config, a: config.b, b: config.a });
+    else set({ [side]: ch });
+  };
   const options = (current: ChannelId) => (sources.includes(current) ? sources : [current, ...sources]);
   const unit = config.op === 'mul' ? 'V²' : 'V';
   return (
@@ -282,7 +280,7 @@ function MathCard({ tx, locale, field, config, sources, disabled }: MathCardProp
         />
       </legend>
       <div className="math-row">
-        <select aria-label={tx.mathA} value={config.a} onChange={(e) => set({ a: e.target.value as ChannelId })}>
+        <select aria-label={tx.mathA} value={config.a} onChange={(e) => pick('a', e.target.value as ChannelId)}>
           {options(config.a).map((c) => (
             <option key={c}>{c}</option>
           ))}
@@ -294,7 +292,7 @@ function MathCard({ tx, locale, field, config, sources, disabled }: MathCardProp
             </option>
           ))}
         </select>
-        <select aria-label={tx.mathB} value={config.b} onChange={(e) => set({ b: e.target.value as ChannelId })}>
+        <select aria-label={tx.mathB} value={config.b} onChange={(e) => pick('b', e.target.value as ChannelId)}>
           {options(config.b).map((c) => (
             <option key={c}>{c}</option>
           ))}

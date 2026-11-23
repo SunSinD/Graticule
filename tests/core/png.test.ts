@@ -11,13 +11,14 @@ interface PngSpec {
   readonly interlace?: number;
   readonly transparency?: readonly number[];
   readonly palette?: readonly number[];
+  readonly chunkOrder?: readonly ('PLTE' | 'tRNS' | 'IDAT')[];
   readonly corruptAdler?: boolean;
   readonly padding?: readonly number[];
   readonly level?: 0 | 6;
 }
 
 function png({ depth, color, scanlines, width = 2, height = 1, interlace = 0, transparency, palette, corruptAdler,
-  padding = [], level = 6 }: PngSpec): Uint8Array {
+  padding = [], level = 6, chunkOrder = ['PLTE', 'tRNS', 'IDAT'] }: PngSpec): Uint8Array {
   function chunk(type: string, data: Uint8Array): Uint8Array {
     const bytes = new Uint8Array(data.length + 12);
     const view = new DataView(bytes.buffer);
@@ -40,11 +41,14 @@ function png({ depth, color, scanlines, width = 2, height = 1, interlace = 0, tr
   header[12] = interlace;
   const compressed = zlibSync(Uint8Array.from(scanlines), { level });
   if (corruptAdler) compressed[compressed.length - 1] = compressed[compressed.length - 1]! ^ 1;
+  const parts = {
+    PLTE: palette ? [chunk('PLTE', Uint8Array.from(palette))] : [],
+    tRNS: transparency ? [chunk('tRNS', Uint8Array.from(transparency))] : [],
+    IDAT: [chunk('IDAT', compressed.subarray(0, -2)), chunk('IDAT', Uint8Array.of(...compressed.subarray(-2), ...padding))],
+  };
   const chunks = [
     Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10), chunk('IHDR', header),
-    ...(palette ? [chunk('PLTE', Uint8Array.from(palette))] : []),
-    ...(transparency ? [chunk('tRNS', Uint8Array.from(transparency))] : []),
-    chunk('IDAT', compressed.subarray(0, -2)), chunk('IDAT', Uint8Array.of(...compressed.subarray(-2), ...padding)),
+    ...chunkOrder.flatMap(type => parts[type]),
     chunk('IEND', new Uint8Array()),
   ];
   const bytes = new Uint8Array(chunks.reduce((len, part) => len + part.length, 0));
@@ -111,6 +115,16 @@ function adam7(width: number, height: number, color: number, depth: number) {
 }
 
 describe('PNG decode', () => {
+  test.each([
+    ['duplicate PLTE', ['PLTE', 'PLTE', 'tRNS', 'IDAT'], /PLTE/],
+    ['PLTE after IDAT', ['IDAT', 'PLTE'], /PLTE/],
+    ['tRNS before indexed PLTE', ['tRNS', 'PLTE', 'IDAT'], /tRNS/],
+    ['tRNS after IDAT', ['PLTE', 'IDAT', 'tRNS'], /tRNS/],
+  ] as const)('rejects %s even with valid chunk checksums', (_, chunkOrder, error) => {
+    const bytes = png({ depth: 8, color: 3, scanlines: [0, 0, 0], palette: [1, 2, 3], transparency: [128], chunkOrder });
+    expect(() => decodePng(bytes)).toThrow(error);
+  });
+
   test('checks the zlib Adler-32 trailer across IDAT chunks with valid PNG CRCs', () => {
     const spec = { depth: 8, color: 0, scanlines: [0, 12, 19] };
     expect([...decodePng(png(spec)).data]).toEqual([12, 12, 12, 255, 19, 19, 19, 255]);

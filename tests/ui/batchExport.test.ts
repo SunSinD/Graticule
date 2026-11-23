@@ -1,5 +1,6 @@
 import { strFromU8, unzipSync } from 'fflate';
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { computeMathTrace } from '../../src/core/math.js';
 import { analyzePngBytes } from '../../src/core/pipeline.js';
 import { buildBatchReportZip, svgToPngBytes } from '../../src/ui/batchExport.js';
 import type { BatchExportEntry } from '../../src/ui/batchExport.js';
@@ -101,7 +102,8 @@ describe('buildBatchReportZip', () => {
     expect(html).toContain('&lt;script&gt;&amp;&quot; %_#$ `input`');
     expect(html).not.toContain('<script>');
     expect(markdown).toContain('\\<script\\>&#38;" %\\_\\#&#36; \\[capture\\]');
-    expect(markdown).toContain('&#96;input&#96;');
+    expect(markdown).toContain('\\`input\\`');
+    expect(markdown).not.toContain('&amp;#');
     expect(markdown).not.toContain('<script>');
     const escaped = '\\textless{}script\\textgreater{}\\&" \\%\\_\\#\\$';
     expect(latex).toContain('\\subsection{' + escaped + ' [capture]}');
@@ -127,6 +129,50 @@ describe('buildBatchReportZip', () => {
     await expect(buildBatchReportZip([capture('1.png'), capture('2.png')], { locale: 'en', onProgress, renderPng }))
       .rejects.toBe(error);
     expect(onProgress.mock.calls).toEqual([[1, 2]]);
+  });
+
+  test('includes the Math trace in the plot, CSV and every report table', async () => {
+    const math = computeMathTrace(result, { op: 'sub', a: 'C1', b: 'C2', label: 'Vdiff' });
+    expect(math).not.toBeNull();
+    const entry = { ...capture('cap.png', 'With math'), math, pngBytes };
+    const files = unzipSync(await buildBatchReportZip([entry], { locale: 'en' }));
+
+    expect(read(files, 'captures/With-math.svg')).toContain('Vdiff (V)');
+    const csv = read(files, 'captures/With-math.csv');
+    expect(csv).toContain('# M: Vdiff C1 sub C2');
+    expect(csv).toMatch(/^.*,m_v,m_status$/m);
+    expect(read(files, 'report.md')).toContain('Vdiff (V)');
+    expect(read(files, 'report.tex')).toContain('Vdiff (V)');
+    expect(read(files, 'report.html')).toContain('Vdiff (V)');
+
+    const plain = unzipSync(await buildBatchReportZip([{ ...entry, math: null }], { locale: 'en' }));
+    expect(read(plain, 'captures/With-math.csv')).not.toContain('# M:');
+    expect(read(plain, 'report.md')).not.toContain('Vdiff');
+  });
+
+  test('explains a digital only capture in every report and leaves normal captures alone', async () => {
+    const digital = {
+      ...result,
+      traces: [],
+      detection: { ...result.detection, digitalOnly: true, warnings: ['digital_only'] },
+    };
+    const entries = [{ ...capture('logic.png'), result: digital, pngBytes }, { ...capture('sine.png'), pngBytes }];
+    const en = unzipSync(await buildBatchReportZip(entries, { locale: 'en' }));
+    const note = 'Note: this capture has no analog traces, so the plot and table are empty. Only digital channels were found.';
+
+    expect(read(en, 'report.md')).toContain('> ' + note);
+    expect(read(en, 'report.tex')).toContain('\\textit{' + note + '}');
+    expect(read(en, 'report.html')).toContain('<p class="note">' + note + '</p>');
+    for (const name of ['report.md', 'report.tex', 'report.html']) {
+      expect(read(en, name).split('no analog traces')).toHaveLength(2);
+    }
+
+    const fr = unzipSync(await buildBatchReportZip(entries, { locale: 'fr' }));
+    const noteFr = 'aucune trace analogique dans cette capture, le graphique et le tableau sont donc vides. '
+      + 'Seulement des canaux numériques trouvés.';
+    expect(read(fr, 'report.md')).toContain(noteFr);
+    expect(read(fr, 'report.tex')).toContain(noteFr);
+    expect(read(fr, 'report.html')).toContain(noteFr);
   });
 
   test('creates a readable empty report without a progress event', async () => {

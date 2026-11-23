@@ -19,9 +19,8 @@ const versions = {
   source: srcVersion,
 };
 
-const mismatches = Object.entries(versions).filter(([, version]) => version !== '2.0.0');
-if (mismatches.length > 0) {
-  throw new Error(`Version mismatch: ${mismatches.map(([name, version]) => `${name}=${version ?? 'missing'}`).join(', ')} (expected 2.0.0)`);
+if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(String(versions.packageJson ?? ''))) {
+  throw new Error(`Invalid package.json version: ${versions.packageJson ?? 'missing'}`);
 }
 
 if (versions.packageJson !== versions.packageLock || versions.packageLock !== versions.packageLockRoot || versions.packageLockRoot !== versions.source) {

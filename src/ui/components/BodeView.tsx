@@ -15,6 +15,10 @@ interface Props {
   readonly locale: Locale;
   readonly dark: boolean;
   readonly result: BodeResult;
+  readonly title?: string;
+  /** Controlled zoom in percent, so it survives leaving the view to inspect a capture. */
+  readonly zoom?: number;
+  readonly onZoom?: (zoom: number) => void;
   readonly overrides: Readonly<Record<string, BodePointOverride>>;
   readonly inspectedId: string | null;
   readonly focusId?: string | null;
@@ -34,7 +38,6 @@ interface CellProps {
 
 function EditCell({ label, display, allowNegative, onCommit }: CellProps) {
   const [draft, setDraft] = useState<string | null>(null);
-  const skip = useRef(false);
   const shown = display === '—' ? '' : display;
   const push = (text: string): void => {
     if (text.trim() === shown.trim()) return;
@@ -58,8 +61,7 @@ function EditCell({ label, display, allowNegative, onCommit }: CellProps) {
       onFocus={() => setDraft(shown)}
       onChange={(e) => setDraft(e.target.value)}
       onBlur={() => {
-        if (!skip.current && draft !== null) push(draft);
-        skip.current = false;
+        if (draft !== null) push(draft);
         setDraft(null);
       }}
       onKeyDown={(e) => {
@@ -67,11 +69,10 @@ function EditCell({ label, display, allowNegative, onCommit }: CellProps) {
           e.preventDefault();
           e.currentTarget.blur();
         } else if (e.key === 'Escape') {
+          // Reverts but keeps focus, so Tab still moves to the next cell.
           e.preventDefault();
           e.stopPropagation();
-          skip.current = true;
-          setDraft(null);
-          e.currentTarget.blur();
+          setDraft(shown);
         }
       }}
     />
@@ -84,9 +85,15 @@ function plainNumber(text: string): string {
 
 export function BodeView(props: Props) {
   const { tx, locale, dark, result, overrides, inspectedId, focusId, onFocused, onEdit, onExclude, onInspect, onReset } = props;
-  const svg = useMemo(() => renderBodeSvg(result, { locale, title: 'Bode', theme: dark ? 'dark' : 'light' }), [result, locale, dark]);
+  const plotTitle = props.title?.trim() || 'Bode';
+  const svg = useMemo(
+    () => renderBodeSvg(result, { locale, title: plotTitle, theme: dark ? 'dark' : 'light' }),
+    [result, locale, dark, plotTitle],
+  );
   const hasEdits = Object.keys(overrides).length > 0;
-  const [zoom, setZoom] = useState(100);
+  const [ownZoom, setOwnZoom] = useState(100);
+  const zoom = props.zoom ?? ownZoom;
+  const setZoom = props.onZoom ?? setOwnZoom;
   const viewport = useRef<HTMLDivElement>(null);
   useCtrlWheelZoom(viewport, zoom, ZOOM_MAX, setZoom);
   const table = useRef<HTMLTableSectionElement>(null);

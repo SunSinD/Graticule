@@ -72,16 +72,11 @@ function findEdges(samples: readonly TraceSample[], threshold: number, band: num
   return edges;
 }
 
-function inspect(samples: readonly TraceSample[], rawEdges: readonly Edge[], px: number, threshold: number,
-  dt: number, options: Pick<Required<UartOptions>, 'dataBits' | 'parity' | 'stopBits' | 'idleHigh'>) {
+function inspect(samples: readonly TraceSample[], edges: Edge[], px: number, threshold: number,
+  dt: number, options: Pick<Required<UartOptions>, 'dataBits' | 'parity' | 'stopBits' | 'idleHigh'>, firstEdge: number) {
   const { dataBits, parity, stopBits, idleHigh } = options;
   const parityBits = Number(parity !== 'none'), length = 1 + dataBits + parityBits + stopBits;
   const frames: UartFrame[] = [];
-  const edges: Edge[] = [];
-  for (const edge of rawEdges) {
-    if (edges.length && edge.col - edges.at(-1)!.col < px * 0.27) edges.pop();
-    else edges.push(edge);
-  }
   const read = (at: number) => {
     const cols = [...new Set([0.33, 0.5, 0.67].map(f => Math.round(at + f * px)))];
     let ones = 0, zeroes = 0;
@@ -94,8 +89,10 @@ function inspect(samples: readonly TraceSample[], rawEdges: readonly Edge[], px:
     return { bit: ones === zeroes ? null : Number(ones > zeroes), uncertain: Math.max(ones, zeroes) !== cols.length };
   };
   let alignment = 0, included = 0, good = 0, bad = 0, single = 0, short = 0;
+  let croppedStop = false;
   let nextCol = 0;
-  for (const [i, edge] of edges.entries()) {
+  for (let i = firstEdge; i < edges.length; i++) {
+    const edge = edges[i]!;
     if (edge.bit) continue;
     let start = edge.col;
     const previousEnd = nextCol + 0.25 * px;
@@ -111,8 +108,9 @@ function inspect(samples: readonly TraceSample[], rawEdges: readonly Edge[], px:
         }
       }
     }
-    if (start < nextCol || start + (length - 0.35) * px > samples.length - 0.5) continue;
-    if (i && start - edges[i - 1]!.col < px * 0.62) continue;
+    if (start < nextCol || start + (length - stopBits - 0.35) * px > samples.length - 0.5) continue;
+    const previous = edges[i - 1];
+    if (previous && start - (previous.gap?.[0] ?? previous.col) < px * 0.62) continue;
     const startBit = read(start);
     const nextBoundary = previousEnd + length * px;
     const boundaryStatus = samples[Math.ceil(previousEnd)]?.status;
@@ -143,12 +141,19 @@ function inspect(samples: readonly TraceSample[], rawEdges: readonly Edge[], px:
     const parityBit = bits[dataBits + 1]!.bit;
     const parityError = parity !== 'none' && byte !== null && parityBit !== null
       && (sum + parityBit) % 2 !== Number(parity === 'odd');
-    const framingError = bits.slice(-stopBits).some(bit => bit.bit === 0);
-    const lastCol = Math.ceil(start + length * px);
-    const uncertain = Boolean(edge.gap) || bits.some(bit => bit.uncertain)
+    const stops = bits.slice(-stopBits);
+    const stopHigh = stops.every(bit => bit.bit === 1);
+    const end = start + length * px;
+    const truncated = end > samples.length - 0.5 + 1e-9;
+    const framingError = truncated || !stopHigh;
+    const lastCol = Math.ceil(end);
+    const uncertain = truncated || Boolean(edge.gap) || bits.some(bit => bit.uncertain)
       || samples.slice(Math.ceil(start), lastCol).some(sample => !valid(sample));
-    if (!framingError && !parityError && byte !== null && bits.slice(-stopBits).every(bit => bit.bit === 1)) good++;
-    else bad++;
+    if (!parityError && byte !== null && stopHigh) {
+      if (truncated) croppedStop = true;
+      else good++;
+    }
+    if (framingError || parityError || byte === null) bad++;
     for (let j = i + 1; j < edges.length && edges[j]!.col < start + (length - 0.25) * px; j++) {
       const phase = (edges[j]!.col - start) / px;
       const gap = (edges[j]!.col - edges[j - 1]!.col) / px;
@@ -164,13 +169,40 @@ function inspect(samples: readonly TraceSample[], rawEdges: readonly Edge[], px:
       ascii: byte === null ? '' : byte >= 32 && byte <= 126 ? String.fromCharCode(byte) : '.',
       framingError, parityError, uncertain,
     });
-    nextCol = start + (length - 0.25) * px;
+    nextCol = end - 0.25 * px;
+    const stopMasked = stops.some(bit => bit.bit === null) && samples.slice(Math.ceil(end - stopBits * px), lastCol)
+      .some(sample => sample.status === 'masked_cursor' || sample.status === 'masked_overlay');
+    // A hidden stop pulse can leave both sides of the next start at the same level.
+    if (stopMasked && read(end).bit === 0) {
+      const insertAt = edges.findIndex((next, j) => j > i && next.col >= nextCol);
+      const next = edges[insertAt];
+      if (next && next.col > end && next.col < end + (length - 0.25) * px
+          && (next.col > end + 0.25 * px || next.bit === 1)
+          && !edges.slice(i + 1, insertAt).some(next => next.gap && !next.bit && next.gap[1] >= end)) {
+        edges.splice(insertAt, 0, { col: end, bit: 0 });
+      }
+    }
   }
   const fraction = included / Math.max(1, edges.length - 1);
   const error = alignment / Math.max(1, included);
-  const score = good > 0 ? 4 * good / frames.length + 2.5 * fraction + 2 * (single / Math.max(1, included))
-    - 7 * error - 3 * short / Math.max(1, included) + Math.min(1, good / 8) - 0.35 * bad : -Infinity;
-  return { frames, score };
+  // Observed stop samples still support a rate when the capture ends inside a stop bit.
+  const frameWeight = good + (croppedStop ? 0.75 : 0);
+  const score = frameWeight > 0 ? 4 * frameWeight / frames.length + 2.5 * fraction + 2 * single / Math.max(1, included)
+    - 7 * error - 3 * short / Math.max(1, included) + 2 * Math.log2(1 + frameWeight) - 0.35 * bad : -Infinity;
+  return { frames, score, good };
+}
+
+function pulseAlignment(edges: readonly Edge[], px: number, frameBits: number): number {
+  let widths = 0, aligned = 0;
+  const tolerance = Math.max(0.18, 1.35 / px);
+  for (let i = 1; i < edges.length; i++) {
+    const before = edges[i - 1]!, after = edges[i]!;
+    const bits = (after.col - before.col) / px;
+    if (before.gap || after.gap || (before.bit === 1 && bits >= frameBits)) continue;
+    widths++;
+    if (Math.round(bits) >= 1 && Math.abs(bits - Math.round(bits)) <= tolerance) aligned++;
+  }
+  return widths ? aligned / widths : 1;
 }
 
 export function decodeUart(result: ExtractionResult, options: UartOptions): UartDecodeResult {
@@ -213,9 +245,38 @@ export function decodeUart(result: ExtractionResult, options: UartOptions): Uart
   }
   const band = Math.min(swing * 0.11, (threshold - lo) / 2, (hi - threshold) / 2);
   const edges = findEdges(samples, threshold, band, idleHigh);
+  const frameBits = 1 + dataBits + Number(parity !== 'none') + stopBits;
   const trial = (rate: number) => {
     const px = 1 / (rate * dt);
-    return { rate, px, ...inspect(samples, edges, px, threshold, dt, settings) };
+    const alignment = manual === null ? pulseAlignment(edges, px, frameBits) : 1;
+    const filtered: Edge[] = [];
+    for (const edge of edges) {
+      if (filtered.length && edge.col - filtered.at(-1)!.col < px * 0.27) filtered.pop();
+      else filtered.push(edge);
+    }
+    let best = inspect(samples, [...filtered], px, threshold, dt, settings, 0);
+    const first = filtered.findIndex(edge => !edge.bit);
+    const beginsLow = samples[0] && valid(samples[0]) && (samples[0].voltage >= threshold) !== idleHigh;
+    let partial = Boolean(beginsLow);
+    if (first >= 0 && (beginsLow || filtered[first]!.col < 1.25 * px)) {
+      for (let i = first + 1; i < filtered.length && filtered[i]!.col < (frameBits - 0.25) * px; i++) {
+        if (filtered[i]!.bit || filtered[i]!.gap) continue;
+        const candidate = inspect(samples, [...filtered], px, threshold, dt, settings, i);
+        if (candidate.good > best.good) {
+          best = candidate;
+          partial = true;
+        }
+      }
+    }
+    const initialSpan = (best.frames[0]?.startSec ?? Infinity) - samples[0]!.timeSec;
+    if (partial && initialSpan > 0 && initialSpan < frameBits * px * dt) {
+      best.frames.unshift({
+        startSec: samples[0]!.timeSec, endSec: best.frames[0]!.startSec,
+        byte: null, hex: '', ascii: '', framingError: true, parityError: false, uncertain: true,
+      });
+    }
+    const score = alignment >= 0.75 ? best.score - 4 * (1 - alignment) : -Infinity;
+    return { rate, px, frames: best.frames, score };
   };
   const best = manual === null
     ? STANDARD_UART_BAUDS.filter(rate => 1 / (rate * dt) >= 2).map(trial).sort((a, b) => b.score - a.score)[0]

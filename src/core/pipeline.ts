@@ -1,4 +1,4 @@
-import { analyzeBodeBatch as fitBatch } from './bode.js';
+import { analyzeBodeBatch as fitBatch, frequenciesDiffer } from './bode.js';
 import type { BodeOverrides } from './bode.js';
 import { rectifyGrid } from './deskew.js';
 import { extractTraces, makeTimebase } from './extract.js';
@@ -6,8 +6,8 @@ import { buildOverlayMask } from './mask.js';
 import { compareScope, measureChannel, measurePhase, scopeFrequency } from './measurements.js';
 import { readScopeMetadata } from './ocr.js';
 import { decodePng } from './png.js';
-import { detectProfile, getNativeProfile } from './profiles.js';
-import type { BodeGateOptions, BodeRejectedCapture, BodeResult, ExtractionOverrides, ExtractionResult, RgbaImage } from './types.js';
+import { detectProfile, getNativeProfile, invertTraceColors } from './profiles.js';
+import type { BodeGateOptions, BodeRejectedCapture, BodeResult, ChannelId, ExtractionOverrides, ExtractionResult, RgbaImage } from './types.js';
 
 export { recomputeBodeResult } from './bode.js';
 export type { BodeOverrides } from './bode.js';
@@ -36,15 +36,22 @@ export function analyzeCapture(source: RgbaImage, fileName: string, overrides: E
   const timebase = makeTimebase(metadata, overrides, detection.grid.hDivs);
   const { scopeReadings, topFrequencyHz, topFrequencyRaw } = metadata;
   const mask = buildOverlayMask(image, detection.grid, detection.profileId, metadata.digital);
-  const { traces, warnings } = extractTraces(image, detection, metadata, mask, timebase, overrides);
+  const sourceProfile = quad && detection.grid.inverted
+    ? nativeGrid ? overrides.profileId : detectProfile(source).profileId : undefined;
+  const inverted = sourceProfile === undefined ? undefined : invertTraceColors(source, sourceProfile, true);
+  const { traces, warnings } = extractTraces(image, detection, metadata, mask, timebase, overrides, inverted);
   const measurements = traces.map(trace => measureChannel(trace, detection.grid.pxPerVDiv));
-  const frequency = (channel: (typeof traces)[number]['channel']) => timebase.source === 'default' ? null
+  const frequency = (channel: ChannelId) => timebase.source === 'default' ? null
     : scopeFrequency(scopeReadings, channel, topFrequencyHz, topFrequencyRaw)
       ?? measurements.find(measurement => measurement.channel === channel)?.frequencyHz ?? null;
-  const phaseC1ToC2 = measurePhase(traces, frequency('C1'));
+  const phaseFor = (from: ChannelId, to: ChannelId) => {
+    const fromFrequency = frequency(from), toFrequency = frequency(to);
+    return frequenciesDiffer(fromFrequency, toFrequency) ? null : measurePhase(traces, fromFrequency ?? toFrequency, from, to);
+  };
+  const phaseC1ToC2 = phaseFor('C1', 'C2');
   const [first, second] = traces.filter(trace => trace.settings.enabled);
   const phase = first && second ? first.channel === 'C1' && second.channel === 'C2' ? phaseC1ToC2
-    : measurePhase(traces, frequency(first.channel) ?? frequency(second.channel), first.channel, second.channel) : null;
+    : phaseFor(first.channel, second.channel) : null;
   return {
     fileName, imageWidth: image.width, imageHeight: image.height,
     ...(quad && { sourceWidth: source.width, sourceHeight: source.height, sourceQuad: quad }),

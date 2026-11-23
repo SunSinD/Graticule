@@ -3,8 +3,9 @@ import { GRATICULE_VERSION, csvNumber, spreadsheetText } from './format.js';
 
 const EOL = '\n';
 
-function comment(text: string): string {
-  return spreadsheetText(text).replace(/[\r\n]+/g, ' ').trim();
+export function csvComment(text: string): string {
+  return spreadsheetText(text).replace(/,(?=[^\S\t\r]*(?:"[^\S\t\r]*)?[=+\-@\t\r])/g, ",'")
+    .replace(/[\r\n]+/g, ' ').trim();
 }
 
 export function csvField(text: string): string {
@@ -36,9 +37,9 @@ export function renderWaveformCsv(result: ExtractionResult, channelLabels?: Part
   const grid = result.detection.grid;
   const lines: string[] = [
     `# Graticule v${GRATICULE_VERSION}`,
-    `# file: ${comment(result.fileName)}`,
-    ...(title?.trim() ? [`# title: ${comment(title)}`] : []),
-    `# profile: ${comment(result.detection.profileName)} (${result.detection.profileId})`,
+    `# file: ${csvComment(result.fileName)}`,
+    ...(title?.trim() ? [`# title: ${csvComment(title)}`] : []),
+    `# profile: ${csvComment(result.detection.profileName)} (${result.detection.profileId})`,
     `# grid: ${grid.hDivs} x ${grid.vDivs} div, layout ${grid.layoutVariant}`,
     `# time_per_div_s: ${csvNumber(tb.secPerDiv)} (${tb.source})`,
     `# trigger_offset_s: ${csvNumber(tb.triggerOffsetSec)}`,
@@ -47,7 +48,7 @@ export function renderWaveformCsv(result: ExtractionResult, channelLabels?: Part
   for (const t of traces) {
     lines.push(channelComment(t));
     const label = channelLabels?.[t.channel];
-    if (label?.trim()) lines.push(`# ${t.channel} label: ${comment(label)}`);
+    if (label?.trim()) lines.push(`# ${t.channel} label: ${csvComment(label)}`);
     const m = result.measurements.find(measurement => measurement.channel === t.channel);
     if (m) lines.push([
       `# ${t.channel} edge measurements:`,
@@ -58,7 +59,7 @@ export function renderWaveformCsv(result: ExtractionResult, channelLabels?: Part
       `fall_limited=${m.fallLimited ?? false}`,
     ].join(' '));
   }
-  if (math) lines.push(`# M: ${comment(math.label)} ${math.config.a} ${math.config.op} ${math.config.b} unit=${math.unit}`
+  if (math) lines.push(`# M: ${csvComment(math.label)} ${math.config.a} ${math.config.op} ${math.config.b} unit=${math.unit}`
     + ` scale_per_div=${csvNumber(math.voltsPerDiv)} offset=${csvNumber(math.offsetVolts)} warnings=${math.warnings.join('|')}`);
   lines.push('# a blank voltage cell means no trustworthy data at that time, see the status column');
 
@@ -116,9 +117,10 @@ export function sortBodePoints(points: readonly BodePoint[]): BodePoint[] {
     .map((x) => x.p);
 }
 
-export function renderBodeCsv(result: BodeResult): string {
+export function renderBodeCsv(result: BodeResult, title?: string): string {
   const lines: string[] = [
     `# Graticule v${GRATICULE_VERSION}`,
+    ...(title?.trim() ? [`# title: ${csvComment(title)}`] : []),
     `# input_channel: ${result.inputChannel}`,
     `# output_channel: ${result.outputChannel}`,
     `# passband_gain_db: ${csvNumber(result.passbandGainDb, 6)}`,

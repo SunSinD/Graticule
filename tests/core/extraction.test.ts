@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'vitest';
+import { compareWithScopeCsv, parseScopeCsv } from '../../src/core/compare.js';
 import { analyzeCapture, analyzePngBytes } from '../../src/core/pipeline.js';
 import { readScopeMetadata } from '../../src/core/ocr.js';
 import { decodePng } from '../../src/core/png.js';
 import { detectProfile } from '../../src/core/profiles.js';
 import type { ChannelId, ChannelTrace, ExtractionOverrides, RgbaImage } from '../../src/core/types.js';
+import { decodeUart } from '../../src/core/uart.js';
 import { bitmap, magenta, pixel, sample, yellow } from './fixtures.js';
 import type { Rgb } from './fixtures.js';
 
@@ -164,6 +166,130 @@ describe('column extraction and waveform measurements', () => {
   });
 });
 
+describe('UART capture boundaries and auto baud', () => {
+  const px = 12, baud = 9600;
+  function capture(wave: (col: number) => number, count: number, maskedThrough?: number) {
+    const image = bitmap(count, 100);
+    for (let x = 0; x < count; x++) pixel(image, x, wave(x) ? 25 : 75, yellow);
+    const result = analyzeCapture(image, 'uart.png', {
+      secPerDiv: (count - 1) / (10 * px * baud), profileId: 'universal-fallback',
+      manualCrop: { x: 0, y: 0, width: count - 1, height: 99 },
+    });
+    if (maskedThrough === undefined) return result;
+    const trace = result.traces[0]!;
+    return { ...result, traces: [{ ...trace, samples: trace.samples.map(sample => sample.col >= 143 && sample.col <= maskedThrough
+      ? { ...sample, status: 'masked_cursor' as const, voltage: null, yPx: null } : sample) }] };
+  }
+
+  function bytes(values: readonly number[], cropLeft = 0, end = (6 + 10 * values.length) * px, maskedThrough?: number) {
+    const bits = [1, 1, 1, ...values.flatMap(byte =>
+      [0, ...Array.from({ length: 8 }, (_, bit) => (byte >> bit) & 1), 1]), 1, 1, 1];
+    return capture(col => bits[Math.floor((col + cropLeft) / px)]!, end - cropLeft, maskedThrough);
+  }
+
+  test('chooses 9600 baud for consecutive 80 bytes followed by FF', () => {
+    const uart = decodeUart(bytes([0x80, 0x80, 0x80, 0x80, 0xff]), { channel: 'C1' });
+    expect(uart.baud).toBe(9600);
+    expect(uart.frames.map(frame => frame.hex)).toEqual(['80', '80', '80', '80', 'FF']);
+  });
+
+  test('rejects a square wave with a half cycle of 5.25 bit periods', () => {
+    const halfCycle = 5.25 * px;
+    const result = capture(col => 1 - (Math.floor(col / halfCycle) % 2), 20 * halfCycle);
+    expect(decodeUart(result, { channel: 'C1' })).toMatchObject({ reason: 'baud_unresolved', frames: [] });
+  });
+
+  test.each([9600, 'auto'] as const)('resynchronizes after an obscured stop at baud %s', rate => {
+    for (const maskedThrough of [154, 155]) {
+      const uart = decodeUart(bytes([0x5a, 0xa5, 0xff], 0, undefined, maskedThrough), { channel: 'C1', baud: rate });
+      expect(uart.frames).toMatchObject([
+        { hex: '5A', framingError: true, uncertain: true },
+        { hex: 'A5', framingError: false, uncertain: false },
+        { hex: 'FF', framingError: false, uncertain: false },
+      ]);
+    }
+  });
+
+  test.each([9600, 'auto'] as const)('resynchronizes after a frame cropped on the left at baud %s', rate => {
+    const uart = decodeUart(bytes([0xa5, 0x5a, 0x55], 48), { channel: 'C1', baud: rate });
+    expect(uart.frames).toMatchObject([
+      { byte: null, framingError: true, uncertain: true },
+      { hex: '5A', framingError: false, uncertain: false },
+      { hex: '55', framingError: false, uncertain: false },
+    ]);
+  });
+
+  test.each([9600, 'auto'] as const)('flags a right-cropped stop bit at baud %s even when its center is visible', rate => {
+    const uart = decodeUart(bytes([0x5a], 0, 153), { channel: 'C1', baud: rate });
+    expect(uart.frames).toMatchObject([{ hex: '5A', framingError: true, uncertain: true }]);
+  });
+});
+
+describe('scope CSV regression cases', () => {
+  test('requires a matching named channel by default and honors explicit column overrides', () => {
+    const image = bitmap(421, 221);
+    plot(image, yellow, () => 125);
+    const c1 = analyzeCapture(image, 'c1.png', overrides);
+    const csv = parseScopeCsv('Time (s),C2\n-1,0\n1,0');
+    expect(() => compareWithScopeCsv(c1, csv)).toThrow(/CSV is missing channel C1/);
+    expect(compareWithScopeCsv(c1, csv, { csvColumn: 'c2' })).toMatchObject({ channel: 'C1', csvColumn: 'C2' });
+    plot(image, magenta, () => 150);
+    const both = analyzeCapture(image, 'both.png', overrides);
+    expect(compareWithScopeCsv(both, csv)).toMatchObject({ channel: 'C2', csvColumn: 'C2' });
+    expect(compareWithScopeCsv(both, parseScopeCsv('x-axis,2,1\nsecond,Volt,Volt\n-1,0,1\n1,0,1')))
+      .toMatchObject({ channel: 'C1', csvColumn: '1' });
+  });
+
+  test('reads Keysight channel headers, declared units, and complementary duplicate timestamps', () => {
+    expect(parseScopeCsv('x-axis,1,2,3,4\nms,mV,uV,\u00b5V,kV\n1,,2,,4\n1,1,,3,\n2,5,6,7,8')).toMatchObject({
+      columns: ['1', '2', '3', '4'],
+      rows: [{ timeSec: 0.001, values: [0.001, 2e-6, 3e-6, 4000] }, { timeSec: 0.002, values: [0.005, 6e-6, 7e-6, 8000] }],
+    });
+  });
+
+  test.each([['ms', 1e-3], ['us', 1e-6], ['\u00b5s', 1e-6], ['ns', 1e-9]])('scales Time (%s) and CH1 (mV)', (timeUnit, scale) => {
+    expect(parseScopeCsv(`Time (${timeUnit}),CH1 (mV)\n1,2000`).rows).toEqual([{ timeSec: scale, values: [2] }]);
+  });
+
+  test('reads Tektronix samples beside metadata', () => {
+    expect(parseScopeCsv('Record Length,2,,0,1\nSample Interval,0.001,,0.001,2').rows).toEqual([
+      { timeSec: 0, values: [1] }, { timeSec: 0.001, values: [2] },
+    ]);
+  });
+
+  test('does not shift a short flat reference to discard a mismatched boundary sample', () => {
+    const image = bitmap(421, 221);
+    plot(image, yellow, col => col === 200 ? 85 : zero);
+    const result = analyzeCapture(image, 'step.png', overrides);
+    const rows = traceById(result.traces, 'C1').samples.slice(200, 203);
+    const csv = parseScopeCsv(['Time (s),C1', ...rows.map(row => `${row.timeSec},0`)].join('\n'));
+    const comparison = compareWithScopeCsv(result, csv);
+    expect(comparison.unaligned).toMatchObject({ matchedCount: 3, rmseV: expect.closeTo(1 / Math.sqrt(3), 10) });
+    expect(comparison.aligned).toBe(comparison.unaligned);
+  });
+});
+
+test('uses C2 frequency for phase when every C1 peak is obscured', () => {
+  const image = bitmap(421, 221);
+  plot(image, yellow, col => col % 80 < 4 || col % 80 > 76 ? null : 65 - 24 * Math.cos(2 * Math.PI * col / 80));
+  plot(image, magenta, col => 150 - 30 * Math.cos(2 * Math.PI * col / 80 + Math.PI / 4));
+  const result = analyzeCapture(image, 'peak-gaps.png', overrides);
+  expect(result.measurements.map(m => m.frequencyHz)).toEqual([null, expect.closeTo(1000, 4)]);
+  expect(result.phaseC1ToC2?.phaseDeg).toBeCloseTo(45, 0);
+  expect(result.phasePair).toMatchObject({ from: 'C1', to: 'C2', phaseDeg: expect.closeTo(45, 0) });
+});
+
+test('withholds phase for confirmed 1000 Hz and 1020 Hz waveforms', () => {
+  const image = bitmap(421, 221);
+  plot(image, yellow, col => 65 - 24 * Math.cos(2 * Math.PI * col / 80));
+  plot(image, magenta, col => 150 - 30 * Math.cos(2 * Math.PI * 1.02 * col / 80 + Math.PI / 4));
+  const result = analyzeCapture(image, 'different-frequencies.png', overrides);
+  expect(result.measurements[0]?.frequencyHz).toBeCloseTo(1000, 0);
+  expect(result.measurements[1]?.frequencyHz).toBeGreaterThan(1010);
+  expect(result.phaseC1ToC2).toBeNull();
+  expect(result.phasePair).toBeUndefined();
+});
+
 test('reports a signed phase for the first enabled channels when they are C1 and C3', () => {
   const image = bitmap(421, 221);
   plot(image, yellow, col => 72 - 25 * Math.cos(2 * Math.PI * col / 80));
@@ -211,6 +337,15 @@ test('keeps native yellow and magenta on the white Siglent print background', ()
     const trace = result.traces[index]!;
     expect(trace.validCount).toBe(grid.width + 1);
     for (const col of [0, 200, 400, 800]) expect(trace.samples[col]?.yPx).toBeCloseTo(fn(col), 8);
+  }
+  const { top, bottom, left, right } = grid;
+  const deskewed = analyzeCapture(image, 'deskewed-print-mode.png', {
+    manualQuad: [{ x: left, y: top }, { x: right, y: top }, { x: right, y: bottom }, { x: left, y: bottom }],
+  });
+  expect(deskewed.detection.grid.inverted).toBe(true);
+  expect(deskewed.traces.map(t => t.channel)).toEqual(['C1', 'C2']);
+  for (const [index, fn] of [a, b].entries()) {
+    for (const col of [200, 400, 800]) expect(deskewed.traces[index]?.samples[col]?.yPx).toBeCloseTo(fn(col) - top, 0);
   }
 });
 

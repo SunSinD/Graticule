@@ -3,14 +3,16 @@ import type { Zippable } from 'fflate';
 import { renderWaveformCsv } from '../core/export/csv.js';
 import { escapeXml, renderWaveformSvg } from '../core/export/svg.js';
 import { renderMeasurementsTable } from '../core/export/table.js';
-import type { ChannelId, ExtractionResult, Locale } from '../core/types.js';
+import type { ChannelId, ExtractionResult, Locale, MathTraceResult } from '../core/types.js';
 import { baseName, svgToPng } from './download.js';
+import { t } from './i18n.js';
 
 export interface BatchExportEntry {
   readonly fileName: string;
   readonly title?: string;
   readonly channelLabels?: Partial<Record<ChannelId, string>>;
   readonly result: ExtractionResult;
+  readonly math?: MathTraceResult | null;
   readonly pngBytes?: Uint8Array;
 }
 
@@ -62,6 +64,17 @@ function latexText(text: string): string {
   return inlineText(text).replace(/[\\{}&%$#_^~<>|°µμ−Δ→≤]/g, char => LATEX_CHARS[char]!);
 }
 
+/** Explains an empty plot and table when the capture has no analog trace to show. */
+export function emptyCaptureNote(result: ExtractionResult, locale: Locale): string | null {
+  const warnings = result.detection.warnings;
+  if (warnings.length === 0 || result.traces.some(trace => trace.settings.enabled)) return null;
+  const known = t(locale).fallback;
+  const reasons = [...new Set(warnings.map(w => known[w] ?? w.replace(/_/g, ' ')))].join(' ');
+  return locale === 'fr'
+    ? 'Note : aucune trace analogique dans cette capture, le graphique et le tableau sont donc vides. ' + reasons
+    : 'Note: this capture has no analog traces, so the plot and table are empty. ' + reasons;
+}
+
 export async function svgToPngBytes(svg: string, scale = 2): Promise<Uint8Array> {
   const png = await svgToPng(svg, scale);
   return new Uint8Array(await png.arrayBuffer());
@@ -99,35 +112,39 @@ export async function buildBatchReportZip(
 
   for (const [index, { entry, title }] of sorted.entries()) {
     const { result, channelLabels } = entry;
+    const math = entry.math ?? null;
+    const note = emptyCaptureNote(result, locale);
     const path = 'captures/' + uniqueStem(title, stems);
-    const svg = renderWaveformSvg(result, { theme: 'light', locale, title, channelLabels });
+    const svg = renderWaveformSvg(result, { theme: 'light', locale, title, channelLabels, math });
     const png = entry.pngBytes ?? await renderPng?.(svg);
     const figure = path + (png ? '.png' : '.svg');
     files[path + '.svg'] = strToU8(svg);
     if (png) files[figure] = [png, { level: 0 }];
-    files[path + '.csv'] = strToU8(renderWaveformCsv(result, channelLabels, title));
+    files[path + '.csv'] = strToU8(renderWaveformCsv(result, channelLabels, title, math));
 
-    const markdownLabels = channelLabels && Object.fromEntries(Object.entries(channelLabels)
-      .map(([channel, label]) => [channel, label === undefined ? undefined : markdownLiterals(label)]));
     const titleMd = markdownText(title);
     markdown.push(
       '## ' + titleMd,
       '![' + titleMd + '](' + figure + ')',
-      renderMeasurementsTable(result, 'markdown', locale, markdownLabels, markdownLiterals(title)).trimEnd(),
+      ...(note ? ['> ' + note.replace(/[\\_*[\]<>|#`]/g, '\\$&')] : []),
+      // The table renderer escapes its own Markdown, so raw text avoids escaping twice.
+      renderMeasurementsTable(result, 'markdown', locale, channelLabels, title, math).trimEnd(),
     );
     latex.push(
       '\\subsection{' + latexText(title) + '}',
       png
         ? '\\begin{center}\n\\includegraphics[width=\\linewidth]{' + figure + '}\n\\end{center}'
         : '\\noindent\\texttt{' + latexText(figure) + '}\\par',
-      renderMeasurementsTable(result, 'latex', locale, channelLabels, title).trimEnd(),
+      ...(note ? ['\\noindent\\textit{' + latexText(note) + '}\\par'] : []),
+      renderMeasurementsTable(result, 'latex', locale, channelLabels, title, math).trimEnd(),
     );
     const titleHtml = escapeXml(title);
     html.push(
       '<section>',
       '<h2>' + titleHtml + '</h2>',
       '<img src="' + figure + '" alt="' + titleHtml + '">',
-      renderMeasurementsTable(result, 'html', locale, channelLabels, title),
+      ...(note ? ['<p class="note">' + escapeXml(note) + '</p>'] : []),
+      renderMeasurementsTable(result, 'html', locale, channelLabels, title, math),
       '</section>',
     );
     options.onProgress?.(index + 1, sorted.length);

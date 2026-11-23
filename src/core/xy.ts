@@ -2,6 +2,7 @@ import { columnSamples, columnInterval, isClipped, samplesFor, sampleStatus } fr
 import { fitShared, median, quantile, valid, wrapPhase } from './dsp.js';
 import { analysisPlot, axisValue } from './export/analysis-plot.js';
 import type { AnalysisPlotOptions } from './export/analysis-plot.js';
+import { csvComment } from './export/csv.js';
 import { csvNumber, GRATICULE_VERSION } from './export/format.js';
 import type { ChannelTrace, ExtractionResult, GapStatus, MathTraceResult, TraceSample, XyAxisId } from './types.js';
 
@@ -45,13 +46,13 @@ export interface XySvgOptions extends AnalysisPlotOptions {
 }
 
 function findHysteresis(segments: XyResult['segments'], ys: readonly number[], xSwing: number): XyResult['hysteresis'] {
-  const lo = quantile(ys, 0.1), hi = quantile(ys, 0.9);
+  const lo = ys[0] ?? 0, hi = ys.at(-1) ?? 0;
   const span = hi - lo;
   if (!(span > 0) || !(xSwing > 0)
       || ys.filter(y => Math.min(Math.abs(y - lo), Math.abs(y - hi)) <= span * 0.12).length < ys.length * 0.87) return null;
   const rising: number[] = [], falling: number[] = [];
   const mid = lo + span / 2;
-  let maxEdgeStepX = 0;
+  let maxEdgeStepX = 0, risingDirection = 0, fallingDirection = 0;
   for (const segment of segments) {
     let state = 0;
     let candidate: { x: number; step: number } | null = null;
@@ -59,20 +60,26 @@ function findHysteresis(segments: XyResult['segments'], ys: readonly number[], x
       const p = segment[i]!, last = segment[i - 1];
       if (last && (p.y >= mid) !== (last.y >= mid)) {
         const f = (mid - last.y) / (p.y - last.y);
-        candidate = { x: (1 - f) * last.x + f * p.x, step: Math.abs(p.x - last.x) };
+        candidate = { x: (1 - f) * last.x + f * p.x, step: p.x - last.x };
       }
       const next = p.y <= lo + span * 0.2 ? -1 : p.y >= hi - span * 0.2 ? 1 : 0;
       if (next && next !== state) {
         if (state && candidate !== null) {
-          (next > 0 ? rising : falling).push(candidate.x);
-          maxEdgeStepX = Math.max(maxEdgeStepX, candidate.step);
+          if (next > 0) {
+            rising.push(candidate.x);
+            risingDirection += Math.sign(candidate.step);
+          } else {
+            falling.push(candidate.x);
+            fallingDirection += Math.sign(candidate.step);
+          }
+          maxEdgeStepX = Math.max(maxEdgeStepX, Math.abs(candidate.step));
         }
         state = next;
         candidate = null;
       }
     }
   }
-  if (!rising.length || !falling.length) return null;
+  if (risingDirection * fallingDirection >= 0) return null;
   const stable = (values: number[]) => {
     values.sort((a, b) => a - b);
     return quantile(values, 0.9) - quantile(values, 0.1) <= xSwing * 0.1;
@@ -98,9 +105,23 @@ function sinePhase(result: ExtractionResult, axes: readonly [XyAxisId, XyAxisId]
     settings: { ...base.settings, channel: axes[i] === 'M' ? base.channel : axes[i]! },
   }));
   const fitAt = (hz: number) => {
-    const fit = fitShared(traces[0]!, traces[1]!, hz);
-    return fit.input && fit.output && fit.input.r2 >= 0.98 && fit.output.r2 >= 0.98
-      ? wrapPhase(fit.output.phaseDeg - fit.input.phaseDeg) : null;
+    const { input, output } = fitShared(traces[0]!, traces[1]!, hz);
+    if (!input || !output || input.r2 < 0.96 || output.r2 < 0.96) return null;
+    // Triangle waves can pass the R² gate, but have a strong third harmonic.
+    if (Math.min(input.r2, output.r2) < 0.99) {
+      const origin = samples[0].find((s, j) => valid(s) && valid(samples[1][j]!))!.timeSec;
+      const residual = traces.map((trace, i): ChannelTrace => {
+        const fit = i === 0 ? input : output;
+        const phase = fit.phaseDeg * Math.PI / 180;
+        return { ...trace, samples: trace.samples.map(s => valid(s) ? {
+          ...s, voltage: s.voltage - fit.amplitude * Math.cos(2 * Math.PI * ((s.timeSec - origin) * hz % 1) + phase),
+        } : s) };
+      });
+      const third = fitShared(residual[0]!, residual[1]!, 3 * hz);
+      if ((third.input?.amplitude ?? 0) > 0.09 * input.amplitude
+        || (third.output?.amplitude ?? 0) > 0.09 * output.amplitude) return null;
+    }
+    return wrapPhase(output.phaseDeg - input.phaseDeg);
   };
   if (f1 || f2) {
     const f = f1 && f2 ? (f1 + f2) / 2 : (f1 ?? f2)!;
@@ -117,7 +138,7 @@ function sinePhase(result: ExtractionResult, axes: readonly [XyAxisId, XyAxisId]
   for (let i = 1; i < longest.length; i++) {
     const p = longest[i]!, d = distance(p);
     traveled ||= d > 0.55;
-    if (!traveled || i < 8 || d > tolerance || d > distance(longest[i - 1]!)
+    if (!traveled || i < 8 || d > tolerance || d >= distance(longest[i - 1]!)
       || (longest[i + 1] && d > distance(longest[i + 1]!))) continue;
     const phase = fitAt(1 / (i * dt));
     if (phase !== null) return phase;
@@ -194,7 +215,7 @@ export function renderXySvg(xy: XyResult, opts: XySvgOptions = {}): string {
 export function renderXyCsv(xy: XyResult, title?: string): string {
   return [
     `# Graticule v${GRATICULE_VERSION}`,
-    ...(title?.trim() ? [`# title: ${title.trim().replace(/[\r\n]+/g, ' ')}`] : []),
+    ...(title?.trim() ? [`# title: ${csvComment(title)}`] : []),
     `# x: ${xy.xAxis} (${xy.xUnit}), y: ${xy.yAxis} (${xy.yUnit})`,
     `column,time_s,x_${xy.xUnit === 'V²' ? 'v2' : 'v'},y_${xy.yUnit === 'V²' ? 'v2' : 'v'},x_status,y_status`,
     ...xy.points.map(p => [p.col, csvNumber(p.timeSec), csvNumber(p.x), csvNumber(p.y), p.xStatus, p.yStatus].join(',')),

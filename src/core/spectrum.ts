@@ -2,8 +2,8 @@ import { columnInterval, columnSamples, isClipped, samplesFor } from './columns.
 import { valid } from './dsp.js';
 import { analysisPlot, axisValue } from './export/analysis-plot.js';
 import type { AnalysisPlotOptions } from './export/analysis-plot.js';
-import { csvField } from './export/csv.js';
-import { csvNumber, formatFixed, GRATICULE_VERSION } from './export/format.js';
+import { csvComment, csvField } from './export/csv.js';
+import { csvNumber, formatEng, formatFixed, GRATICULE_VERSION } from './export/format.js';
 import { renderTables } from './export/table.js';
 import type { TableFormat } from './export/table.js';
 import type { ExtractionResult, Locale, MathTraceResult, TraceSample, XyAxisId } from './types.js';
@@ -117,7 +117,7 @@ const windowCoefficients: Readonly<Record<SpectrumWindow, readonly number[]>> = 
   flattop: [0.21557895, -0.41663158, 0.277263158, -0.083578947, 0.006947368],
 };
 
-const maxHarmonic = (sampleRate: number, hz: number) => Math.min(10, Math.floor(0.4 * sampleRate / hz));
+const maxHarmonic = (sampleRate: number, hz: number) => Math.min(10, Math.floor(0.49 * sampleRate / hz));
 
 function fft(real: Float64Array): Float64Array {
   const size = real.length, imag = new Float64Array(size);
@@ -155,7 +155,7 @@ function harmonicFit(samples: readonly ObservedSample[], scale: number, hz: numb
   const matrix = Array.from({ length: size }, () => new Float64Array(size + 1));
   const basis = new Float64Array(size);
   basis[0] = 1;
-  const first = samples[0]!.timeSec, firstValue = samples[0]!.voltage / scale;
+  const first = samples[0]!.timeSec, firstValue = samples[0]!.voltage;
   let energy = 0;
   for (const s of samples) {
     const angle = 2 * Math.PI * ((s.timeSec - first) * hz % 1);
@@ -163,7 +163,7 @@ function harmonicFit(samples: readonly ObservedSample[], scale: number, hz: numb
       basis[2 * h - 1] = Math.cos(h * angle);
       basis[2 * h] = Math.sin(h * angle);
     }
-    const v = s.voltage / scale - firstValue;
+    const v = s.voltage - firstValue;
     energy += v * v;
     for (let i = 0; i < size; i++) {
       const row = matrix[i]!, u = basis[i]!;
@@ -272,12 +272,15 @@ export function computeSpectrum(result: ExtractionResult, options: SpectrumOptio
   const { min, max } = observed.reduce((acc, s) => ({
     min: Math.min(acc.min, s.voltage), max: Math.max(acc.max, s.voltage),
   }), { min: Infinity, max: -Infinity });
-  const scale = Math.max(Math.abs(min), Math.abs(max)) || 1;
+  const center = min / 2 + max / 2;
+  const scale = Math.max(max - center, center - min) || 1;
+  const normalized = (voltage: number) => (voltage - center) / scale;
+  const centered = observed.map(s => ({ ...s, voltage: normalized(s.voltage) }));
   const fftSize = 2 ** Math.ceil(Math.log2(segment.length * 2));
   const real = new Float64Array(fftSize);
+  const taper = new Float64Array(segment.length);
   const coefficients = windowCoefficients[window];
-  const mean = observed.reduce((sum, s) => sum + s.voltage / scale, 0) / observed.length;
-  let weights = 0, prev = 0, next = 0;
+  let weightedSum = 0, weights = 0, prev = 0, next = 0;
   for (const [i, s] of segment.entries()) {
     if (valid(s)) {
       prev = i;
@@ -285,49 +288,60 @@ export function computeSpectrum(result: ExtractionResult, options: SpectrumOptio
       while (next < segment.length && !valid(segment[next]!)) next++;
     }
     const frac = next > prev ? (i - prev) / (next - prev) : 0;
-    const v = valid(s) ? s.voltage / scale
-      : (1 - frac) * (segment[prev]!.voltage! / scale) + frac * (segment[next]!.voltage! / scale);
+    const v = valid(s) ? normalized(s.voltage)
+      : (1 - frac) * normalized(segment[prev]!.voltage!) + frac * normalized(segment[next]!.voltage!);
     const angle = 2 * Math.PI * i / segment.length;
     const w = coefficients.reduce((sum, coefficient, order) => sum + coefficient * Math.cos(order * angle), 0);
-    real[i] = (v - mean) * w;
+    real[i] = v;
+    taper[i] = w;
+    weightedSum += v * w;
     weights += w;
   }
+  const mean = weightedSum / weights;
+  for (let i = 0; i < segment.length; i++) real[i] = (real[i]! - mean) * taper[i]!;
   const imag = fft(real), nyquist = fftSize / 2;
   const binSpacingHz = sampleRateHz / fftSize;
   const resolutionBandwidthHz = sampleRateHz / segment.length;
+  const windowBin = (order: number) => segment.length / 2
+    * ((coefficients[order] ?? 0) + (coefficients[segment.length - order] ?? 0));
   const bins = Array.from({ length: nyquist + 1 }, (_, i): SpectrumBin => {
-    const interior = i > 0 && i < nyquist;
+    if (i === 0) return { frequencyHz: 0, vrms: 0, dbv: null };
+    const interior = i < nyquist;
     const order = i * segment.length / fftSize;
-    // At a coherent bin the window can mix the negative-frequency image into
-    // the positive one. Its contribution has opposite signs for cosine and sine.
-    const image = interior && Number.isInteger(order)
-      ? segment.length / 2 * ((coefficients[2 * order] ?? 0) + (coefficients[segment.length - 2 * order] ?? 0))
-      : 0;
-    const vrms = Math.hypot(real[i]! / (weights + image), imag[i]! / (weights - image)) * (interior ? Math.SQRT2 : 1) * scale;
+    // At a coherent bin, correct both the mirrored line and the part of the
+    // cosine removed by subtracting the weighted mean.
+    const coherent = Number.isInteger(order);
+    const image = interior && coherent ? windowBin(2 * order) : 0;
+    const dcLeakage = coherent ? (interior ? 2 : 1) * windowBin(order) ** 2 / weights : 0;
+    const vrms = Math.hypot(real[i]! / (weights + image - dcLeakage), imag[i]! / (weights - image))
+      * (interior ? Math.SQRT2 : 1) * scale;
     return { frequencyHz: i * binSpacingHz, vrms, dbv: db(vrms) };
   });
-  const peaks = bins.filter((b, i) => i > 0 && b.vrms > scale * 1e-10 && b.vrms >= bins[i - 1]!.vrms
+  const peaks = bins.filter((b, i) => i > 0 && Number.isFinite(b.vrms) && b.vrms > scale * 1e-10 && b.vrms >= bins[i - 1]!.vrms
     && (i === nyquist || b.vrms > bins[i + 1]!.vrms)).sort((a, b) => b.vrms - a.vrms);
   const strongest = peaks[0];
-  const harmonicOf = (ratio: number, frequencyHz: number) => Math.round(ratio) >= 2 && Math.round(ratio) <= 5
-    && Math.abs(ratio - Math.round(ratio)) * frequencyHz <= resolutionBandwidthHz * 0.6;
   const refine = (peak: SpectrumBin, radius: number, single = false) => peak.frequencyHz >= sampleRateHz / 2 ? peak
-    : refineFundamental(observed, scale, sampleRateHz, peak, resolutionBandwidthHz, radius * resolutionBandwidthHz, single);
-  // Locate the dominant line with a single sinusoid before using harmonics to
-  // refine it. This prevents the fit from relabeling it as its own harmonic.
-  const detected = strongest && coverage >= 0.25 ? refine(strongest, 1.25, true) : null;
+    : refineFundamental(centered, scale, sampleRateHz, peak, resolutionBandwidthHz, radius * resolutionBandwidthHz, single);
+  // A flat-top window can shift the apparent peak by more than one resolution bin.
+  const detected = strongest && coverage >= 0.25 ? refine(strongest, window === 'flattop' ? 2.25 : 1.25, true) : null;
   let fundamental = detected && detected.frequencyHz / resolutionBandwidthHz >= 2 ? refine(detected, 0.35) : null;
-  if (strongest && fundamental) {
-    const dominant = fundamental;
-    const candidates = peaks.filter(p => p.frequencyHz >= 2 * resolutionBandwidthHz && p.vrms >= 0.12 * strongest.vrms
-      && harmonicOf(dominant.frequencyHz / p.frequencyHz, p.frequencyHz)).sort((a, b) => a.frequencyHz - b.frequencyHz);
-    for (const p of candidates) {
-      const candidate = refine(p, 0.85);
-      // A window sidelobe can fall at an integer subharmonic. A real tone
-      // must still have energy there after the stronger harmonic is fitted.
-      if (candidate.vrms >= 0.1 * dominant.vrms && harmonicOf(dominant.frequencyHz / candidate.frequencyHz, candidate.frequencyHz)) {
-        fundamental = candidate;
-        break;
+  if (detected && fundamental) {
+    for (let order = 6; order >= 2; order--) {
+      const frequencyHz = detected.frequencyHz / order;
+      if (frequencyHz < 2 * resolutionBandwidthHz) continue;
+      const count = maxHarmonic(sampleRateHz, frequencyHz);
+      if (count < order) continue;
+      // Fit the two lines together so leakage from the dominant harmonic
+      // cannot pass for energy at its subharmonic.
+      const amps = harmonicFit(centered, scale, frequencyHz, count)?.amps;
+      const dominantRms = amps?.[order - 1] ?? 0;
+      const vrms = amps?.[0] ?? 0;
+      if (dominantRms >= 0.5 * detected.vrms && vrms >= 0.05 * dominantRms) {
+        const candidate = refine({ frequencyHz, vrms, dbv: db(vrms) }, 0.45 / order);
+        if (candidate.vrms >= 0.05 * dominantRms) {
+          fundamental = candidate;
+          break;
+        }
       }
     }
   }
@@ -340,7 +354,7 @@ export function computeSpectrum(result: ExtractionResult, options: SpectrumOptio
     : hz / resolutionBandwidthHz < 3 - 1e-2 ? 'insufficient_cycles'
       : sampleRateHz / hz < 16 - resTolerance ? 'insufficient_resolution'
         : (max / 2 - min / 2) < 20 * pixelStep(result, options) ? 'insufficient_swing' : null;
-  const fit = thdReason === null ? harmonicFit(observed, scale, hz, maxHarmonic(sampleRateHz, hz)) : null;
+  const fit = thdReason === null ? harmonicFit(centered, scale, hz, maxHarmonic(sampleRateHz, hz)) : null;
   const firstRms = fit?.amps[0] ?? 0;
   if (!thdReason && !(firstRms > 0)) thdReason = 'fit_failed';
   const harmonics = firstRms > 0 ? fit!.amps.slice(0, 5).map((vrms, index): SpectrumHarmonic => ({
@@ -357,10 +371,14 @@ export function renderSpectrumSvg(spec: SpectrumResult, opts: SpectrumSvgOptions
   const linear = opts.scale === 'linear', locale = opts.locale ?? 'en';
   const maxHz = spec.bins.at(-1)?.frequencyHz || 1;
   const floor = spec.noiseFloorDbv;
-  const min = linear ? 0 : floor === null ? -100 : Math.floor((floor - 12) / 10) * 10;
-  const amp = (bin: SpectrumBin) => linear ? bin.vrms : bin.dbv ?? min;
+  const low = floor === null ? -100 : floor - 12;
+  const maxDb = spec.bins.reduce((m, b) => Math.max(m, b.dbv ?? m), low + 7) + 3;
+  const step = [2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000].find(step =>
+    Math.ceil(maxDb / step) - Math.floor(low / step) <= 8) ?? 2000;
+  const min = linear ? 0 : Math.ceil(maxDb / step) * step - 8 * step;
+  const amp = (bin: SpectrumBin) => linear ? Math.min(Number.MAX_VALUE, bin.vrms) : bin.dbv ?? min;
   const maxAmp = spec.bins.reduce((m, b) => Math.max(m, amp(b)), min);
-  const max = linear ? maxAmp * 1.08 || 1 : Math.max(min + 10, Math.ceil((maxAmp + 3) / 10) * 10);
+  const max = linear ? Math.min(Number.MAX_VALUE, maxAmp * 1.08) || 1 : min + 8 * step;
   const label = linear ? `${spec.unit} RMS` : spec.unit === 'V²' ? 'dB re 1 V²' : 'dBV';
   const fraction = (value: number) => (value - min) / (max - min);
   return analysisPlot(opts, opts.title ?? `FFT ${spec.channel}`, false, locale === 'fr' ? 'Fréquence (Hz)' : 'Frequency (Hz)', label,
@@ -382,19 +400,32 @@ export function renderSpectrumSvg(spec: SpectrumResult, opts: SpectrumSvgOptions
 }
 
 export function renderSpectrumCsv(spec: SpectrumResult, title?: string): string {
+  const squared = spec.unit === 'V²';
+  const rmsColumn = squared ? 'v2_rms' : 'vrms';
+  const dbColumn = squared ? 'db_re_1v2' : 'dbv';
   return [
     `# Graticule v${GRATICULE_VERSION}`,
-    ...(title?.trim() ? [`# title: ${title.trim().replace(/[\r\n]+/g, ' ')}`] : []),
+    ...(title?.trim() ? [`# title: ${csvComment(title)}`] : []),
     `# channel: ${spec.channel} (${spec.unit}), window=${spec.window}`,
     `# sample_rate_hz: ${csvNumber(spec.sampleRateHz)}, resolution_bandwidth_hz=${csvNumber(spec.resolutionBandwidthHz)}`,
     `# used_start_s: ${csvNumber(spec.usedStartSec)}, used_end_s=${csvNumber(spec.usedEndSec)}, coverage=${csvNumber(spec.coverage)}, interpolated_gaps=${spec.interpolatedGaps}`,
-    `# noise_floor_dbv: ${csvNumber(spec.noiseFloorDbv)}, thd_pct=${csvNumber(spec.thdPct)}, thd_below_floor=${spec.thdBelowFloor}, thd_reason=${spec.thdReason ?? ''}`,
+    `# noise_floor_${dbColumn}: ${csvNumber(spec.noiseFloorDbv)}, thd_pct=${csvNumber(spec.thdPct)}, thd_below_floor=${spec.thdBelowFloor}, thd_reason=${spec.thdReason ?? ''}`,
     `# warnings: ${csvField(spec.warnings.join(' | '))}`,
-    ...spec.harmonics.map(h => `# H${h.order}: frequency_hz=${csvNumber(h.frequencyHz)}, vrms=${csvNumber(h.vrms)}, dbc=${csvNumber(h.dbc)}`),
-    'frequency_hz,vrms,dbv',
+    ...spec.harmonics.map(h => `# H${h.order}: frequency_hz=${csvNumber(h.frequencyHz)}, ${rmsColumn}=${csvNumber(h.vrms)}, dbc=${csvNumber(h.dbc)}`),
+    `frequency_hz,${rmsColumn},${dbColumn}`,
     ...spec.bins.map(b => [csvNumber(b.frequencyHz), csvNumber(b.vrms), csvNumber(b.dbv)].join(',')),
   ].join('\n') + '\n';
 }
+
+const thdLabels: Readonly<Record<ThdReason, Readonly<Record<Locale, string>>>> = {
+  clipped: { en: 'clipped signal', fr: 'signal écrêté' },
+  insufficient_cycles: { en: 'too few cycles', fr: 'trop peu de cycles' },
+  insufficient_resolution: { en: 'too few points per cycle', fr: 'trop peu de points par cycle' },
+  insufficient_swing: { en: 'signal too small', fr: 'signal trop faible' },
+  insufficient_samples: { en: 'too few samples', fr: 'trop peu d’échantillons' },
+  no_fundamental: { en: 'no fundamental found', fr: 'aucune fondamentale' },
+  fit_failed: { en: 'could not fit the signal', fr: 'ajustement impossible' },
+};
 
 export function renderSpectrumTable(spec: SpectrumResult, locale: Locale, format: TableFormat, title?: string): string {
   const fr = locale === 'fr';
@@ -403,10 +434,11 @@ export function renderSpectrumTable(spec: SpectrumResult, locale: Locale, format
     caption: title?.trim() || `FFT ${spec.channel}`,
     head: [fr ? 'Mesure' : 'Measurement', fr ? 'Valeur' : 'Value'], numericFrom: 1,
     rows: [
-      [fr ? 'Fondamentale' : 'Fundamental', spec.fundamental ? axisValue(spec.fundamental.frequencyHz, 'Hz', locale) : '—'],
+      [fr ? 'Fondamentale' : 'Fundamental', formatEng(spec.fundamental?.frequencyHz, 'Hz', locale, { sig: 4 })],
       [fr ? 'Amplitude efficace' : 'RMS amplitude', rms(spec.fundamental?.vrms ?? null)],
       [fr ? 'Résolution spectrale' : 'Resolution bandwidth', spec.resolutionBandwidthHz ? axisValue(spec.resolutionBandwidthHz, 'Hz', locale) : '—'],
-      ['THD', spec.thdPct === null ? spec.thdReason ?? '—' : spec.thdBelowFloor ? (fr ? '< 0,5%' : '< 0.5%') : `${formatFixed(spec.thdPct, 2, locale)}%`],
+      ['THD', spec.thdPct === null ? (spec.thdReason ? thdLabels[spec.thdReason][locale] : '—')
+        : spec.thdBelowFloor ? (fr ? '< 0,5%' : '< 0.5%') : `${formatFixed(spec.thdPct, 2, locale)}%`],
     ],
   }, ...(spec.harmonics.length ? [{
     caption: fr ? 'Harmoniques' : 'Harmonics', head: ['H', 'Hz', `${spec.unit} RMS`, 'dBc'], numericFrom: 1,

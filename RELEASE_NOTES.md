@@ -1,70 +1,42 @@
-# Graticule 2.0.0
+# Graticule 2.0.1
 
 Try it live at [sunsind.github.io/Graticule](https://sunsind.github.io/Graticule/).
 
-A big release with a math channel, XY mode, a spectrum view with THD, lab report exports and a cleaner layout.
-
-## Views
-
-- One row of tabs now holds every view: Original, Overlay, Clean, XY and FFT
-- Press 1 to 5 to switch views. T still toggles the overlay and C still toggles the cursors
-- The buttons next to the tabs change with the view, so there are never more than four
-- Before Extract you only see your image and the Extract button
-
-## Math channel
-
-- Click `+ M` to add `C1 - C2`, `C1 + C2` or `C1 × C2`, or any other pair of channels
-- The scale is picked by itself, and you can set your own V/div and label
-- The math channel shows up on the plot, in the results, in the CSV, in the tables, in XY mode and in the FFT
-
-## XY mode
-
-- Plot one channel against another, like the XY mode of a real scope
-- Swap the axes with one click
-- The results show the range of each axis, the Lissajous phase for sine waves and the thresholds of a Schmitt trigger loop
-- Export the XY plot as SVG, PNG or CSV
-
-## Spectrum and THD
-
-- The FFT tab shows the spectrum of any channel in dBV or in volts
-- Pick a Hann, Rect, Flat top or Blackman window
-- The results show the fundamental, the THD up to H10 and the H2 to H5 harmonics in dBc
-- A dashed line marks the pixel noise floor. A very clean sine shows a THD below 0.5% instead of a fake number
-- When the THD cannot be trusted, like on a clipped signal, the results say why
-- Export the spectrum as SVG, PNG, CSV or a table
-
-## Results
-
-- The phase now works between any two channels, like C1 and C3, not only C1 and C2
-- Rows with no value for any channel are hidden on screen. Exported tables stay complete
+A small release that fixes bugs found in 2.0.0.
 
 ## Lab report zip
 
-- Tick two or more captures and click Export all (.zip)
-- Graticule extracts the ones that are not done yet and shows its progress
-- You get `report.md`, `report.tex` and `report.html`, plus every plot as SVG and PNG and every trace as CSV
+- Clicking Clear while Export all (.zip) is running now stops the export. No zip is downloaded and the progress message goes away
+- The math channel is now part of the zip, in the plots, the CSV files and the report tables
+
+## Math channel
+
+- You can now type your own V/div for a `C1 × C2` channel, like `5 V²`
+- Picking the channel already used on the other side now swaps the two channels instead of doing nothing
+- Vpp and Vrms no longer show a plus sign, and a rise time at the limit of the screen now shows `<` like the other channels
+- Pressing Escape in a label or scale field now undoes your typing and keeps the cursor in the field
 
 ## Bode
 
-- Bode plots have a title field. It goes on the plot and names the downloaded files
-- Extract Bode still works the same way
+- The Bode title now shows on the plot and goes in the downloaded CSV and tables
+- Your zoom level is kept when you open a point with Inspect and come back to the Bode plot
 
-## Layout
+## Views
 
-- The empty screen on a computer no longer shows a side panel full of empty fields
-- On phones, a capture menu at the top lets you switch captures without scrolling down
-- On phones, the Profile and scale settings fold into a Settings section so the results and exports stay close
-- Status messages sit right above the plot on phones
+- The FFT tab only shows up when there is a channel to analyze
+- When you turn off a channel that XY or FFT needs, Graticule goes back to the Clean view
+- XY and FFT show a short message while they load instead of the original screenshot
+- The Schmitt trigger thresholds in XY mode now use V² when the X axis is a `×` math channel
 
-## Scopes
+## Accuracy
 
-- Siglent screenshots saved with inverted colors are now read correctly
+- More accurate FFT, THD, XY, UART decode and scope CSV compare results in edge cases
+- The FFT table and the THD messages are now fully translated in French
+- The French rise time row now says 10 to 90% like the English one
 
-## Command line
+## Phones
 
-- `compare` checks a screenshot against the CSV saved by the scope
-- `--decode uart` reads serial bytes from a trace
-- `--math`, `--xy` and `--fft` give the same results as the app
+- The `+ M` button, the channel buttons and the math channel fields are bigger and easier to tap
 
 ## Credits
 

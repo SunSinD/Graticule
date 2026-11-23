@@ -19,7 +19,7 @@ function escapeHtml(text: string): string {
 }
 
 function escapeMarkdown(text: string): string {
-  return text.replace(/[\\_*[\]<>|]/g, '\\$&').replace(/[\r\n]+/g, ' ');
+  return text.replace(/&/g, '&amp;').replace(/[\\_*[\]<>|`]/g, '\\$&').replace(/[\r\n]+/g, ' ');
 }
 
 function escapeTsv(text: string): string {
@@ -149,16 +149,16 @@ export function measurementTables(result: ExtractionResult, locale: Locale,
   const head = [tx.measurement, ...(ms.length || math
     ? ms.map(m => m.clipped ? `${channelLabel(m.channel)} (${tx.clipped})` : channelLabel(m.channel)) : [tx.value])];
   if (math) head.push(`${math.label} (${math.unit})`);
+  const cell = (m: ChannelMeasurements, key: MetricKey, unit?: string) => {
+    const value = metricValue(m, key);
+    const limited = key === 'rise' ? m.riseLimited : key === 'fall' && m.fallLimited;
+    const formatted = unit && METRIC_UNITS[key] === 'V' ? formatEng(value, unit, locale) : formatMetric(value, key, '', locale);
+    return limited && value !== null ? '≤ ' + formatted : formatted;
+  };
   const rows: string[][] = MEASURE_ROWS.map((key) => [
     METRIC_LABELS[locale][key],
-    ...ms.map(m => {
-      const value = metricValue(m, key);
-      const limited = key === 'rise' ? m.riseLimited : key === 'fall' && m.fallLimited;
-      const formatted = formatMetric(value, key, '', locale);
-      return limited && value !== null ? '≤ ' + formatted : formatted;
-    }),
-    ...(math ? [METRIC_UNITS[key] === 'V' ? formatEng(metricValue(math.measurement, key), math.unit, locale)
-      : formatMetric(metricValue(math.measurement, key), key, '', locale)] : []),
+    ...ms.map(m => cell(m, key)),
+    ...(math ? [cell(math.measurement, key, math.unit)] : []),
   ]);
   const ph = result.phaseC1ToC2?.phaseDeg != null ? result.phaseC1ToC2 : result.phasePair
     ? { refChannel: result.phasePair.from, targetChannel: result.phasePair.to, phaseDeg: result.phasePair.phaseDeg }
@@ -204,7 +204,7 @@ function plainNumber(value: number | null, digits: number, locale: Locale): stri
   return formatFixed(value, digits, locale);
 }
 
-export function renderBodeTable(result: BodeResult, format: TableFormat, locale: Locale): string {
+export function renderBodeTable(result: BodeResult, format: TableFormat, locale: Locale, title?: string): string {
   const tx = EXPORT_TEXT[locale];
   const summary: Table = {
     caption: tx.bodeSummaryCaption,
@@ -223,7 +223,7 @@ export function renderBodeTable(result: BodeResult, format: TableFormat, locale:
     numericFrom: 1,
   };
   const points: Table = {
-    caption: tx.bodeCaption,
+    caption: title?.trim() || tx.bodeCaption,
     head: [tx.file, tx.frequency, tx.vin, tx.vout, tx.gain, tx.phase, tx.status, tx.reasons],
     rows: sortBodePoints(result.points).map((p) => [
       p.edited ? `${p.fileName} (${tx.edited})` : p.fileName,
@@ -233,7 +233,8 @@ export function renderBodeTable(result: BodeResult, format: TableFormat, locale:
       plainNumber(p.gainDb, 2, locale),
       plainNumber(p.phaseDeg, 1, locale),
       p.accepted ? tx.accepted : tx.rejected,
-      p.rejectionReasons.length ? p.rejectionReasons.map((r) => reasonLabel(r, locale)).join(', ') : EMPTY_CELL,
+      p.rejectionReasons.length ? p.rejectionReasons.map(r => r === 'frequency_mismatch' && locale === 'fr'
+        ? 'les fréquences diffèrent' : reasonLabel(r, locale)).join(', ') : EMPTY_CELL,
     ]),
     numericFrom: 1,
     numericTo: 6,

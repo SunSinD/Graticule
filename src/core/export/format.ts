@@ -1,6 +1,6 @@
 import type { Locale } from '../types.js';
 
-export const GRATICULE_VERSION = '2.0.0';
+export const GRATICULE_VERSION = '2.0.1';
 export const EMPTY_CELL = '\u2014';
 
 export function spreadsheetText(text: string): string {
@@ -159,7 +159,7 @@ const MULTIPLIERS: Readonly<Record<string, number>> = {
   G: 1e9,
 };
 
-const UNIT_SUFFIXES: readonly string[] = ['hz', 'db', 'div', 'v', 's', '\u00b0', '%', 'a'];
+const UNIT_SUFFIXES: readonly string[] = ['hz', 'db', 'div', 'v²', 'v2', 'v', 's', '\u00b0', '%', 'a'];
 
 export function parseEngineering(input: string): number | null {
   const text = input.trim().replace(/,/g, '.').replace(/\u2212/g, '-');

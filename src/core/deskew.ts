@@ -103,8 +103,17 @@ export function rectifyGrid(image: RgbaImage, quad: Quad, size?: DeskewSize): Rg
   if (!validateQuad(quad, image.width, image.height)) {
     throw new Error('Invalid deskew corners: use four convex corners inside the image in TL, TR, BR, BL order');
   }
-  const { width, height } = outputSize(quad, size);
-  const { toQuad } = transform(quad);
+  const [tl, tr, br, bl] = quad;
+  const fullWidth = tl.x === 0 && bl.x === 0 && tr.x === image.width && br.x === image.width;
+  const fullHeight = tl.y === 0 && tr.y === 0 && bl.y === image.height && br.y === image.height;
+  // Full-image bounds can use the exclusive right and bottom edges.
+  const pixelPoint = ({ x, y }: Point): Point => ({
+    x: fullWidth ? Math.min(x, image.width - 1) : x,
+    y: fullHeight ? Math.min(y, image.height - 1) : y,
+  });
+  const pixelQuad: Quad = fullWidth || fullHeight ? [pixelPoint(tl), pixelPoint(tr), pixelPoint(br), pixelPoint(bl)] : quad;
+  const { width, height } = outputSize(pixelQuad, size);
+  const { toQuad } = transform(pixelQuad);
   const data = new Uint8ClampedArray(width * height * 4);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {

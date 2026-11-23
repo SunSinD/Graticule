@@ -2,8 +2,9 @@ import { describe, expect, test } from 'vitest';
 import { csvField, renderBodeCsv, renderWaveformCsv } from '../../src/core/export/csv.js';
 import { GRATICULE_VERSION, parseEngineering, stepScale125 } from '../../src/core/export/format.js';
 import { renderBodeSvg, renderOverlaySvg, renderWaveformSvg, waveformFrame } from '../../src/core/export/svg.js';
-import { renderBodeTable, renderMeasurementsTable } from '../../src/core/export/table.js';
+import { renderBodeTable, renderMeasurementsTable, renderTables } from '../../src/core/export/table.js';
 import { splitTrace } from '../../src/core/export/trace-geometry.js';
+import { computeMathTrace } from '../../src/core/math.js';
 import { analyzeBodeBatch, analyzePngBytes } from '../../src/core/pipeline.js';
 import type { Quad, SvgExportOptions } from '../../src/core/types.js';
 import { sample } from './fixtures.js';
@@ -12,8 +13,11 @@ const result = analyzePngBytes(sample('sine_schmitt.png'), 'Capture_A&B%#_1.png'
 
 describe('waveform exports', () => {
   test('formats engineering scales with optional units per division and rejects overflow', () => {
-    expect(GRATICULE_VERSION).toBe('2.0.0');
+    expect(GRATICULE_VERSION).toBe('2.0.1');
     expect(parseEngineering('5 mV/div')).toBe(0.005);
+    expect(parseEngineering('5 V²')).toBe(5);
+    expect(parseEngineering('200 mV²')).toBe(0.2);
+    expect(parseEngineering('200 mV2/div')).toBe(0.2);
     expect(parseEngineering('2,5 ms / div')).toBe(0.0025);
     expect(parseEngineering('2/div')).toBe(2);
     expect(parseEngineering('1e308G')).toBeNull();
@@ -39,6 +43,29 @@ describe('waveform exports', () => {
     expect(csv.split('\n').slice(1, 3)).toEqual([`# file: ${result.fileName}`, "# title: ' =scope trace"]);
     expect(csv).toContain('Input_v,Input_status');
     expect(renderWaveformCsv(result, undefined, ' \t\n')).not.toContain('# title:');
+  });
+
+  test('protects formula-like text after commas in CSV comment lines', () => {
+    const math = computeMathTrace(result, { a: 'C1', b: 'C2', op: 'add', label: 'Math, @probe' })!;
+    const csv = renderWaveformCsv({ ...result, fileName: 'capture, +probe.png' }, { C1: 'Input,-1' },
+      'Bench, =1+1,\tprobe,\rtrace,"=SUM(1)"', math);
+    expect(csv).toContain("# file: capture,' +probe.png\n");
+    expect(csv).toContain("# title: Bench,' =1+1,'\tprobe,' trace,'\"=SUM(1)\"\n");
+    expect(csv).toContain("# C1 label: Input,'-1\n");
+    expect(csv).toContain("# M: Math,' @probe C1 add C2");
+    expect(renderWaveformCsv({ ...result, fileName: 'capture, probe.png' })).toContain('# file: capture, probe.png\n');
+  });
+
+  test('adds an optional sanitized Bode title in CSV and a custom caption in LaTeX', () => {
+    const bode = analyzeBodeBatch([result]);
+    expect(renderBodeCsv(bode, 'Sweep, =1+1').split('\n').slice(0, 2)).toEqual([
+      '# Graticule v2.0.1', "# title: Sweep,' =1+1",
+    ]);
+    expect(renderBodeCsv(bode, ' \t ')).toBe(renderBodeCsv(bode));
+    const point = { ...bode.points[0]!, accepted: false, rejectionReasons: ['frequency_mismatch'] };
+    const latex = renderBodeTable({ ...bode, points: [point] }, 'latex', 'fr', ' Balayage ');
+    expect(latex).toContain('\\caption{Balayage}');
+    expect(latex).toContain('les fréquences diffèrent');
   });
 
   test('uses default SVG dimensions for invalid options in both renderers', () => {
@@ -116,6 +143,20 @@ describe('waveform exports', () => {
     expect(latex).toContain('Temps de montée (10--90\\%) & $\\leq$ 1,000 \\textmu{}s');
     expect(latex).toContain('Dépassement & 12,0\\% & 12,0\\% \\\\');
     expect(latex.trimEnd()).toMatch(/\\end\{table\}$/);
+  });
+
+  test('prints limited Math times and escapes ampersands and backticks in Markdown cells', () => {
+    const math = computeMathTrace(result, { a: 'C1', b: 'C2', op: 'add' })!;
+    const measurement = { ...math.measurement, riseTimeSec: 1e-6, fallTimeSec: 2e-6, riseLimited: true, fallLimited: true };
+    const tsv = renderMeasurementsTable(result, 'tsv', 'en', undefined, undefined, { ...math, measurement });
+    expect(tsv).toMatch(/Rise time .*\t≤ 1\.000 µs\n/);
+    expect(tsv).toMatch(/Fall time .*\t≤ 2\.000 µs\n/);
+    const label = 'A &copy; `M`';
+    const markdown = renderTables([{ caption: 'Literal text', head: [label], rows: [[label]], numericFrom: 1 }], 'markdown');
+    expect(markdown.split('\n').filter(line => line.startsWith('| A'))).toEqual([
+      '| A &amp;copy; \\`M\\` |',
+      '| A &amp;copy; \\`M\\` |',
+    ]);
   });
 
   test('escapes untrusted custom titles and channel labels in Word, Markdown, LaTeX and TSV', () => {

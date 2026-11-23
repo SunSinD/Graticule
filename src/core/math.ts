@@ -10,6 +10,10 @@ const faultPriority: Readonly<Record<GapStatus, number>> = {
   ok: 0, unresolved: 1, masked_overlay: 2, masked_cursor: 3, overlap_ambiguous: 4, clipped_low: 5, clipped_high: 5,
 };
 
+function invertClip(status: GapStatus): GapStatus {
+  return status === 'clipped_high' ? 'clipped_low' : status === 'clipped_low' ? 'clipped_high' : status;
+}
+
 function scale125(minimum: number): number {
   if (!(minimum > 0) || !Number.isFinite(minimum)) return 1;
   const below = stepScale125(minimum, -1);
@@ -29,7 +33,6 @@ export function computeMathTrace(result: ExtractionResult, config: MathConfig): 
   const bs = columnSamples(result, b.samples);
   const raw = columnSamples(result, a.samples).map((x, col): TraceSample => {
     const y = bs[col]!;
-    const sx = sampleStatus(x), sy = sampleStatus(y);
     if (valid(x) && valid(y)) {
       const voltage = multiply ? x.voltage * y.voltage : config.op === 'add' ? x.voltage + y.voltage : x.voltage - y.voltage;
       if (Number.isFinite(voltage)) {
@@ -40,7 +43,10 @@ export function computeMathTrace(result: ExtractionResult, config: MathConfig): 
         return { ...x, yPx: null, voltage };
       }
     }
-    const fault = faultPriority[sx] >= faultPriority[sy] ? sx : sy;
+    const sx = sampleStatus(x), sy = sampleStatus(y);
+    const aStatus = multiply && valid(y) && y.voltage < 0 ? invertClip(sx) : sx;
+    const bStatus = config.op === 'sub' || (multiply && valid(x) && x.voltage < 0) ? invertClip(sy) : sy;
+    const fault = faultPriority[aStatus] >= faultPriority[bStatus] ? aStatus : bStatus;
     return { ...x, yPx: null, voltage: null, status: fault === 'ok' ? 'unresolved' : fault };
   });
   const swing = max - min;

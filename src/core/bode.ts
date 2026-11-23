@@ -14,6 +14,10 @@ function positive(n: number | null | undefined): n is number {
   return typeof n === 'number' && Number.isFinite(n) && n > 0;
 }
 
+export function frequenciesDiffer(a: number | null | undefined, b: number | null | undefined): boolean {
+  return positive(a) && positive(b) && Math.max(a, b) > 1.01 * Math.min(a, b);
+}
+
 function gainFromVpp(vinVpp: number | null, voutVpp: number | null): number | null {
   return positive(vinVpp) && positive(voutVpp) ? 20 * (Math.log10(voutVpp) - Math.log10(vinVpp)) : null;
 }
@@ -53,6 +57,8 @@ function evaluate(extraction: ExtractionResult, id: string, options: Required<Bo
   const output = extraction.traces.find(trace => trace.channel === outputChannel);
   const scope = scopeFrequency(extraction.scopeReadings, inputChannel, extraction.topFrequencyHz, extraction.topFrequencyRaw);
   const waveform = extraction.measurements.find(measurement => measurement.channel === inputChannel)?.frequencyHz;
+  const outputWaveform = extraction.measurements.find(measurement => measurement.channel === outputChannel)?.frequencyHz;
+  const mismatch = frequenciesDiffer(waveform, outputWaveform);
   const hint = frequencyFromFileName(extraction.fileName);
   const manual = edit?.frequencyHz;
   const candidates: (readonly [number | null | undefined, BodePoint['frequencySource']])[] = [
@@ -80,6 +86,7 @@ function evaluate(extraction: ExtractionResult, id: string, options: Required<Bo
   const minCycles = Math.max(1, options.minCycles);
   if (!input || !output || inputChannel === outputChannel) rejectionReasons.push('missing_channels');
   if (!frequencyHz) rejectionReasons.push('frequency_unconfirmed');
+  if (mismatch) rejectionReasons.push('frequency_mismatch');
   if (extraction.timebase.source === 'default') rejectionReasons.push('uncalibrated_timebase');
   if (input?.settings.scaleSource === 'default' || output?.settings.scaleSource === 'default') rejectionReasons.push('uncalibrated_channel_scale');
   if ((input?.clippedCount ?? 0) > 5 || (output?.clippedCount ?? 0) > 5) rejectionReasons.push('clipped_channel');
@@ -97,7 +104,7 @@ function evaluate(extraction: ExtractionResult, id: string, options: Required<Bo
   const phaseDeg = manualPhase ?? (rejectionReasons.length === 0 && fit?.input && fit.output
     ? wrapPhase(fit.output.phaseDeg - fit.input.phaseDeg) : null);
   const manualMeasurement = positive(edit?.vinVpp) || positive(edit?.voutVpp) || Number.isFinite(edit?.gainDb) || manualPhase !== null;
-  if (rejectionReasons.length && inputChannel !== outputChannel && manualMeasurement
+  if (rejectionReasons.length && !mismatch && inputChannel !== outputChannel && manualMeasurement
       && positive(frequencyHz) && Number.isFinite(gainDb) && !edit?.excluded) {
     warnings.push('manual_measurement');
     rejectionReasons.length = 0;

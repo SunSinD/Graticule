@@ -1,4 +1,4 @@
-import { forwardRef, useRef, useState } from 'react';
+import { forwardRef, useState } from 'react';
 import type { TableFormat } from '../../core/export/table';
 import type { Dict } from '../i18n';
 
@@ -29,13 +29,7 @@ interface Props {
 
 function TitleInput({ tx, field, disabled }: { tx: Dict; field: TitleField; disabled: boolean }) {
   const [draft, setDraft] = useState<string | null>(null);
-  const skip = useRef(false);
   const commit = (): void => {
-    if (skip.current) {
-      skip.current = false;
-      setDraft(null);
-      return;
-    }
     if (draft === null) return;
     const next = draft.trim().slice(0, 120);
     setDraft(null);
@@ -58,11 +52,10 @@ function TitleInput({ tx, field, disabled }: { tx: Dict; field: TitleField; disa
             e.preventDefault();
             e.currentTarget.blur();
           } else if (e.key === 'Escape') {
+            // Reverts but keeps focus, so Tab still moves to the next control.
             e.preventDefault();
             e.stopPropagation();
-            skip.current = true;
-            setDraft(null);
-            e.currentTarget.blur();
+            setDraft(field.value);
           }
         }}
       />
