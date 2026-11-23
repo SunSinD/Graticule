@@ -482,7 +482,7 @@ test('crop switches between rectangle and 4 corners and applies a perspective bo
 
   const apply = page.getByRole('button', { name: 'Apply crop' });
   await expect(apply).toBeEnabled();
-  const tl = page.getByRole('button', { name: 'Top left corner' });
+  const tl = page.getByRole('slider', { name: 'Top left corner' });
   await tl.focus();
   await page.keyboard.press('Shift+ArrowDown');
   await page.keyboard.press('ArrowRight');
@@ -493,7 +493,7 @@ test('crop switches between rectangle and 4 corners and applies a perspective bo
 
   await page.getByRole('button', { name: 'Crop', exact: true }).click();
   await expect(page.getByRole('button', { name: '4 corners' })).toHaveAttribute('aria-pressed', 'true');
-  await page.getByRole('button', { name: 'Bottom right corner' }).focus();
+  await page.getByRole('slider', { name: 'Bottom right corner' }).focus();
   await page.keyboard.press('Escape');
   await expect(page.locator('[data-testid="quad-box"]')).toHaveCount(0);
 });
@@ -551,6 +551,27 @@ test('Clear asks for confirmation before wiping the history', async ({ page }) =
   await expect(page.getByText('Drop an oscilloscope screenshot, paste one, or add images.')).toBeVisible();
 });
 
+test('when the Clear confirmation times out under the keyboard, focus goes back to Clear', async ({ page }) => {
+  await addFiles(page, SINE);
+  const clear = page.getByRole('button', { name: 'Clear', exact: true });
+  await clear.click();
+  await expect(page.getByRole('button', { name: 'Confirm clear?' })).toBeFocused();
+  await expect(clear).toBeFocused({ timeout: 6_000 });
+  await expect(page.locator('.file-row')).toHaveCount(1);
+  await clear.click();
+  await page.locator('.zone.left').getByRole('button', { name: 'Cancel' }).click();
+  await expect(clear).toBeFocused();
+});
+
+test('adding more than 50 images keeps the first 50 and says how many were left out', async ({ page }) => {
+  const buffer = await fs.readFile(SINE);
+  const files = Array.from({ length: 52 }, (_, i) => ({ name: `cap_${String(i + 1).padStart(2, '0')}.png`, mimeType: 'image/png', buffer }));
+  await addFiles(page, files);
+  await expect(page.locator('.file-row')).toHaveCount(50, { timeout: 20_000 });
+  await expect(page.locator('[data-testid="file-note"]')).toHaveText('Only the first 50 images were added. 2 images were left out.');
+  await expect(page.locator('.file-row', { hasText: 'cap_51.png' })).toHaveCount(0);
+});
+
 test('removing a Bode item that leaves one selected opens it', async ({ page }) => {
   await addFiles(page, SWEEP.slice(0, 2));
   await expect(page.getByRole('button', { name: 'Extract Bode (2)' })).toBeVisible();
@@ -577,7 +598,7 @@ test('desktop 1440x900 fits in English and French with cursors and every export 
 
   await page.getByRole('button', { name: 'FR', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Curseurs' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Calque', exact: true })).toHaveAttribute('title', 'Superposition 1:1 (T)');
+  await expect(page.getByRole('button', { name: 'Superposition', exact: true })).toHaveAttribute('title', 'Superposition 1:1 (T)');
   await expect(page.getByRole('group', { name: 'Langue' })).toBeVisible();
   for (const name of ['SVG', 'PNG 2x', 'CSV', 'Copier', 'Word', 'Markdown', 'LaTeX', 'TSV']) {
     await expect(page.locator('.exports').getByRole('button', { name, exact: true })).toBeVisible();
@@ -796,7 +817,7 @@ test('the 4 corners warning gets a wide row in French on phones and narrow scree
   await addFiles(page, SINE);
   await page.getByRole('button', { name: 'Recadrer', exact: true }).click();
   await page.getByRole('button', { name: '4 coins' }).click();
-  const corner = page.getByRole('button', { name: 'Coin haut gauche' });
+  const corner = page.getByRole('slider', { name: 'Coin haut gauche' });
   await corner.focus();
   const alert = page.locator('.crop-bar [role="alert"]');
   for (let i = 0; i < 150 && (await alert.count()) === 0; i++) await page.keyboard.press('Shift+ArrowDown');
@@ -820,6 +841,32 @@ test('Escape closes the crop box while the Crop button still has focus', async (
   await page.keyboard.press('Escape');
   await expect(page.locator('[data-testid="crop-box"]')).toHaveCount(0);
   await expect(crop).toHaveAttribute('aria-pressed', 'false');
+});
+
+test('Apply and Cancel in the crop bar give focus back to the Crop button', async ({ page }) => {
+  await extractSine(page);
+  await page.keyboard.press('1');
+  const crop = page.getByRole('button', { name: 'Crop', exact: true });
+
+  await crop.click();
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(page.locator('[data-testid="crop-box"]')).toHaveCount(0);
+  await expect(crop).toBeFocused();
+
+  await crop.click();
+  const corner = page.getByRole('slider', { name: 'Bottom right corner' });
+  await expect(corner).toHaveAttribute('aria-valuetext', /^x \d+, y \d+$/);
+  await corner.focus();
+  await page.keyboard.press('ArrowLeft');
+  await page.getByRole('button', { name: 'Apply crop' }).click();
+  await expect(page.locator('[data-testid="crop-box"]')).toHaveCount(0);
+  await expect(crop).toBeFocused();
+
+  await crop.click();
+  await page.getByRole('slider', { name: 'Top left corner' }).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('[data-testid="crop-box"]')).toHaveCount(0);
+  await expect(crop).toBeFocused();
 });
 
 test('inspecting a Bode point focuses Back, and going back focuses that point again', async ({ page }) => {
@@ -914,6 +961,24 @@ test('coincident cursors show zero for delta t and a dash for 1 over delta t', a
   const value = (k: string) => readout.locator('.cursor-item', { has: page.locator('.k', { hasText: new RegExp(`^${k}$`) }) }).locator('.v');
   await expect(value('Δt')).toHaveText(/^0\s*s$/);
   await expect(value('1/Δt')).toHaveText('—');
+});
+
+test('a centered X1 cursor reads 0 s and every cursor announces its value', async ({ page }) => {
+  await extractSine(page);
+  await page.keyboard.press('c');
+  const readout = page.locator('[data-testid="cursor-readout"]');
+  await expect(readout).toBeVisible();
+  const x1 = page.getByRole('slider', { name: 'X1' });
+  await x1.focus();
+  for (let i = 0; i < 5; i++) await page.keyboard.press('Shift+ArrowRight');
+  await expect(x1).toHaveAttribute('aria-valuenow', '50');
+  const value = (k: string) => readout.locator('.cursor-item', { has: page.locator('.k', { hasText: new RegExp(`^${k}$`) }) }).locator('.v');
+  await expect(value('X1')).toHaveText(/^0\s*s$/);
+  await expect(x1).toHaveAttribute('aria-valuetext', /^0\s*s$/);
+  for (const name of ['X2', 'Y1', 'Y2']) {
+    await expect(page.getByRole('slider', { name })).toHaveAttribute('aria-valuetext', /^[−-]?\d[\d.,]*\s*[pnµm]?[sV]$/);
+  }
+  await expect(readout).not.toContainText(/e-\d/);
 });
 
 test('a cursor move saved right before a reload is kept', async ({ page }) => {
@@ -1132,8 +1197,8 @@ test('one view switcher holds Original, Overlay, Clean, XY and FFT and follows k
   await expect(page.locator('[data-testid="cursor-readout"]')).toBeVisible();
 
   await page.getByRole('button', { name: 'FR', exact: true }).click();
-  await expect(page.getByRole('group', { name: 'Vue' }).getByRole('button')).toHaveText(['Original', 'Calque', 'Propre', 'XY', 'FFT']);
-  await expect(viewTab(page, 'Calque')).toHaveAttribute('title', 'Superposition 1:1 (T)');
+  await expect(page.getByRole('group', { name: 'Vue' }).getByRole('button')).toHaveText(['Original', 'Superposition', 'Propre', 'XY', 'FFT']);
+  await expect(viewTab(page, 'Superposition')).toHaveAttribute('title', 'Superposition 1:1 (T)');
 });
 
 test('the + M chip adds a math channel to the plot, the Results and the CSV', async ({ page }) => {
@@ -1224,6 +1289,33 @@ test('selecting captures offers a Bode plot or a zip lab report with every captu
   expect(strFromU8(files['report.md']!)).toContain('## sweep');
   await expect(page.locator('[data-testid="export-feedback"]')).toHaveText('Report downloaded');
   await expect(page.locator('.file-row .dot.on')).toHaveCount(3);
+});
+
+test('Export all stays in the Bode toolbar after Extract Bode', async ({ page }) => {
+  await addFiles(page, SWEEP.slice(0, 3));
+  await page.getByRole('button', { name: 'Extract Bode (3)' }).click();
+  await expect(page.locator('[aria-label="Gain plot"]')).toBeVisible({ timeout: 10_000 });
+  const exportAll = page.locator('.bode').getByRole('button', { name: 'Export all (.zip)' });
+  await expect(exportAll).toBeEnabled();
+  const pending = page.waitForEvent('download', { timeout: 20_000 });
+  await exportAll.click();
+  const zip = await pending;
+  expect(zip.suggestedFilename()).toBe('graticule-report.zip');
+  const names = Object.keys(unzipSync(new Uint8Array(await fs.readFile((await zip.path())!))));
+  for (const n of ['01', '02', '03']) expect(names).toContain(`captures/sweep_${n}.svg`);
+  await expect(page.locator('[aria-label="Gain plot"]')).toBeVisible();
+});
+
+test('a typed scale far out of range such as 1e-30 is refused', async ({ page }) => {
+  await extractSine(page);
+  const time = page.locator('#time-div');
+  const vdiv = page.locator('#vdiv-C1');
+  for (const field of [time, vdiv]) {
+    const before = await field.inputValue();
+    await field.fill('1e-30');
+    await field.press('Enter');
+    await expect(field).toHaveValue(before);
+  }
 });
 
 test('a Bode title names the Bode SVG and CSV downloads', async ({ page }) => {

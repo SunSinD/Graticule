@@ -170,7 +170,7 @@ describe('buildBatchReportZip', () => {
 
     const fr = unzipSync(await buildBatchReportZip(entries, { locale: 'fr' }));
     const noteFr = 'aucune trace analogique dans cette capture, le graphique et le tableau sont donc vides. '
-      + 'Seulement des canaux numériques trouvés.';
+      + 'Seuls des canaux numériques ont été trouvés.';
     expect(read(fr, 'report.md')).toContain(noteFr);
     expect(read(fr, 'report.tex')).toContain(noteFr);
     expect(read(fr, 'report.html')).toContain(noteFr);

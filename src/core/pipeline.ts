@@ -38,7 +38,9 @@ export function analyzeCapture(source: RgbaImage, fileName: string, overrides: E
   const mask = buildOverlayMask(image, detection.grid, detection.profileId, metadata.digital);
   const sourceProfile = quad && detection.grid.inverted
     ? overrides.profileId ?? detectProfile(source).profileId : undefined;
-  const inverted = sourceProfile === undefined ? undefined : invertTraceColors(source, sourceProfile, true);
+  // A fallback source has no native badges to read, so check trace polarity on the rectified plot instead.
+  const inverted = sourceProfile === undefined || sourceProfile === 'universal-fallback' ? undefined
+    : invertTraceColors(source, sourceProfile, true);
   const { traces, warnings } = extractTraces(image, detection, metadata, mask, timebase, overrides, inverted);
   const measurements = traces.map(trace => measureChannel(trace, detection.grid.pxPerVDiv));
   const frequency = (channel: ChannelId) => timebase.source === 'default' ? null

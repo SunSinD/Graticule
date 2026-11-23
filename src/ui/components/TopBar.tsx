@@ -21,7 +21,8 @@ export function TopBar({ tx, mode, locale, dark, onLocale, onTheme, onShortcuts,
     <header className="topbar">
       <span className="wordmark">Graticule</span>
       {mode !== 'empty' && (
-        <span className="mode" aria-label={tx.mode}>
+        <span className="mode" title={tx.mode}>
+          <span className="sr-only">{tx.mode} </span>
           {mode === 'bode' ? tx.modeBode : tx.modeSingle}
         </span>
       )}

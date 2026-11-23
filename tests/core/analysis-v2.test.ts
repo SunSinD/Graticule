@@ -440,6 +440,18 @@ describe('spectrum and harmonic THD', () => {
     expect(ticks.every((tick, i) => tick === ticks[0]! + i * step && tick % step === 0)).toBe(true);
   });
 
+  test('uses round 1-2-5 linear amplitude labels', () => {
+    const spec = computeSpectrum(capture(512, 1 / 20_000, { wave: i => 7.5 * sine(i, 64), scale: 2 }), { channel: 'C1' });
+    expect(spec.fundamental?.vrms).toBeCloseTo(7.5 / Math.SQRT2, 2);
+    const labels = Array.from(renderSpectrumSvg(spec, { scale: 'linear' }).matchAll(/text-anchor="end">([^<]+)<\/text>/g), match => match[1]);
+    expect(labels).toEqual(['0 V', '1 V', '2 V', '3 V', '4 V', '5 V', '6 V']);
+    const small = computeSpectrum(capture(512, 1 / 20_000, { wave: i => 0.03 * sine(i, 64) }), { channel: 'C1' });
+    const smallLabels = Array.from(renderSpectrumSvg(small, { scale: 'linear' }).matchAll(/text-anchor="end">([^<]+)<\/text>/g), match => match[1]);
+    expect(smallLabels.length).toBeLessThanOrEqual(9);
+    expect(smallLabels[0]).toBe('0 V');
+    expect(smallLabels.slice(1).every(label => /^\d+ mV$/.test(label!))).toBe(true);
+  });
+
   test('zooms the FFT plot around the harmonic band and retains Nyquist in the CSV', () => {
     const spec = computeSpectrum(capture(1024, 1 / 200_000, { wave: i => sine(i, 200) }), { channel: 'C1' });
     expect(spec.fundamental?.frequencyHz).toBeCloseTo(1000, 2);

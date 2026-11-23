@@ -167,13 +167,18 @@ function waveformLayout(result: ExtractionResult, options: SvgExportOptions) {
   const frame: WaveformFrame = {
     width, height, x0, y0, x1: x0 + plotW, y1: y0 + plotH, plotW, plotH,
     timeAt(fraction) {
-      const divs = (grid.left - grid.centerX) / grid.pxPerHDiv + fraction * spanDivs;
+      const raw = (grid.left - grid.centerX) / grid.pxPerHDiv + fraction * spanDivs;
+      // Snap floating point dust so a cursor on the trigger point reads 0 s.
+      const divs = Math.abs(raw) < 1e-9 ? 0 : raw;
       const relative = divs * secPerDiv;
-      return Number.isFinite(relative) ? triggerOffsetSec + relative : (triggerOffsetSec / 2 + divs * (secPerDiv / 2)) * 2;
+      const t = Number.isFinite(relative) ? triggerOffsetSec + relative : (triggerOffsetSec / 2 + divs * (secPerDiv / 2)) * 2;
+      return Math.abs(t) < 1e-9 * spanDivs * Math.abs(secPerDiv) ? 0 : t;
     },
     voltAt(channel, fraction) {
       const trace = settings.get(channel);
-      return trace ? scaleOffset(trace.zeroY - grid.top - fraction * grid.height, grid.pxPerVDiv, trace.voltsPerDiv) : null;
+      if (!trace) return null;
+      const volts = scaleOffset(trace.zeroY - grid.top - fraction * grid.height, grid.pxPerVDiv, trace.voltsPerDiv);
+      return Math.abs(volts) < 1e-9 * Math.max(1, grid.vDivs) * Math.abs(trace.voltsPerDiv) ? 0 : volts;
     },
   };
   return { frame, traces, laneGap, lanesH, axisLabelH, legendRowH };

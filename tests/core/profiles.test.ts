@@ -180,6 +180,12 @@ describe('native capture profiles', () => {
       layoutVariant: 'measure-1row', pxPerHDiv: 100, centerX: 639, vDivs: 8, pxPerVDiv: 642 / 8,
       vLines: result.detection.grid.vLines,
     });
+    const overridden = detectProfile(image, { hDivs: 6 }).grid;
+    expect(overridden).toMatchObject({
+      layoutVariant: 'measure-1row', left, right, width: right! - left, hDivs: 6, pxPerHDiv: 200, centerX: 639,
+    });
+    expect(overridden.vLines).toEqual([39, 239, 439, 639, 839, 1039]);
+    expect(overridden.vLines.every(x => x <= right!)).toBe(true);
     const rows = result.traces[0]!.samples.map(sample => `${sample.timeSec},${sample.voltage ?? ''}`);
     const comparison = compareWithScopeCsv(result, parseScopeCsv(['Time (s),C1', ...rows].join('\n')));
     expect(comparison).toMatchObject({ totalCount: 1165, usableCount: 1165, unaligned: { matchedCount: 1165, rmseV: 0 } });

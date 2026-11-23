@@ -31,7 +31,7 @@ function spacedTimeTicks(svg: string): string[] {
 
 describe('waveform exports', () => {
   test('formats engineering scales with optional units per division and rejects overflow', () => {
-    expect(GRATICULE_VERSION).toBe('2.0.4');
+    expect(GRATICULE_VERSION).toBe('2.0.5');
     expect(parseEngineering('5 mV/div')).toBe(0.005);
     expect(parseEngineering('5 V²')).toBe(5);
     expect(parseEngineering('200 mV²')).toBe(0.2);
@@ -198,7 +198,7 @@ describe('waveform exports', () => {
   test('adds an optional sanitized Bode title in CSV and a custom caption in LaTeX', () => {
     const bode = analyzeBodeBatch([result]);
     expect(renderBodeCsv(bode, 'Sweep, =1+1').split('\n').slice(0, 2)).toEqual([
-      '# Graticule v2.0.4', "# title: Sweep,' =1+1",
+      '# Graticule v2.0.5', "# title: Sweep,' =1+1",
     ]);
     expect(renderBodeCsv(bode, ' \t ')).toBe(renderBodeCsv(bode));
     const point = { ...bode.points[0]!, accepted: false, rejectionReasons: ['frequency_mismatch'] };
@@ -229,6 +229,22 @@ describe('waveform exports', () => {
     expect(frame.voltAt(trace.channel, (trace.settings.zeroY - grid.top) / grid.height)! / 1e307).toBeCloseTo(0, 12);
     const shifted = waveformFrame({ ...result, timebase: { ...timebase, secPerDiv: 5e307, triggerOffsetSec: -1e308 } });
     expect(shifted.timeAt(1) / 1e308).toBeCloseTo(1.5, 12);
+  });
+
+  test('snaps a cursor on the trigger point and on a channel zero to exact zero', () => {
+    const { grid } = result.detection;
+    const center = (grid.centerX - grid.left) / grid.width;
+    for (const secPerDiv of [0.0005, 1e-9, 3.3e-5]) {
+      const frame = waveformFrame({ ...result, timebase: { ...result.timebase, secPerDiv, triggerOffsetSec: 0 } });
+      expect(Object.is(frame.timeAt(center), 0)).toBe(true);
+      expect(Object.is(frame.timeAt(center + 1e-15), 0)).toBe(true);
+      expect(frame.timeAt(1)).toBeCloseTo(secPerDiv * grid.width / grid.pxPerHDiv / 2, 15);
+    }
+    const shifted = waveformFrame({ ...result, timebase: { ...result.timebase, secPerDiv: 0.001, triggerOffsetSec: -0.0013 } });
+    expect(Object.is(shifted.timeAt(center + 1.3 / (grid.width / grid.pxPerHDiv)), 0)).toBe(true);
+    const trace = result.traces[0]!;
+    const zero = (trace.settings.zeroY - grid.top) / grid.height;
+    expect(Object.is(waveformFrame(result).voltAt(trace.channel, zero + 1e-15), 0)).toBe(true);
   });
 
   test('prints exact zero for coincident cursors and preserves deltas at large offsets', () => {

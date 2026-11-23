@@ -1,9 +1,9 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
-import { resolve, basename } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { resolve, basename, dirname } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const root = resolve(process.cwd());
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
 function run(command, args) {
   return new Promise((resolveResult, reject) => {
@@ -32,7 +32,7 @@ const samples = [
 
 for (const sample of samples) {
   const absolute = resolve(root, sample);
-  const cliCsv = (await run('node', ['dist-cli/cli/index.js', absolute, '--csv'])).replace(/\r\n/g, '\n').trimEnd();
+  const cliCsv = (await run(process.execPath, ['dist-cli/cli/index.js', absolute, '--csv'])).replace(/\r\n/g, '\n').trimEnd();
   const bytes = new Uint8Array(await readFile(absolute));
   const result = pipelineMod.analyzePngBytes(bytes, basename(absolute));
   const coreCsv = csvMod.renderWaveformCsv(result).replace(/\r\n/g, '\n').trimEnd();
@@ -56,7 +56,7 @@ const sweepInputs = await Promise.all(
   })),
 );
 const directBodeCsv = csvMod.renderBodeCsv(pipelineMod.analyzeBodeBatch(sweepInputs)).replace(/\r\n/g, '\n').trimEnd();
-const cliBodeCsv = (await run('node', ['dist-cli/cli/index.js', '--bode', sweepDir, '--csv']))
+const cliBodeCsv = (await run(process.execPath, ['dist-cli/cli/index.js', '--bode', sweepDir, '--csv']))
   .replace(/\r\n/g, '\n')
   .trimEnd();
 if (cliBodeCsv !== directBodeCsv) {

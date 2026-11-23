@@ -36,20 +36,34 @@ function StateMark({ item, rejected, tx }: { item: HistoryItem; rejected: boolea
 function ClearButton({ tx, onClear }: { tx: Dict; onClear: () => void }) {
   const [confirming, setConfirming] = useState(false);
   const timer = useRef<number | undefined>(undefined);
+  const chips = useRef<HTMLDivElement>(null);
+  const clearBtn = useRef<HTMLButtonElement>(null);
+  const refocus = useRef(false);
   useEffect(() => () => window.clearTimeout(timer.current), []);
+  useEffect(() => {
+    if (confirming || !refocus.current) return;
+    refocus.current = false;
+    clearBtn.current?.focus();
+  }, [confirming]);
   const reset = (): void => {
     window.clearTimeout(timer.current);
+    setConfirming(false);
+  };
+  // When the confirm row times out under the keyboard, focus goes back to Clear instead of the page.
+  const expire = (): void => {
+    refocus.current = Boolean(chips.current?.contains(document.activeElement));
     setConfirming(false);
   };
   if (!confirming) {
     return (
       <button
+        ref={clearBtn}
         type="button"
         className="btn chip"
         onClick={() => {
           setConfirming(true);
           window.clearTimeout(timer.current);
-          timer.current = window.setTimeout(() => setConfirming(false), 4000);
+          timer.current = window.setTimeout(expire, 4000);
         }}
       >
         {tx.clear}
@@ -57,8 +71,15 @@ function ClearButton({ tx, onClear }: { tx: Dict; onClear: () => void }) {
     );
   }
   return (
-    <div className="chips">
-      <button type="button" className="btn chip" onClick={reset}>
+    <div ref={chips} className="chips">
+      <button
+        type="button"
+        className="btn chip"
+        onClick={() => {
+          refocus.current = true;
+          reset();
+        }}
+      >
         {tx.cancel}
       </button>
       <button

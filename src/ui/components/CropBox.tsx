@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useId, useRef } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 import type { Point, Quad, Rect } from '../../core/types';
 import { projectRectToQuad } from '../../core/deskew';
@@ -44,6 +44,32 @@ function useStageMapping(imageWidth: number, imageHeight: number) {
     };
   };
   return { ref, toImage };
+}
+
+/**
+ * A crop corner moves in two directions, so it is a slider whose value text gives both positions.
+ * The keys are described once, in a hidden note every handle points to.
+ */
+function handleProps(label: string, p: Point, w: number, hintId: string) {
+  const x = Math.round(p.x);
+  const y = Math.round(p.y);
+  return {
+    role: 'slider',
+    tabIndex: 0,
+    'aria-label': label,
+    'aria-describedby': hintId,
+    'aria-valuemin': 0,
+    'aria-valuemax': Math.max(0, Math.round(w)),
+    'aria-valuenow': x,
+    'aria-valuetext': `x ${x}, y ${y}`,
+  } as const;
+}
+
+function cornerPoint(r: Rect, c: Corner): Point {
+  return {
+    x: c === 'tl' || c === 'bl' ? r.x : r.x + r.width,
+    y: c === 'tl' || c === 'tr' ? r.y : r.y + r.height,
+  };
 }
 
 function commonKeys(e: ReactKeyboardEvent, onApply: () => void, onCancel: () => void): boolean {
@@ -97,6 +123,7 @@ function moveRect(grip: Grip, r: Rect, dx: number, dy: number, w: number, h: num
 export function CropBox({ tx, rect, imageWidth, imageHeight, hDivs, vDivs, onChange, onApply, onCancel }: RectProps) {
   const drag = useRef<{ grip: Grip; start: Point; rect: Rect } | null>(null);
   const { ref, toImage } = useStageMapping(imageWidth, imageHeight);
+  const hintId = useId();
 
   const start = (grip: Grip) => (e: ReactPointerEvent<HTMLElement>) => {
     e.preventDefault();
@@ -138,6 +165,7 @@ export function CropBox({ tx, rect, imageWidth, imageHeight, hDivs, vDivs, onCha
       role="group"
       tabIndex={0}
       aria-label={tx.cropBox}
+      aria-describedby={hintId}
       style={{
         left: pct(rect.x, imageWidth),
         top: pct(rect.y, imageHeight),
@@ -156,13 +184,14 @@ export function CropBox({ tx, rect, imageWidth, imageHeight, hDivs, vDivs, onCha
       {hLines.map((f) => (
         <span key={`h${f}`} className="crop-line h" style={{ top: `${f * 100}%` }} />
       ))}
+      <span id={hintId} className="sr-only">
+        {tx.cornerKeys}
+      </span>
       {CORNERS.map((c) => (
         <span
           key={c}
           className={`crop-handle ${c}`}
-          role="button"
-          tabIndex={0}
-          aria-label={tx.corners[c]}
+          {...handleProps(tx.corners[c]!, cornerPoint(rect, c), imageWidth, hintId)}
           onPointerDown={start(c)}
           onPointerMove={move}
           onPointerUp={end}
@@ -201,6 +230,7 @@ export function QuadBox({ tx, quad, valid, imageWidth, imageHeight, hDivs, vDivs
   const { ref, toImage } = useStageMapping(imageWidth, imageHeight);
   const w = imageWidth;
   const h = imageHeight;
+  const hintId = useId();
 
   const start = (grip: number | 'move') => (e: ReactPointerEvent<Element>) => {
     e.preventDefault();
@@ -270,13 +300,14 @@ export function QuadBox({ tx, quad, valid, imageWidth, imageHeight, hDivs, vDivs
         <polygon className="quad-edge outer" points={pts} />
         <polygon className={`quad-edge${valid ? '' : ' bad'}`} points={pts} />
       </svg>
+      <span id={hintId} className="sr-only">
+        {tx.cornerKeys}
+      </span>
       {quad.map((p, i) => (
         <span
           key={CORNERS[i]}
           className="crop-handle"
-          role="button"
-          tabIndex={0}
-          aria-label={tx.corners[CORNERS[i]!]}
+          {...handleProps(tx.corners[CORNERS[i]!]!, p, w, hintId)}
           style={{ left: `${(p.x / Math.max(1, w)) * 100}%`, top: `${(p.y / Math.max(1, h)) * 100}%` }}
           onPointerDown={start(i)}
           onPointerMove={move}

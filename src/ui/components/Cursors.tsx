@@ -15,6 +15,25 @@ function clamp01(v: number): number {
   return Math.min(1, Math.max(0, v));
 }
 
+/** Reads a value that is zero up to float noise, such as the plot center, as exactly zero. */
+export function snapZero(v: number, span: number): number {
+  return Math.abs(v) <= COINCIDENT * Math.abs(span) ? 0 : v;
+}
+
+/** Time at a cursor position, with the plot center reading 0 s instead of a float leftover. */
+export function cursorTime(frame: WaveformFrame, fraction: number): number {
+  return snapZero(frame.timeAt(clamp01(fraction)), frame.timeAt(1) - frame.timeAt(0));
+}
+
+/** Voltage at a cursor position, with the zero line reading 0 V instead of a float leftover. */
+export function cursorVolt(frame: WaveformFrame, channel: ChannelId, fraction: number): number | null {
+  const v = frame.voltAt(channel, clamp01(fraction));
+  if (v === null) return null;
+  const top = frame.voltAt(channel, 0);
+  const bottom = frame.voltAt(channel, 1);
+  return top === null || bottom === null ? v : snapZero(v, top - bottom);
+}
+
 export function enabledChannels(result: ExtractionResult): ChannelId[] {
   return result.traces.filter((t) => t.settings.enabled).map((t) => t.channel);
 }
@@ -29,15 +48,20 @@ export function resolveCursors(result: ExtractionResult, saved: PlotCursors | nu
 
 interface OverlayProps {
   readonly tx: Dict;
+  readonly locale: Locale;
   readonly frame: WaveformFrame;
   readonly cursors: PlotCursors;
   readonly onChange: (cursors: PlotCursors) => void;
 }
 
-export function CursorOverlay({ tx, frame, cursors, onChange }: OverlayProps) {
+export function CursorOverlay({ tx, locale, frame, cursors, onChange }: OverlayProps) {
   const svgRef = useRef<SVGSVGElement>(null);
   const drag = useRef<Key | null>(null);
   const { x0, y0, x1, y1, plotW, plotH, width, height } = frame;
+  const valueText = (key: Key): string =>
+    key[0] === 'x'
+      ? formatEng(cursorTime(frame, cursors[key]), 's', locale, { sig: 4, trim: true })
+      : formatEng(cursorVolt(frame, cursors.channel, cursors[key]), 'V', locale, { sig: 4, trim: true });
 
   const fraction = (key: Key, clientX: number, clientY: number): number => {
     const r = svgRef.current?.getBoundingClientRect();
@@ -106,6 +130,7 @@ export function CursorOverlay({ tx, frame, cursors, onChange }: OverlayProps) {
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={Math.round(f * 100)}
+            aria-valuetext={valueText(key)}
             onPointerDown={start(key)}
             onPointerMove={move}
             onPointerUp={end}
@@ -142,15 +167,15 @@ interface ReadoutProps {
 
 export function CursorReadout({ tx, locale, result, frame, cursors, labels, onChange }: ReadoutProps) {
   const fmt = (v: number | null, unit: string) => formatEng(v, unit, locale, { sig: 4, trim: true });
-  const t1 = frame.timeAt(clamp01(cursors.x1));
-  const t2 = frame.timeAt(clamp01(cursors.x2));
+  const t1 = cursorTime(frame, cursors.x1);
+  const t2 = cursorTime(frame, cursors.x2);
   // Coincident cursors read as exactly zero, never a float leftover like 2e-7 ps.
   const sameX = Math.abs(clamp01(cursors.x2) - clamp01(cursors.x1)) <= COINCIDENT;
   const sameY = Math.abs(clamp01(cursors.y2) - clamp01(cursors.y1)) <= COINCIDENT;
   const rawDt = Math.abs(t2 - t1);
   const dt = sameX || rawDt <= COINCIDENT * Math.max(Math.abs(t1), Math.abs(t2)) ? 0 : rawDt;
-  const v1 = frame.voltAt(cursors.channel, clamp01(cursors.y1));
-  const v2 = frame.voltAt(cursors.channel, clamp01(cursors.y2));
+  const v1 = cursorVolt(frame, cursors.channel, cursors.y1);
+  const v2 = cursorVolt(frame, cursors.channel, cursors.y2);
   const rawDv = v1 === null || v2 === null ? null : Math.abs(v2 - v1);
   const dv = rawDv === null ? null : sameY || rawDv <= COINCIDENT * Math.max(Math.abs(v1!), Math.abs(v2!)) ? 0 : rawDv;
   const period = result.measurements.find((m) => m.channel === cursors.channel)?.periodSec ?? null;

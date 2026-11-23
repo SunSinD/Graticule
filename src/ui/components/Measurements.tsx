@@ -13,7 +13,7 @@ import type { XyResult } from '../../core/xy';
 import { formatMetric, metricValue } from '../../core/export/table';
 import { METRIC_UNITS, metricLabel, toMetricKey } from '../../core/export/labels';
 import type { MetricKey } from '../../core/export/labels';
-import { EMPTY_CELL, METRIC_LABELS, ROW_LABELS, formatEng, formatFixed, formatPercent, gapLabel } from '../i18n';
+import { EMPTY_CELL, METRIC_LABELS, ROW_LABELS, formatEng, formatFixed, formatPercent, formatWarning, gapLabel } from '../i18n';
 import type { Dict, RowKey } from '../i18n';
 import type { ChannelLabels } from '../history';
 
@@ -227,6 +227,11 @@ function SpectrumBlock({ tx, locale, spec, name }: { tx: Dict; locale: Locale; s
         ))}
       </dl>
       <p className="muted small">{tx.noiseNote}</p>
+      {[...new Set(spec.warnings)].map((w) => (
+        <p key={w} className="note" data-testid="fft-warning">
+          {formatWarning(w, tx)}
+        </p>
+      ))}
     </div>
   );
 }

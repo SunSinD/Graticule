@@ -136,6 +136,7 @@ export function CaptureView(props: Props) {
   const [vText, setVText] = useState('8');
   const [zoom, setZoom] = useState(100);
   const viewport = useRef<HTMLDivElement>(null);
+  const cropBtn = useRef<HTMLButtonElement>(null);
   const edited = useRef(false);
   useCtrlWheelZoom(viewport, zoom, ZOOM_MAX, setZoom);
 
@@ -207,14 +208,22 @@ export function CaptureView(props: Props) {
   const canApply = cropMode === 'quad' ? quadValid : rect !== null;
   const cursorsVisible = showClean && props.cursors !== null && frame !== null && result !== null;
 
+  // The Apply and Cancel buttons and the crop handles go away, so focus goes back to the Crop button.
   const apply = (): void => {
     if (cropMode === 'quad') {
-      if (quad && quadValid) props.onApplyQuad(quad, hDivs, vDivs);
+      if (!quad || !quadValid) return;
+      props.onApplyQuad(quad, hDivs, vDivs);
     } else if (rect) {
       props.onApplyCrop(rect, hDivs, vDivs);
+    } else {
+      return;
     }
+    cropBtn.current?.focus();
   };
-  const cancel = (): void => props.onCropOpen(false);
+  const cancel = (): void => {
+    props.onCropOpen(false);
+    cropBtn.current?.focus();
+  };
   type Tab = readonly [CaptureMode, string, string, Record<string, string>];
   const tabs: Tab[] = [
     ['original', tx.original, '1', {}],
@@ -250,7 +259,7 @@ export function CaptureView(props: Props) {
           </div>
         )}
         {(shown === 'original' || shown === 'overlay') && canCrop && (
-          <button type="button" className="btn" aria-pressed={cropOpen} onClick={() => props.onCropOpen(!cropOpen)} title={tx.cropTitle}>
+          <button ref={cropBtn} type="button" className="btn" aria-pressed={cropOpen} onClick={() => props.onCropOpen(!cropOpen)} title={tx.cropTitle}>
             <Crop size={16} aria-hidden="true" />
             <span>{tx.crop}</span>
           </button>
@@ -373,7 +382,7 @@ export function CaptureView(props: Props) {
           <div className="canvas plot" style={{ '--ar': plotRatio, '--z': z } as CSSProperties}>
             <div className="plot-svg" data-testid={`${shown}-plot`} dangerouslySetInnerHTML={{ __html: plotSvg }} />
             {cursorsVisible && props.cursors && frame && (
-              <CursorOverlay tx={tx} frame={frame} cursors={props.cursors} onChange={props.onCursorsChange} />
+              <CursorOverlay tx={tx} locale={locale} frame={frame} cursors={props.cursors} onChange={props.onCursorsChange} />
             )}
           </div>
         ) : (

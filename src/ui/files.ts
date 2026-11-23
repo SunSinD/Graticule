@@ -153,22 +153,31 @@ function entryFile(entry: FileSystemFileEntry): Promise<File> {
   return new Promise((resolve, reject) => entry.file(resolve, reject));
 }
 
-async function walk(entry: FileSystemEntry, out: File[]): Promise<void> {
-  if (entry.isFile) {
-    out.push(await entryFile(entry as FileSystemFileEntry));
-    return;
-  }
-  if (entry.isDirectory) {
-    const reader = (entry as FileSystemDirectoryEntry).createReader();
-    for (;;) {
-      const batch = await readEntries(reader);
-      if (batch.length === 0) break;
-      for (const child of batch) await walk(child, out);
+/**
+ * Collects every file under the entry. An entry the browser cannot read, such as a locked file or a
+ * junction, is noted in `skipped` and the rest of the folder is still read.
+ */
+async function walk(entry: FileSystemEntry, out: File[], skipped: string[]): Promise<void> {
+  try {
+    if (entry.isFile) {
+      out.push(await entryFile(entry as FileSystemFileEntry));
+      return;
     }
+    if (entry.isDirectory) {
+      const reader = (entry as FileSystemDirectoryEntry).createReader();
+      for (;;) {
+        const batch = await readEntries(reader);
+        if (batch.length === 0) break;
+        for (const child of batch) await walk(child, out, skipped);
+      }
+    }
+  } catch {
+    skipped.push(entry.name || entry.fullPath || '?');
   }
 }
 
-export async function filesFromDataTransfer(dt: DataTransfer): Promise<File[]> {
+/** Files dropped on the page, folders included. Names of entries that could not be read go into `skipped`. */
+export async function filesFromDataTransfer(dt: DataTransfer, skipped: string[] = []): Promise<File[]> {
   const out: File[] = [];
   const entries: FileSystemEntry[] = [];
   for (const item of Array.from(dt.items)) {
@@ -180,7 +189,7 @@ export async function filesFromDataTransfer(dt: DataTransfer): Promise<File[]> {
       if (f) out.push(f);
     }
   }
-  for (const e of entries) await walk(e, out);
+  for (const e of entries) await walk(e, out, skipped);
   if (out.length === 0) out.push(...Array.from(dt.files));
   return out.filter(isImageFile).sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
 }

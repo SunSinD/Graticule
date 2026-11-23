@@ -6,7 +6,7 @@ import { parseArgs } from 'node:util';
 import { columnInterval } from '../core/columns.js';
 import { compareWithScopeCsv, parseScopeCsv } from '../core/compare.js';
 import { csvField, renderBodeCsv, renderWaveformCsv } from '../core/export/csv.js';
-import { csvNumber, parseEngineering } from '../core/export/format.js';
+import { GRATICULE_VERSION, csvNumber, localizeDecimal, parseEngineering } from '../core/export/format.js';
 import { renderBodeSvg, renderWaveformSvg } from '../core/export/svg.js';
 import { renderBodeTable, renderMeasurementsTable, renderTables } from '../core/export/table.js';
 import type { TableFormat } from '../core/export/table.js';
@@ -21,6 +21,7 @@ import type { BodeRejectedCapture, ChannelId, ExtractionOverrides, ExtractionRes
 
 const usage = `Usage
   graticule capture.png [options]
+  graticule --version
   graticule --bode folder [options]
   graticule compare capture.png scope.csv [--channel C1] [--csv-column <label>] [--json]
 
@@ -43,7 +44,8 @@ or a directory path for multiple formats.
   --fft C1 [--window hann|rect|flattop|blackman] [--scale dbv|linear]
   --decode uart [--channel C1] [--baud auto|9600]
   --deskew x0,y0,x1,y1,x2,y2,x3,y3 (TL, TR, BR, BL)
-  --out path`;
+  --out path
+  --version | -v`;
 
 interface Output {
   readonly extension: string;
@@ -98,7 +100,7 @@ async function run(): Promise<void> {
     options: {
       bode: { type: 'string' }, csv: { type: 'boolean' }, svg: { type: 'boolean' },
       json: { type: 'boolean' }, table: { type: 'boolean' }, locale: { type: 'string' },
-      out: { type: 'string', short: 'o' }, help: { type: 'boolean', short: 'h' },
+      out: { type: 'string', short: 'o' }, help: { type: 'boolean', short: 'h' }, version: { type: 'boolean', short: 'v' },
       theme: { type: 'string' }, format: { type: 'string' }, profile: { type: 'string' }, title: { type: 'string' },
       'sec-per-div': { type: 'string' }, vdiv: { type: 'string', multiple: true }, deskew: { type: 'string' },
       hdivs: { type: 'string' }, vdivs: { type: 'string' }, offset: { type: 'string', multiple: true },
@@ -110,6 +112,10 @@ async function run(): Promise<void> {
   if (values.out === '') throw new Error('--out requires a non-empty path.');
   if (values.help) {
     process.stdout.write(usage + '\n');
+    return;
+  }
+  if (values.version) {
+    process.stdout.write(`${GRATICULE_VERSION}\n`);
     return;
   }
   const comparing = positionals[0] === 'compare';
@@ -147,6 +153,8 @@ async function run(): Promise<void> {
     manualQuad: values.deskew === undefined ? undefined : deskew(values.deskew),
   };
   const formats: Output[] = [];
+  const localizeRows = (rows: readonly (readonly string[])[], from: number, to = Infinity) =>
+    rows.map(row => row.map((cell, i) => i >= from && i < to ? localizeDecimal(cell, locale) : cell));
   const table = values.table || values.format || (!values.csv && !values.svg && !values.json);
   const svgOptions = { locale, theme, title: values.title } as const;
   const op = values.math;
@@ -170,7 +178,11 @@ async function run(): Promise<void> {
   const csvColumn = values['csv-column'];
   if (csvColumn !== undefined && !comparing) throw new Error('--csv-column requires compare.');
   if (csvColumn !== undefined && !csvColumn.trim()) throw new Error('--csv-column requires a column label.');
-  const baud = values.baud === undefined || values.baud === 'auto' ? 'auto' : Number(values.baud);
+  const baudArg = values.baud?.trim();
+  if (baudArg !== undefined && baudArg !== 'auto' && !/^\d+(?:\.\d+)?$/.test(baudArg)) {
+    throw new Error('Use --baud auto or a positive rate.');
+  }
+  const baud = baudArg === undefined || baudArg === 'auto' ? 'auto' : Number(baudArg);
   if (baud !== 'auto' && (!Number.isFinite(baud) || baud <= 0)) throw new Error('Use --baud auto or a positive rate.');
   if (values.baud !== undefined && !values.decode) throw new Error('--baud requires --decode uart.');
   if ((values.bode !== undefined || comparing) && (op || fft || axes || values.decode)) throw new Error('Run capture analysis on a single image.');
@@ -215,7 +227,7 @@ async function run(): Promise<void> {
         [key, csvNumber(value), csvNumber(comparison.aligned[key as keyof typeof comparison.aligned])]);
       const head = locale === 'fr' ? ['Mesure', 'Sans alignement', 'Aligné'] : ['Measurement', 'Unaligned', 'Aligned'];
       if (table) formats.push({ extension: tableExtensions[format], text: renderTables([{
-        caption: values.title ?? `${comparison.channel} / ${comparison.csvColumn}`, head, rows, numericFrom: 1,
+        caption: values.title ?? `${comparison.channel} / ${comparison.csvColumn}`, head, rows: localizeRows(rows, 1), numericFrom: 1,
       }], format) });
       if (values.csv) formats.push({ extension: 'csv', text: [['metric', 'unaligned', 'aligned'], ...rows].map(row => row.join(',')).join('\n') + '\n' });
     } else {
@@ -253,9 +265,10 @@ async function run(): Promise<void> {
         if (values.csv) add('xy', 'csv', renderXyCsv(xy, values.title));
         if (values.svg) add('xy', 'svg', renderXySvg(xy, svgOptions));
         if (table) add('xy', tableExtensions[format], renderTables([{
-          caption: values.title ?? `${xy.xAxis} / ${xy.yAxis}`, head: ['Axis', 'Min', 'Max', 'Peak to peak'], numericFrom: 1,
-          rows: [[`${xy.xAxis} (${xy.xUnit})`, csvNumber(xy.xMin), csvNumber(xy.xMax), csvNumber(xy.xVpp)],
-            [`${xy.yAxis} (${xy.yUnit})`, csvNumber(xy.yMin), csvNumber(xy.yMax), csvNumber(xy.yVpp)]],
+          caption: values.title ?? `${xy.xAxis} / ${xy.yAxis}`, numericFrom: 1,
+          head: locale === 'fr' ? ['Axe', 'Min', 'Max', 'Crête à crête'] : ['Axis', 'Min', 'Max', 'Peak to peak'],
+          rows: localizeRows([[`${xy.xAxis} (${xy.xUnit})`, csvNumber(xy.xMin), csvNumber(xy.xMax), csvNumber(xy.xVpp)],
+            [`${xy.yAxis} (${xy.yUnit})`, csvNumber(xy.yMin), csvNumber(xy.yMax), csvNumber(xy.yVpp)]], 1),
         }], format));
       }
       if (spectrum) {
@@ -269,10 +282,14 @@ async function run(): Promise<void> {
           String(frame.framingError), String(frame.parityError), String(frame.uncertain),
         ]);
         const head = ['start_s', 'end_s', 'hex', 'ascii', 'framing_error', 'parity_error', 'uncertain'];
-        if (values.csv) add('uart', 'csv', [head.join(','), ...rows.map(row => row.map(csvField).join(','))].join('\n') + '\n');
+        // Timestamps stay numeric in CSV; only the text columns need spreadsheet formula protection.
+        if (values.csv) add('uart', 'csv', [head.join(','), ...rows.map(([start, end, ...rest]) =>
+          [start, end, ...rest.map(csvField)].join(','))].join('\n') + '\n');
+        const tableHead = locale === 'fr'
+          ? ['Début (s)', 'Fin (s)', 'Hex', 'ASCII', 'Erreur de trame', 'Erreur de parité', 'Incertain'] : head;
         if (table) add('uart', tableExtensions[format], renderTables([{
           caption: values.title ?? `UART ${uart.channel} ${uart.baud ?? ''} ${uart.reason ?? ''}`.trim(),
-          head, rows, numericFrom: 0, numericTo: 2,
+          head: tableHead, rows: localizeRows(rows, 0, 2), numericFrom: 0, numericTo: 2,
         }], format));
       }
     }

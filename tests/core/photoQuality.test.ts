@@ -88,6 +88,28 @@ describe('phone photo quality', () => {
     expect(report.contrast).toBe(32);
   });
 
+  it('passes a crisp screen inside a wide dark bezel and still flags a washed out one', () => {
+    const framed = (lineLevel: number): RgbaImage => {
+      const width = 640, height = 400;
+      const data = new Uint8ClampedArray(width * height * 4);
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const screen = x >= 64 && x < 576 && y >= 45 && y < 355;
+          const line = (x - 64) % 52 === 0 || (y - 45) % 40 === 0;
+          const level = !screen ? 30 : line ? lineLevel : 22;
+          data.set([level, level, level, 255], (y * width + x) * 4);
+        }
+      }
+      return { width, height, data };
+    };
+    const crisp = assessPhotoQuality(framed(197));
+    expect(crisp.issues).not.toContain('low_contrast');
+    expect(crisp.contrast).toBe(175);
+    const washed = assessPhotoQuality(framed(52));
+    expect(washed.issues).toContain('low_contrast');
+    expect(washed.contrast).toBe(30);
+  });
+
   it.each([-42, -30, -10, -5, 4.5, 8, 30, 42])('finds horizontal lines tilted by %s degrees', angle => {
     const report = assessPhotoQuality(capture({ angle }));
     expect(report.issues).toContain('tilted');

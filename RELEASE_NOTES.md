@@ -1,47 +1,40 @@
-# Graticule 2.0.4
+# Graticule 2.0.5
 
 Try it live at [sunsind.github.io/Graticule](https://sunsind.github.io/Graticule/).
 
-A fix release. It makes the saved history safer, the offline app more reliable and a lot of measurements more accurate.
+A fix release. It makes the app more reliable, a few measurements more accurate and the release process safer.
 
-## History and offline
+## App and reliability
 
-- A capture that is too big to save no longer deletes your other saved captures. Graticule only clears room when the new capture really fits, and it stops trying again until the capture changes
-- Two captures saved at the same moment no longer fight over the same space, and an older save can no longer replace a newer one
-- Removing a capture or clearing the history is saved right away, even if you refresh the page just after
-- After an update, the offline app no longer mixes files from the old and the new version, and tabs that were already open keep working
-- A file the browser cannot store offline still loads instead of showing an offline error
-- When the server has a problem, the app opens from its offline copy instead of showing an error page
-- The offline cache now updates when the page itself or the app icons change
+- Adding images quickly one after another no longer mixes up their previews
+- A folder drop with a file the browser cannot read now skips that file instead of stopping the whole drop
+- Picking more than 50 images now shows a clear notice
+- Export all skips captures that are still being read again, and it stays available in Bode view
+- The saved history closes cleanly when another tab updates the app
+- Math and FFT warnings now show up in the app
+- Keyboard focus comes back to the right place after Crop Apply, Crop Cancel and Clear
+- Cursor sliders read out their real values, and the center snaps to `0 s`
+- Scales that make no sense are rejected
+- The shortcuts list is up to date
+- French and English wording is cleaner
 
-## App
+## Accuracy and command line
 
-- Notes about a channel now read as clean sentences, for example when the offset on screen does not match the zero marker or when a channel is not in volts
-- Errors that have nothing to do with your file, like a report ZIP that fails, no longer start with Could not read this file
-- Report ZIP file names made only of other alphabets, like Chinese, now fall back to graticule instead of png
-- Very long file names are cut cleanly in the report ZIP
-- En and em dashes in titles now work in the LaTeX report
-- PNG files with photo data after the image data are now handled as photos and turned the right way up
-- `.heif` files lose their extension in exported file names, same as `.heic`
-- If part of the app fails to load once, it tries again next time instead of staying broken
-- Installing the command line tool no longer pulls in the browser packages
+- On a white background, yellow and green traces stay visible because both normal and inverted trace colors are checked
+- Cropped Rohde and Schwarz RTB2004 captures line up with `--hdivs`
+- Photos of scopes with a dark frame are checked for contrast more reliably
+- FFT ticks on a linear scale are rounded
+- Unit reading from the screen is stricter
+- UART CSV keeps negative times as numbers
+- `--baud` rejects hex and scientific values
+- XY, UART and compare tables follow `--locale fr`
+- New `--version` option
 
-## Accuracy
+## Workflows and packaging
 
-- Square waves are no longer mistaken for dashed cursors and masked out
-- FFT is no longer thrown off by a tone below the main frequency, and THD is more accurate
-- Scope CSV compare reads channel names written in full, and the new `--csv-column` option picks a CSV column by its label
-- Cropped captures keep the right channel colors
-- Rohde and Schwarz RTB2004 captures no longer lose the bottom of the grid, and their ticks are read correctly
-- UART auto baud picks the right speed when two speeds look close
-- Times in CSV and SVG files stay precise on captures with a large time offset
-- Photos tilted up to 30 degrees are now caught and you are asked to straighten them
-- Transparent pixels in PNG files are no longer read as scope labels or traces
-- Siglent `-Duty` values are read correctly
-- CSV, TSV and LaTeX exports escape special characters properly
-- Recalculating a Bode sweep keeps the points you fixed by hand
-- Bode reads the frequency from file names that have a dash separator before the number
-- Very fast edges always show the same `<` symbol
+- The live site only updates after type checks, tests and bundle checks pass
+- A release now checks that these notes match the version and runs every browser test
+- `esbuild` is pinned in the dev packages
 
 ## Credits
 

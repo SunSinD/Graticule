@@ -67,6 +67,34 @@ describe('column extraction and waveform measurements', () => {
     expect(result.traces[0]!.validCount).toBe(401);
     expect(result.measurements[0]!.frequencyHz).toBeCloseTo(1000, 2);
   });
+
+  test.each([
+    ['yellow', yellow, 'C1'], ['dark green', [0, 128, 0], 'C4'],
+  ] as const)('keeps normal %s trace colors on a white fallback background', (_, ink, channel) => {
+    const image = bitmap(421, 221, [255, 255, 255]);
+    plot(image, ink, col => zero - 33 * Math.sin(2 * Math.PI * col / 80));
+    for (const options of [overrides, { secPerDiv: 0.0005 }]) {
+      const result = analyzeCapture(image, 'white-background.png', { ...options, profileId: 'universal-fallback' });
+      expect(result.detection.grid.inverted).toBe(true);
+      expect(result.traces.map(trace => trace.channel)).toEqual([channel]);
+      expect(result.traces[0]!.validCount).toBeGreaterThanOrEqual(grid.width + 1);
+      expect(result.measurements[0]!.frequencyHz).toBeCloseTo(1000 * result.detection.grid.width / grid.width, 0);
+    }
+  });
+
+  test('still reads a full RGB negative of a fallback capture as inverted trace colors', () => {
+    const image = bitmap(421, 221);
+    plot(image, yellow, col => zero - 45 * Math.cos(2 * Math.PI * col / 80));
+    plot(image, magenta, col => zero + 40 - 20 * Math.cos(2 * Math.PI * col / 80));
+    for (let i = 0; i < image.data.length; i += 4) {
+      for (let c = 0; c < 3; c++) image.data[i + c] = 255 - image.data[i + c]!;
+    }
+    const result = analyzeCapture(image, 'negative.png', { ...overrides, profileId: 'universal-fallback' });
+    expect(result.detection.grid.inverted).toBe(true);
+    expect(result.traces.map(trace => trace.channel)).toEqual(['C1', 'C2']);
+    for (const trace of result.traces) expect(trace.validCount).toBeGreaterThan(390);
+  });
+
   test('recovers noisy, 3 px analog sinusoids, frequency and signed phase', () => {
     const image = bitmap(421, 221);
     const wave = (col: number) => zero - 45 * Math.cos(2 * Math.PI * col / 80);
@@ -188,6 +216,34 @@ describe('column extraction and waveform measurements', () => {
       for (let x = 10; x < 122; x++) image.data[4 * (image.width * y + x) + 3] = 64;
     }
     expect(readScopeMetadata(image, detection).scopeReadings.some(item => item.label === '-Duty')).toBe(false);
+  });
+
+  test('rejects Siglent offset and delay readings with the wrong unit', () => {
+    const image = decodePng(sample('sine_schmitt.png'));
+    const detection = detectProfile(image);
+    const write = (text: string, x: number, y: number, width: number, height: number) => {
+      paint(image, { x, y, width, height }, [14, 14, 14]);
+      let cursor = x + 1;
+      for (const char of text) {
+        const rows = Object.keys(siglentGlyphs).find(glyph => siglentGlyphs[glyph] === char)!.split('/');
+        rows.forEach((row, dy) => [...row].forEach((bit, dx) => {
+          if (bit === '#') pixel(image, cursor + dx, y + 2 + dy, [255, 255, 255]);
+        }));
+        cursor += rows[0]!.length + 1;
+      }
+    };
+    const read = (offset: string, delay: string) => {
+      write(offset, 59, 577, 65, 15);
+      write(delay, 664, 560, 62, 13);
+      const metadata = readScopeMetadata(image, detection);
+      return { offset: metadata.cards.get('C1'), delay: metadata.triggerOffsetSec };
+    };
+    const matching = read('1.00V', '1.00ms');
+    expect(matching.offset).toMatchObject({ rawOffsetText: '1.00V', offsetVolts: 1 });
+    expect(matching.delay).toBeCloseTo(0.001, 12);
+    const swapped = read('1.00ms', '1.00V');
+    expect(swapped.offset).toMatchObject({ rawOffsetText: '1.00ms', offsetVolts: null });
+    expect(swapped.delay).toBeNull();
   });
 
   test('marks the hidden channel at a collision and keeps the visible one', () => {

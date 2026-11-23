@@ -4,9 +4,11 @@ import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { crc32, deflateSync } from 'node:zlib';
 import { afterAll, describe, expect, test } from 'vitest';
 import { version } from '../../package.json';
 import { renderWaveformCsv } from '../../src/core/export/csv.js';
+import { GRATICULE_VERSION } from '../../src/core/export/format.js';
 import { analyzePngBytes } from '../../src/core/pipeline.js';
 import { sample } from './fixtures.js';
 
@@ -14,6 +16,40 @@ const root = mkdtempSync(join(tmpdir(), 'graticule-cli-'));
 const cliPath = fileURLToPath(new URL('../../src/cli/index.ts', import.meta.url));
 const input = join(root, 'capture.png');
 writeFileSync(input, sample('sine_schmitt.png'));
+
+function encodePng(width: number, height: number, rgb: (x: number, y: number) => readonly [number, number, number]): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const length = Buffer.alloc(4);
+    length.writeUInt32BE(data.length);
+    const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([length, body, crc]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header.set([8, 2, 0, 0, 0], 8);
+  const raw = Buffer.alloc((width * 3 + 1) * height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) raw.set(rgb(x, y), y * (width * 3 + 1) + 1 + x * 3);
+  }
+  return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', header),
+    chunk('IDAT', deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+
+const uartInput = join(root, 'uart.png');
+{
+  const px = 10;
+  const bits = [1, 1, 1, 1, 1];
+  for (const byte of [0x41, 0x3d]) bits.push(0, ...Array.from({ length: 8 }, (_, i) => byte >> i & 1), 1);
+  while (bits.length * px < 1001) bits.push(1);
+  const level = (x: number) => bits[Math.floor(x / px)] ? 100 : 130;
+  writeFileSync(uartInput, encodePng(1001, 221, (x, y) => {
+    const low = Math.min(level(x), level(Math.max(0, x - 1))), high = Math.max(level(x), level(Math.max(0, x - 1)));
+    return y >= low && y <= high ? [255, 255, 0] : [0, 0, 0];
+  }));
+}
 
 const cli = (...args: string[]) => spawnSync(process.execPath, ['--import', 'tsx', cliPath, ...args], {
   encoding: 'utf8', timeout: 10_000, maxBuffer: 8 * 1024 * 1024,
@@ -171,6 +207,56 @@ describe('command line', () => {
     const result = cli(input, ...args, '--json');
     expect(result.status).toBe(1);
     expect(result.stderr).toMatch(/requires channel C3, which is missing/);
+    expect(result.stdout).toBe('');
+  });
+
+  test.each(['--version', '-v'])('prints the version for %s and lists it in the help', flag => {
+    const result = cli(flag);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe(`${GRATICULE_VERSION}\n`);
+    expect(GRATICULE_VERSION).toBe('2.0.5');
+    expect(cli('--help').stdout).toContain('--version | -v');
+  });
+
+  test('keeps negative UART timestamps numeric in CSV and localizes the French table', () => {
+    const args = [uartInput, '--decode', 'uart', '--baud', '9600', '--sec-per-div', '1.0416667ms'];
+    const csv = cli(...args, '--csv');
+    expect(csv.status, csv.stderr).toBe(0);
+    const lines = csv.stdout.trim().split('\n');
+    expect(lines[0]).toBe('start_s,end_s,hex,ascii,framing_error,parity_error,uncertain');
+    const frames = lines.slice(1).map(line => line.split(','));
+    expect(frames.map(frame => frame[2])).toEqual(['41', '3D']);
+    expect(frames.map(frame => frame[3])).toEqual(['A', "'="]);
+    for (const [start, end] of frames) {
+      expect(start).toMatch(/^-\d/);
+      expect(end).toMatch(/^-\d/);
+      expect(Number(start)).toBeLessThan(0);
+    }
+    const fr = cli(...args, '--locale', 'fr');
+    expect(fr.status, fr.stderr).toBe(0);
+    expect(fr.stdout).toContain('Début (s)\tFin (s)\tHex\tASCII');
+    const row = fr.stdout.split('\n').find(line => line.includes('\t41\t'))!;
+    expect(row.split('\t')[0]).toMatch(/^-\d+,\d+/);
+  });
+
+  test('localizes XY and compare tables in French', () => {
+    const xy = cli(input, '--xy', 'C1,C2', '--locale', 'fr');
+    expect(xy.status, xy.stderr).toBe(0);
+    expect(xy.stdout).toContain('Axe\tMin\tMax\tCrête à crête');
+    expect(xy.stdout).toMatch(/C1 \(V\)\t-?\d+,\d+/);
+    const scope = join(root, 'french-reference.csv');
+    writeFileSync(scope, 'time_s,CH2_V\n-0.003,0.5\n0,0.5\n0.003,0.5\n');
+    const compare = cli('compare', input, scope, '--channel', 'C2', '--locale', 'fr');
+    expect(compare.status, compare.stderr).toBe(0);
+    expect(compare.stdout).toContain('Mesure\tSans alignement\tAligné');
+    expect(compare.stdout).toMatch(/rmseV\t\d+,\d+/);
+    expect(compare.stdout).not.toMatch(/\t\d+\.\d+/);
+  }, 15_000);
+
+  test.each(['0x2580', '1e4', '96OO', '+9600'])('rejects a non-decimal --baud %s', baud => {
+    const result = cli(input, '--decode', 'uart', '--baud', baud);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toMatch(/--baud auto or a positive rate/);
     expect(result.stdout).toBe('');
   });
 

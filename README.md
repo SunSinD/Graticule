@@ -213,6 +213,13 @@ npm run cli -- compare capture.png scope.csv --channel C1 --csv-column "CH1 Volt
 
 `compare` checks a screenshot against the CSV saved by the scope itself and tells you how far apart they are. Add `--csv-column` to pick the scope CSV column by its label. `--decode uart` reads the bytes of a serial signal from the trace.
 
+To use it without the source code, download the `.tgz` file from a release and install it once.
+
+```sh
+npm install -g ./graticule-2.0.5.tgz
+graticule --version
+```
+
 ## Accuracy
 
 Measured across synthetic ground truth, 28 local Siglent captures, 18 public web screenshots from multiple scopes, and a public Rigol PNG and CSV capture pair.

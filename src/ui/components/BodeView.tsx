@@ -27,6 +27,9 @@ interface Props {
   readonly onExclude: (id: string, excluded: boolean) => void;
   readonly onInspect: (id: string) => void;
   readonly onReset: () => void;
+  /** Builds the zip lab report from every selected capture, as on the staged screen. */
+  readonly onExportAll?: (() => void) | undefined;
+  readonly exportBusy?: boolean;
 }
 
 interface CellProps {
@@ -165,6 +168,11 @@ export function BodeView(props: Props) {
   return (
     <div className="bode">
       <div className="toolbar">
+        {props.onExportAll && (
+          <button type="button" className="btn" disabled={props.exportBusy} onClick={props.onExportAll}>
+            {tx.exportAll}
+          </button>
+        )}
         <span className="grow" />
         <ZoomControl tx={tx} value={zoom} max={ZOOM_MAX} onChange={setZoom} />
       </div>

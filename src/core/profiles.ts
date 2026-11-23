@@ -298,8 +298,46 @@ export interface NativeCards {
   readonly colors?: readonly ChannelColor[];
 }
 
-export function invertTraceColors(image: RgbaImage, profileId: ProfileId, inverted: boolean): boolean {
-  if (!inverted || profileId !== 'siglent-sds2000x-plus') return inverted;
+function traceScore(r: number, g: number, b: number, colors: readonly ChannelColor[]): number {
+  const index = channelColor(r, g, b, colors);
+  if (index < 0) return 0;
+  const { hueMin, hueMax } = colors[index]!;
+  const high = Math.max(r, g, b);
+  const hue = hueDegrees(r, g, b, high, high - Math.min(r, g, b));
+  const width = (hueMax - hueMin + 360) % 360 || 360;
+  const center = (hueMin + width / 2) % 360;
+  const distance = Math.min(Math.abs(hue - center), 360 - Math.abs(hue - center));
+  // Hues near the middle of a channel range count more, so an edge match from the wrong polarity loses ties.
+  return 1 - Math.min(1, distance / (width / 2)) / 2;
+}
+
+function negativeTraceColors(image: RgbaImage, plot: Rect): boolean {
+  const colors = colorsFor('universal-fallback');
+  let normal = 0;
+  let negated = 0;
+  const x0 = Math.max(0, Math.floor(plot.x)), y0 = Math.max(0, Math.floor(plot.y));
+  const x1 = Math.min(image.width - 1, Math.ceil(plot.x + plot.width)), y1 = Math.min(image.height - 1, Math.ceil(plot.y + plot.height));
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const i = at(image, x, y);
+      if (image.data[i + 3]! < MIN_VISIBLE_ALPHA) continue;
+      const r = image.data[i]!, g = image.data[i + 1]!, b = image.data[i + 2]!;
+      normal += traceScore(r, g, b, colors);
+      negated += traceScore(255 - r, 255 - g, 255 - b, colors);
+    }
+  }
+  return negated >= normal;
+}
+
+export function invertTraceColors(image: RgbaImage, profileId: ProfileId, inverted: boolean,
+  plot?: Pick<GridGeometry, 'left' | 'top' | 'width' | 'height'>): boolean {
+  if (!inverted) return false;
+  // A bright fallback capture can be a full RGB negative or a white-background export
+  // that keeps normal trace colors. Keep whichever polarity finds more trace pixels.
+  if (profileId === 'universal-fallback') {
+    return plot ? negativeTraceColors(image, { x: plot.left, y: plot.top, width: plot.width, height: plot.height }) : true;
+  }
+  if (profileId !== 'siglent-sds2000x-plus') return true;
   // The scope darkens its color badges in print mode. A full RGB negative instead
   // complements them, which can happen when a capture was inverted after saving.
   for (const x of [36, 163, 290, 417, 544, 140, 244, 348, 452]) {
@@ -468,13 +506,16 @@ export function detectProfile(image: RgbaImage, overrides: ExtractionOverrides =
       const detected = p.raster ? findRasterPlot(image, p, p.raster) : findPlot(image, p, inverted, compact);
       if (!detected) continue;
       const h = divisions(overrides.hDivs, detected.hDivs), v = divisions(overrides.vDivs, detected.vDivs);
-      const adjusted = h === detected.hDivs && v === detected.vDivs ? detected
-        : makeGrid(detected.left, detected.top, detected.right, detected.bottom, h, v,
+      // A cropped plot can have a horizontal pitch and center outside its visible bounds,
+      // so rebuild divisions across the full graticule and clip back to the visible right edge.
+      const cropped = detected.left + detected.pxPerHDiv * detected.hDivs - detected.right > 0.5;
+      const fullRight = cropped ? Math.round(detected.left + detected.pxPerHDiv * detected.hDivs) : detected.right;
+      const full = h === detected.hDivs && v === detected.vDivs ? null
+        : makeGrid(detected.left, detected.top, fullRight, detected.bottom, h, v,
           detected.layoutVariant, detected.inverted, detected.fitErrorPx);
-      // A cropped plot can have a horizontal pitch and center outside its visible bounds.
-      const grid = h === detected.hDivs && adjusted !== detected ? {
-        ...detected, vDivs: adjusted.vDivs, pxPerVDiv: adjusted.pxPerVDiv, hLines: adjusted.hLines,
-      } : adjusted;
+      const grid = !full || !cropped ? full ?? detected : {
+        ...full, right: detected.right, width: detected.width, vLines: full.vLines.filter(x => x <= detected.right),
+      };
       const cards = findNativeCards(image, p, inverted, compact);
       const digitalOnly = cards.digital && !cards.analog.size;
       return {

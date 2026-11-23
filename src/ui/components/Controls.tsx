@@ -312,6 +312,11 @@ function MathCard({ tx, locale, field, config, sources, disabled }: MathCardProp
         hint={config.voltsPerDiv === undefined ? tx.mathAuto : null}
         onChange={(v) => set({ voltsPerDiv: v })}
       />
+      {[...new Set(field.result?.warnings ?? [])].map((w) => (
+        <p key={w} className="note" data-testid="math-warning">
+          {formatWarning(w, tx)}
+        </p>
+      ))}
     </fieldset>
   );
 }

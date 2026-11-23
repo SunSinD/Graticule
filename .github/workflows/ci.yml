@@ -39,7 +39,7 @@ jobs:
         timeout-minutes: 5
       - run: npm run verify:parity
         timeout-minutes: 5
-      - run: npm pack --dry-run
+      - run: npm pack --dry-run --ignore-scripts
         timeout-minutes: 5
       - name: Install Playwright Chromium
         run: |
@@ -71,5 +71,5 @@ jobs:
         timeout-minutes: 5
       - run: npm run verify:parity
         timeout-minutes: 5
-      - run: npm pack --dry-run
+      - run: npm pack --dry-run --ignore-scripts
         timeout-minutes: 5

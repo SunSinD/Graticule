@@ -18,6 +18,24 @@ interface Props {
   readonly onChange: (value: number) => void;
 }
 
+type Unit = Props['unit'];
+
+const RANGE: Readonly<Record<Unit, readonly [number, number]>> = {
+  s: [1e-12, 1e4],
+  V: [1e-12, 1e4],
+  'V²': [1e-24, 1e8],
+};
+
+/** True for a typed value a scope could really use. Typos such as 1e-30 or 5e9 are refused. */
+export function acceptScale(v: number | null, unit: Unit, allowZero = false): v is number {
+  if (v === null || !Number.isFinite(v)) return false;
+  if (v === 0) return allowZero;
+  if (v < 0 && !allowZero) return false;
+  const [lo, hi] = RANGE[unit];
+  const size = Math.abs(v);
+  return size >= lo && size <= hi;
+}
+
 export function ScaleInput(props: Props) {
   const { id, label, value, unit, locale, disabled, stepper, allowZero, decLabel, incLabel, hint, onChange } = props;
   const [draft, setDraft] = useState<string | null>(null);
@@ -28,8 +46,7 @@ export function ScaleInput(props: Props) {
     setDraft(null);
     if (draft.trim() === shown) return;
     const v = parseNumber(draft);
-    if (v === null || !Number.isFinite(v)) return;
-    if (allowZero ? false : v <= 0) return;
+    if (!acceptScale(v, unit, allowZero)) return;
     if (v !== value) onChange(v);
   };
 

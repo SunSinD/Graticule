@@ -315,7 +315,7 @@ function maskedAt(image: RgbaImage, mask: OverlayMask, grid: GridGeometry, x: nu
 
 export function extractTraces(image: RgbaImage, detection: ProfileDetection, metadata: ScopeMetadata, mask: OverlayMask,
   timebase: TimebaseSettings, overrides: ExtractionOverrides,
-  inverted = invertTraceColors(image, overrides.profileId ?? detection.profileId, detection.grid.inverted)): { traces: ChannelTrace[]; warnings: string[] } {
+  inverted = invertTraceColors(image, overrides.profileId ?? detection.profileId, detection.grid.inverted, detection.grid)): { traces: ChannelTrace[]; warnings: string[] } {
   const grid = detection.grid;
   const times = Array.from({ length: grid.width + 1 }, (_, col) =>
     (grid.left + col - grid.centerX) / grid.pxPerHDiv * timebase.secPerDiv + timebase.triggerOffsetSec);

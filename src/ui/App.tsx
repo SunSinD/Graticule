@@ -270,6 +270,8 @@ export function App() {
   const analysisRef = useRef<Analysis | null>(null);
   const analysisLoad = useRef<Promise<Analysis> | null>(null);
   const liveUrls = useRef<Set<string>>(new Set());
+  // URLs handed to setItems but not yet seen in a committed list, each with the list it was added to.
+  const pendingUrls = useRef<Map<string, readonly HistoryItem[]>>(new Map());
   const mountedRef = useRef(true);
   const flushCursorSaves = useRef<() => void>(() => undefined);
   const singleReq = useRef<Map<string, number>>(new Map());
@@ -314,10 +316,11 @@ export function App() {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      const urls = new Set(liveUrls.current);
+      const urls = new Set([...liveUrls.current, ...pendingUrls.current.keys()]);
       for (const item of itemsRef.current) urls.add(item.url);
       for (const url of urls) releaseUrl(url);
       liveUrls.current = new Set();
+      pendingUrls.current.clear();
       window.clearTimeout(feedbackTimer.current);
       for (const timer of cursorSaves.current.values()) window.clearTimeout(timer);
       cursorSaves.current.clear();
@@ -326,11 +329,26 @@ export function App() {
   }, []);
 
   // Object URLs are revoked here, after React commits, never inside a state updater.
+  // A new URL waits in pendingUrls until a list newer than the one it was added to commits. An effect
+  // still pending for that older list must not revoke it, but a newer list without it means capHistory
+  // dropped it, so it is released then.
   useEffect(() => {
     const now = new Set(items.map((i) => i.url));
     for (const url of liveUrls.current) if (!now.has(url)) releaseUrl(url);
+    for (const [url, before] of pendingUrls.current) {
+      if (now.has(url)) pendingUrls.current.delete(url);
+      else if (items !== before) {
+        releaseUrl(url);
+        pendingUrls.current.delete(url);
+      }
+    }
     liveUrls.current = now;
   }, [items]);
+
+  const trackNewUrls = (list: readonly HistoryItem[]): void => {
+    const before = itemsRef.current;
+    for (const i of list) pendingUrls.current.set(i.url, before);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -365,8 +383,8 @@ export function App() {
           return;
         }
         persisted.current = new Map(loaded.map((i) => [i.id, i]));
-        // Registered as live so the URL effect revokes any that capHistory drops.
-        for (const i of loaded) liveUrls.current.add(i.url);
+        // Tracked so the URL effect revokes any that capHistory drops.
+        trackNewUrls(loaded);
         setItems((prev) => {
           const have = new Set(prev.map((i) => i.id));
           return capHistory([...prev, ...loaded.filter((i) => !have.has(i.id))].sort(compareItems), have);
@@ -776,16 +794,21 @@ export function App() {
   };
 
   const addFiles = useCallback(
-    async (raw: readonly File[], source: Source) => {
+    async (raw: readonly File[], source: Source, unread: readonly string[] = []) => {
       // Consumed first so a failed or empty pick can never delete the open capture later.
       const replaceId = replaceIdRef.current;
       replaceIdRef.current = null;
-      const images = raw
+      const allImages = raw
         .filter(isImageFile)
-        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }))
-        .slice(0, HISTORY_LIMIT);
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      const images = allImages.slice(0, HISTORY_LIMIT);
+      const leftOut = allImages.length - images.length;
+      const capNote = leftOut > 0 ? tx.tooManyImages(HISTORY_LIMIT, leftOut) : null;
       if (images.length === 0) {
-        if (raw.length > 0) {
+        if (unread.length > 0) {
+          setNotice(null);
+          setFileNote(tx.filesUnreadable(unread));
+        } else if (raw.length > 0) {
           setNotice(tx.unsupportedFile);
           setFileNote(null);
         }
@@ -795,7 +818,8 @@ export function App() {
       setNotice(null);
       setFileNote(null);
       const added: HistoryItem[] = [];
-      const skipped: string[] = [];
+      // Folder entries the browser could not read count as skipped files too.
+      const skipped: string[] = [...unread];
       let committed = false;
       try {
         const now = Date.now();
@@ -833,13 +857,13 @@ export function App() {
           });
         }
         if (added.length === 0) {
-          setFileNote(tx.filesUnreadable(skipped));
+          setFileNote([tx.filesUnreadable(skipped), capNote].filter(Boolean).join(' '));
           return;
         }
         if (replaceId) singleReq.current.delete(replaceId);
         const keep = new Set(added.map((i) => i.id));
-        // Registered before the update so the URL effect revokes any that capHistory drops.
-        for (const i of added) liveUrls.current.add(i.url);
+        // Tracked before the update so the URL effect revokes any that capHistory drops.
+        trackNewUrls(added);
         committed = true;
         setItems((list) => {
           const base = replaceId ? list.filter((i) => i.id !== replaceId) : list;
@@ -853,7 +877,8 @@ export function App() {
           setSelected(added.map((i) => i.id));
         }
         resetCaptureView('original');
-        if (skipped.length > 0) setFileNote(tx.filesSkipped(skipped));
+        const notes = [capNote, skipped.length > 0 ? tx.filesSkipped(skipped) : null].filter(Boolean);
+        if (notes.length > 0) setFileNote(notes.join(' '));
       } catch (e) {
         if (!committed) releaseItems(added);
         if (mountedRef.current) setNotice(`${tx.error}: ${message(e)}`);
@@ -1123,7 +1148,8 @@ export function App() {
           const item = current(original.id);
           // Removed while the batch ran.
           if (item) {
-            let result = item.result;
+            // A capture extracting again has no final result yet: its old one predates the latest edit.
+            let result = item.state === 'extracting' ? null : item.result;
             if (!result) {
               const id = item.id;
               const req = (singleReq.current.get(id) ?? 0) + 1;
@@ -1160,9 +1186,11 @@ export function App() {
           if (!live()) return;
         }
         // Read again now so title, label and Math edits made during the batch are in the report.
-        const entries = ready.flatMap(({ id, result }) => {
+        const entries = ready.flatMap(({ id, result: batchResult }) => {
           const item = current(id);
           if (!item) return [];
+          // An edit that finished extracting during the batch replaces the result read earlier.
+          const result = item.state === 'extracted' && item.result ? item.result : batchResult;
           const config = usableMath(mathConfigs[id], enabledChannels(result));
           let math: MathTraceResult | null = null;
           if (mathTools && config) {
@@ -1392,8 +1420,14 @@ export function App() {
     if (!hasFiles(e.dataTransfer)) return;
     e.preventDefault();
     replaceIdRef.current = null;
-    const list = await filesFromDataTransfer(e.dataTransfer);
-    await addFiles(list, 'pick');
+    try {
+      const unread: string[] = [];
+      const list = await filesFromDataTransfer(e.dataTransfer, unread);
+      if (!mountedRef.current) return;
+      await addFiles(list, 'pick', unread);
+    } catch (err) {
+      if (mountedRef.current) setNotice(`${tx.error}: ${message(err)}`);
+    }
   };
 
   const extracting = mode === 'single' ? activeItem?.state === 'extracting' : session?.state === 'extracting';
@@ -1732,6 +1766,8 @@ export function App() {
               setView('clean');
             }}
             onReset={() => recompute(bodeKey, bode, session.gate, {})}
+            onExportAll={() => void exportAll(selectedItems)}
+            exportBusy={session.state === 'extracting' || batch !== null}
           />
         )}
 

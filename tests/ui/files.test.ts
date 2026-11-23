@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { hasExifChunk, isRawPng, moveExifBeforeIdat } from '../../src/ui/files.js';
+import { filesFromDataTransfer, hasExifChunk, isRawPng, moveExifBeforeIdat } from '../../src/ui/files.js';
 import { decodePng } from '../../src/core/png.js';
 import { sample } from '../core/fixtures.js';
 
@@ -88,5 +88,73 @@ describe('moveExifBeforeIdat', () => {
   test('hasExifChunk finds eXIf anywhere in a PNG', () => {
     expect(hasExifChunk(png)).toBe(false);
     expect(hasExifChunk(beforeIend(exif))).toBe(true);
+  });
+});
+
+interface FakeEntry {
+  readonly name: string;
+  readonly fullPath: string;
+  readonly isFile: boolean;
+  readonly isDirectory: boolean;
+  file?: (ok: (f: File) => void, fail: (e: Error) => void) => void;
+  createReader?: () => { readEntries: (ok: (list: FakeEntry[]) => void, fail: (e: Error) => void) => void };
+}
+
+function fileEntry(name: string, broken = false): FakeEntry {
+  return {
+    name,
+    fullPath: `/${name}`,
+    isFile: true,
+    isDirectory: false,
+    file: (ok, fail) => (broken ? fail(new Error('NotReadableError')) : ok(new File([new Uint8Array(4)], name, { type: name.endsWith('.png') ? 'image/png' : 'text/plain' }))),
+  };
+}
+
+function dirEntry(name: string, children: readonly FakeEntry[], broken = false): FakeEntry {
+  return {
+    name,
+    fullPath: `/${name}`,
+    isFile: false,
+    isDirectory: true,
+    createReader: () => {
+      let done = false;
+      return {
+        readEntries: (ok, fail) => {
+          if (broken) return fail(new Error('NotFoundError'));
+          const out = done ? [] : [...children];
+          done = true;
+          ok(out);
+        },
+      };
+    },
+  };
+}
+
+function dropOf(entries: readonly FakeEntry[]): DataTransfer {
+  return {
+    items: entries.map((entry) => ({ kind: 'file', webkitGetAsEntry: () => entry, getAsFile: () => null })),
+    files: [],
+  } as unknown as DataTransfer;
+}
+
+describe('filesFromDataTransfer', () => {
+  test('a dropped folder with an unreadable file or junction still loads every other image', async () => {
+    const folder = dirEntry('lab', [
+      fileEntry('b.png'),
+      fileEntry('locked.png', true),
+      dirEntry('junction', [], true),
+      dirEntry('sub', [fileEntry('a.png'), fileEntry('notes.txt')]),
+      fileEntry('c10.png'),
+      fileEntry('c2.png'),
+    ]);
+    const skipped: string[] = [];
+    const files = await filesFromDataTransfer(dropOf([folder]), skipped);
+    expect(files.map((f) => f.name)).toEqual(['a.png', 'b.png', 'c2.png', 'c10.png']);
+    expect(skipped).toEqual(['locked.png', 'junction']);
+  });
+
+  test('works without a skipped list', async () => {
+    const files = await filesFromDataTransfer(dropOf([fileEntry('x.png', true), fileEntry('y.png')]));
+    expect(files.map((f) => f.name)).toEqual(['y.png']);
   });
 });

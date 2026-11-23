@@ -65,7 +65,9 @@ function samplePhoto(image: RgbaImage) {
       if (!interior && level >= 215) whiteBorder++;
     }
   }
-  const contrast = percentile(histogram, levels.length, 0.95) - percentile(histogram, levels.length, 0.05);
+  // A wide dark bezel can push the 95th percentile into the screen background, so read the
+  // bright end from the top 0.5% where thin grid lines and traces still show up.
+  const contrast = percentile(histogram, levels.length, 0.995) - percentile(histogram, levels.length, 0.05);
   const interiorPixels = (width - 2 * insetX) * (height - 2 * insetY);
   const borderCount = levels.length - interiorPixels;
   const whiteBackground = percentile(histogram, levels.length, 0.30) >= 215 && whiteBorder >= borderCount * 0.65;

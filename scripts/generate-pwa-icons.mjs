@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const crcTable = (() => {
@@ -78,4 +78,6 @@ export function generatePwaIcons() {
   writeFileSync(resolve(publicDir, 'icon-512.png'), makePng(512));
 }
 
-generatePwaIcons();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  generatePwaIcons();
+}

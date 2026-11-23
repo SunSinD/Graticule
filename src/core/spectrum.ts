@@ -407,11 +407,18 @@ export function renderSpectrumSvg(spec: SpectrumResult, opts: SpectrumSvgOptions
   const min = linear ? 0 : Math.ceil(maxDb / step) * step - 8 * step;
   const amp = (bin: SpectrumBin) => linear ? Math.min(Number.MAX_VALUE, bin.vrms) : bin.dbv ?? min;
   const maxAmp = spec.bins.reduce((m, b) => Math.max(m, amp(b)), min);
-  const max = linear ? Math.min(Number.MAX_VALUE, maxAmp * 1.08) || 1 : min + 8 * step;
+  const rawMax = linear ? Math.min(Number.MAX_VALUE, maxAmp * 1.08) || 1 : min + 8 * step;
+  // Linear amplitudes use round 1-2-5 steps from zero so the axis reads 0, 1, 2 V instead of uneven fractions.
+  const ampStep = linear ? niceCeiling125(rawMax / 8) : 0;
+  const ampDivs = linear ? Math.max(1, Math.ceil(rawMax / ampStep - 1e-9)) : 8;
+  const roundMax = ampDivs * ampStep;
+  const nice = linear && Number.isFinite(roundMax) && roundMax > 0;
+  const max = nice ? roundMax : rawMax;
+  const divs = nice ? ampDivs : 8;
   const label = linear ? `${spec.unit} RMS` : spec.unit === 'V²' ? 'dB re 1 V²' : 'dBV';
   const fraction = (value: number) => (value - min) / (max - min);
-  const yTicks = Array.from({ length: 9 }, (_, i) => {
-    const f = i / 8, value = min + f * (max - min);
+  const yTicks = Array.from({ length: divs + 1 }, (_, i) => {
+    const f = i / divs, value = nice ? Number((i * ampStep).toPrecision(12)) : min + f * (max - min);
     return { fraction: f, label: linear ? axisValue(value, spec.unit, locale) : formatFixed(value, 0, locale) };
   });
   return analysisPlot(opts, opts.title ?? `FFT ${spec.channel}`, false, locale === 'fr' ? 'Fréquence (Hz)' : 'Frequency (Hz)', label,

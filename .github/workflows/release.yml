@@ -30,7 +30,7 @@ jobs:
         env:
           GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
-          node --input-type=module -e "import fs from 'node:fs'; const expected = 'v' + JSON.parse(fs.readFileSync('package.json', 'utf8')).version; if (process.env.GITHUB_REF_NAME !== expected) throw new Error('Release tag does not match package.json version (expected ' + expected + ')');"
+          node --input-type=module -e "import fs from 'node:fs'; const expected = 'v' + JSON.parse(fs.readFileSync('package.json', 'utf8')).version; if (process.env.GITHUB_REF_NAME !== expected) throw new Error('Release tag does not match package.json version (expected ' + expected + ')'); const heading = '# Graticule ' + expected.slice(1); const firstLine = fs.readFileSync('RELEASE_NOTES.md', 'utf8').split('\n')[0].trim(); if (firstLine !== heading) throw new Error('RELEASE_NOTES.md line 1 must be ' + heading + ' (found ' + firstLine + ')');"
       - run: npm run verify:parity
         timeout-minutes: 5
       - run: npm run check:bundle -- --portable
@@ -39,9 +39,9 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
         timeout-minutes: 10
-      - run: npx playwright test tests/e2e/portable.spec.ts
+      - run: npm run test:e2e
         timeout-minutes: 10
-      - run: npm pack --pack-destination dist-portable
+      - run: npm pack --ignore-scripts --pack-destination dist-portable
         timeout-minutes: 10
       - name: Smoke test standalone CLI tarball
         run: |

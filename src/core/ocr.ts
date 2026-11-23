@@ -44,6 +44,11 @@ function parseScale(text: string | null, unit: 'V' | 's'): number | null {
   return quantity && quantity.unit.endsWith(unit) && quantity.value > 0 ? quantity.value : null;
 }
 
+function parseSigned(text: string | null, unit: 'V' | 's'): number | null {
+  const quantity = parseQuantity(text ?? '');
+  return quantity?.unit.endsWith(unit) ? quantity.value : null;
+}
+
 function analogColor(channel: ChannelId, r: number, g: number, b: number): boolean {
   if (channel === 'C1') return Math.min(r, g) - b > 65;
   if (channel === 'C2') return r - g > 65 && b - g > 40;
@@ -88,7 +93,7 @@ function readRasterMetadata(image: RgbaImage, profile: NonNullable<ReturnType<ty
     const probeText = siglent ? read(box(719, 162, 37, 16)) : null;
     const attenuation = /^(\d+(?:\.\d+)?)X$/.exec(probeText ?? '');
     cards.set(channel, {
-      voltsPerDiv: parseScale(rawScaleText, 'V'), offsetVolts: parseQuantity(rawOffsetText ?? '')?.value ?? null,
+      voltsPerDiv: parseScale(rawScaleText, 'V'), offsetVolts: parseSigned(rawOffsetText, 'V'),
       rawScaleText, rawOffsetText, probeAttenuation: attenuation ? Number(attenuation[1]) : 1, coupling: 'UNKNOWN',
     });
   }
@@ -97,7 +102,7 @@ function readRasterMetadata(image: RgbaImage, profile: NonNullable<ReturnType<ty
   const topFrequencyRaw = siglent ? read(box(695, 1, 105, 16), (r, g, b) => r > 130 && g > 130 && b < 75) : null;
   const topFrequencyHz = topFrequencyRaw?.startsWith('f=') ? parseQuantity(topFrequencyRaw.slice(2))?.value ?? null : null;
   return {
-    cards, secPerDiv: parseScale(rawTimebase, 's'), triggerOffsetSec: parseQuantity(delay ?? '')?.value ?? null,
+    cards, secPerDiv: parseScale(rawTimebase, 's'), triggerOffsetSec: parseSigned(delay, 's'),
     rawTimebase, topFrequencyHz, topFrequencyRaw, scopeReadings: [],
   };
 }
@@ -116,16 +121,14 @@ function readNewRasterMetadata(image: RgbaImage, profile: NonNullable<ReturnType
     const rawOffsetText = sds800 ? read(box(slot.x + 42, 575, 74, 16)) : null;
     const probeText = sds800 ? read(box(slot.x, 557, 40, 16)) : null;
     const attenuation = Number(/^(\d+(?:\.\d+)?)X$/.exec(probeText ?? '')?.[1]);
-    const offset = parseQuantity(rawOffsetText ?? '');
     cards.set(channel, {
-      voltsPerDiv, offsetVolts: offset?.unit.endsWith('V') ? offset.value : null, rawScaleText, rawOffsetText,
+      voltsPerDiv, offsetVolts: parseSigned(rawOffsetText, 'V'), rawScaleText, rawOffsetText,
       probeAttenuation: Number.isFinite(attenuation) && attenuation > 0 ? attenuation : 1, coupling: 'UNKNOWN',
     });
   }
   const rawTimebase = read(profile.timebaseCard.scaleRoi);
   const secPerDiv = parseScale(rawTimebase, 's');
-  const delay = parseQuantity(read(profile.timebaseCard.delayRoi) ?? '');
-  let triggerOffsetSec = delay?.unit.endsWith('s') ? delay.value : null;
+  let triggerOffsetSec = parseSigned(read(profile.timebaseCard.delayRoi), 's');
   if (sds800 && secPerDiv !== null) {
     // The delay card is relative to the trigger marker, which need not be at the graticule center.
     const row = profile.graticule.top + 1;
@@ -170,7 +173,7 @@ export function readScopeMetadata(image: RgbaImage, detection: ProfileDetection)
         continue;
       }
       cards.set(channel, {
-        voltsPerDiv: parseScale(rawScaleText, 'V'), offsetVolts: parseQuantity(rawOffsetText ?? '')?.value ?? null,
+        voltsPerDiv: parseScale(rawScaleText, 'V'), offsetVolts: parseSigned(rawOffsetText, 'V'),
         rawScaleText, rawOffsetText, probeAttenuation: 1, coupling: 'UNKNOWN',
       });
     } else if (siglent) {
@@ -181,7 +184,7 @@ export function readScopeMetadata(image: RgbaImage, detection: ProfileDetection)
         ? analogColor(channel, 255 - r, 255 - g, 255 - b) : analogColor(channel, r, g, b));
       const attenuation = /^(\d+(?:\.\d+)?)X$/.exec(probeText ?? '');
       cards.set(channel, {
-        voltsPerDiv: parseScale(rawScaleText, 'V'), offsetVolts: parseQuantity(rawOffsetText ?? '')?.value ?? null,
+        voltsPerDiv: parseScale(rawScaleText, 'V'), offsetVolts: parseSigned(rawOffsetText, 'V'),
         rawScaleText, rawOffsetText, probeAttenuation: attenuation ? Number(attenuation[1]) : 1,
         coupling: /^(DC|AC|GND)/.exec(couplingText ?? '')?.[1] as ChannelSettings['coupling'] ?? 'UNKNOWN',
       });
@@ -222,7 +225,7 @@ export function readScopeMetadata(image: RgbaImage, detection: ProfileDetection)
   }
 
   return {
-    cards, secPerDiv: parseScale(rawTimebase, 's'), triggerOffsetSec: parseQuantity(delay ?? '')?.value ?? null,
+    cards, secPerDiv: parseScale(rawTimebase, 's'), triggerOffsetSec: parseSigned(delay, 's'),
     rawTimebase, topFrequencyHz, topFrequencyRaw, scopeReadings, colors: native.colors, digital: native.digital, unsupportedChannels,
   };
 }

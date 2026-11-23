@@ -330,7 +330,12 @@ function openDb(): Promise<IDBDatabase> {
     req.onupgradeneeded = () => {
       if (!req.result.objectStoreNames.contains(STORE)) req.result.createObjectStore(STORE, { keyPath: 'id' });
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      const db = req.result;
+      // Lets a newer version of the app in another tab upgrade the database instead of being blocked.
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
     req.onerror = () => reject(req.error ?? new Error('IndexedDB is not available'));
     req.onblocked = () => reject(new Error('IndexedDB is blocked'));
   });
