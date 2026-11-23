@@ -1,6 +1,6 @@
 import { columnSamples, columnInterval, isClipped, samplesFor, sampleStatus } from './columns.js';
 import { fitShared, median, quantile, valid, wrapPhase } from './dsp.js';
-import { analysisPlot, axisValue } from './export/analysis-plot.js';
+import { analysisPlot, axisValue, niceCeiling125 } from './export/analysis-plot.js';
 import type { AnalysisPlotOptions } from './export/analysis-plot.js';
 import { csvComment } from './export/csv.js';
 import { csvNumber, GRATICULE_VERSION } from './export/format.js';
@@ -182,21 +182,25 @@ export function computeXyPlot(result: ExtractionResult, xAxis: XyAxisId, yAxis: 
 }
 
 export function renderXySvg(xy: XyResult, opts: XySvgOptions = {}): string {
-  const range = (lo: number, hi: number) => {
-    const padding = (hi / 2 - lo / 2) * 0.09 || Math.max(1, Math.abs(lo) * 0.1);
-    const min = Math.max(-Number.MAX_VALUE, lo - padding), max = Math.min(Number.MAX_VALUE, hi + padding);
-    const span = max - min;
-    return {
-      at: (f: number) => min * (1 - f) + max * f,
-      fraction: (v: number) => Number.isFinite(span) ? (v - min) / span : (v / 2 - min / 2) / (max / 2 - min / 2),
-    };
-  };
-  const a = range(xy.xMin ?? 0, xy.xMax ?? 0), b = range(xy.yMin ?? 0, xy.yMax ?? 0);
   const locale = opts.locale ?? 'en';
+  const range = (lo: number, hi: number, unit: XyResult['xUnit']) => {
+    const padding = lo === hi ? Math.max(1, Math.abs(lo) * 0.1)
+      : Math.max((hi / 2 - lo / 2) * 0.09, Math.max(Math.abs(lo), Math.abs(hi)) * Number.EPSILON * 8, Number.MIN_VALUE);
+    const paddedMin = Math.max(-Number.MAX_VALUE, lo - padding), paddedMax = Math.min(Number.MAX_VALUE, hi + padding);
+    const step = niceCeiling125((paddedMax / 2 - paddedMin / 2) / 3 || Number.MIN_VALUE);
+    const first = Math.floor(paddedMin / step), last = Math.ceil(paddedMax / step);
+    const min = Math.max(-Number.MAX_VALUE, first * step), max = Math.min(Number.MAX_VALUE, last * step);
+    const span = max - min;
+    const fraction = (v: number) => Number.isFinite(span) ? (v - min) / span : (v / 2 - min / 2) / (max / 2 - min / 2);
+    const ticks = Array.from({ length: last - first + 1 }, (_, i) => (first + i) * step).filter(Number.isFinite)
+      .map(value => ({ fraction: fraction(value), label: axisValue(value, unit, locale) }));
+    return { fraction, ticks };
+  };
+  const a = range(xy.xMin ?? 0, xy.xMax ?? 0, xy.xUnit), b = range(xy.yMin ?? 0, xy.yMax ?? 0, xy.yUnit);
   const label = (axis: string, unit: string) => `${axis} (${unit})`;
   return analysisPlot(opts, opts.title ?? `${xy.xAxis} / ${xy.yAxis}`, true,
     label(opts.xLabel ?? xy.xAxis, xy.xUnit), label(opts.yLabel ?? xy.yAxis, xy.yUnit),
-    f => axisValue(a.at(f), xy.xUnit, locale), f => axisValue(b.at(f), xy.yUnit, locale), (x, y, ink) => {
+    a.ticks, b.ticks, (x, y, ink) => {
       const px = (p: XyValidPoint) => x(a.fraction(p.x)), py = (p: XyValidPoint) => y(b.fraction(p.y));
       const plot = xy.segments.map(s => s.length === 1
         ? `<circle cx="${px(s[0]!)}" cy="${py(s[0]!)}" r="1.5" fill="${ink}"/>`

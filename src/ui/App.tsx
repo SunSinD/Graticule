@@ -652,6 +652,12 @@ export function App() {
         if (activeRef.current === id) setActiveId(null);
       }
       setItems((list) => list.filter((i) => i.id !== id));
+      setMathById((all) => {
+        if (!(id in all)) return all;
+        const next = { ...all };
+        delete next[id];
+        return next;
+      });
     },
     [openItem],
   );
@@ -676,6 +682,7 @@ export function App() {
     setActiveId(null);
     setSessions({});
     setBodeZoom({});
+    setMathById({});
     setNotice(null);
     setFileNote(null);
     setCropDismissed(new Set());

@@ -92,11 +92,11 @@ describe('command line', () => {
 
   test('compares a capture to a reference and protects the scope CSV from being overwritten', () => {
     const scope = join(root, 'reference.csv');
-    writeFileSync(scope, 'time_s,CH1,CH2\n-0.003,0,1\n0,0,1\n0.003,0,1\n');
+    writeFileSync(scope, 'time_s,CH1_V,CH2_mV\n-0.003,0,1000\n0,0,1000\n0.003,0,1000\n');
     const result = cli('compare', input, scope, '--channel', 'C2', '--json');
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({
-      channel: 'C2', csvColumn: 'CH2', unaligned: { lagPx: 0, coverage: 1, rmseV: expect.any(Number) },
+      channel: 'C2', csvColumn: 'CH2_mV', unaligned: { lagPx: 0, coverage: 1, rmseV: expect.any(Number) },
     });
     const collision = cli('compare', input, scope, '--json', '--out', scope);
     expect(collision.status).toBe(1);
@@ -121,6 +121,10 @@ describe('command line', () => {
   test.each([
     ['--theme', 'blue', /--theme/], ['--format', 'pdf', /--format/], ['--profile', 'unlisted', /Unknown profile/],
     ['--vdiv', 'C5=1V', /--vdiv/], ['--sec-per-div', '2mV', /--sec-per-div/],
+    ['--sec-per-div', '2V2', /Invalid --sec-per-div/], ['--sec-per-div', '2mV² /div', /Invalid --sec-per-div/],
+    ['--vdiv', 'C1=2V²', /Invalid --vdiv/], ['--vdiv', 'C1=2mV2/div', /Invalid --vdiv/],
+    ['--offset', 'C1=2V2', /Invalid --offset/], ['--offset', 'C1=2mV²', /Invalid --offset/],
+    ['--trigger-offset', '2V²', /Invalid --trigger-offset/], ['--trigger-offset', '2mV2', /Invalid --trigger-offset/],
     ['--sec-per-div', '1e308s', /Invalid --sec-per-div.*exceeds the numeric range/],
     ['--vdiv', 'C1=1e308V', /Invalid --vdiv.*exceeds the numeric range/],
     ['--sec-per-div', '1 2 ms', /Invalid --sec-per-div/], ['--vdiv', 'C1=1 2 V', /Invalid --vdiv/],

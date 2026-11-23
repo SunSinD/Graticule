@@ -78,7 +78,7 @@ const numeric = (value: string | undefined): number | null =>
   value && /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(value) && Number.isFinite(Number(value)) ? Number(value) : null;
 const clean = (label: string) => label.trim().toLowerCase().replace(/\s+/g, ' ');
 const timeHeader = /^(?:(?:x(?:-axis)?|time)(?:[\s_]*[(\[]?\s*(?:[mun\u00b5\u03bc]?s|seconds?)\s*[)\]]?)?|seconds?)$/i;
-const channelHeader = /^(?:CH?\s*([1-4])\b|([1-4])(?=$|\s*[([]))/i;
+const channelHeader = /^(?:CH?\s*([1-4])(?=\b|_)|([1-4])(?=$|\s*[([]))/i;
 const timeUnit = /^(?:([mun\u00b5\u03bc]?)s|seconds?)$/i;
 const voltageUnit = /^(?:([muk\u00b5\u03bc]?)v|volts?)$/i;
 const prefixes: Readonly<Record<string, number>> = { m: 1e-3, u: 1e-6, '\u00b5': 1e-6, '\u03bc': 1e-6, n: 1e-9, k: 1e3 };

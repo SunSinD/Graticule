@@ -1,6 +1,6 @@
 import { columnInterval, columnSamples, isClipped, samplesFor } from './columns.js';
 import { valid } from './dsp.js';
-import { analysisPlot, axisValue } from './export/analysis-plot.js';
+import { analysisPlot, axisValue, niceCeiling125 } from './export/analysis-plot.js';
 import type { AnalysisPlotOptions } from './export/analysis-plot.js';
 import { csvComment, csvField } from './export/csv.js';
 import { csvNumber, formatEng, formatFixed, GRATICULE_VERSION } from './export/format.js';
@@ -369,7 +369,15 @@ export function computeSpectrum(result: ExtractionResult, options: SpectrumOptio
 
 export function renderSpectrumSvg(spec: SpectrumResult, opts: SpectrumSvgOptions = {}): string {
   const linear = opts.scale === 'linear', locale = opts.locale ?? 'en';
-  const maxHz = spec.bins.at(-1)?.frequencyHz || 1;
+  const nyquist = spec.bins.at(-1)?.frequencyHz || 1;
+  const maxHarmonicHz = spec.harmonics.reduce((max, h) => Math.max(max, h.frequencyHz), 0);
+  const maxHz = spec.fundamental
+    ? Math.min(nyquist, niceCeiling125(Math.max(12 * spec.fundamental.frequencyHz, maxHarmonicHz * 1.35)))
+    : nyquist;
+  const hzStep = niceCeiling125(maxHz / 6 || Number.MIN_VALUE);
+  const xTicks = Array.from({ length: Math.floor(maxHz / hzStep) + 1 }, (_, i) => ({
+    fraction: i * hzStep / maxHz, label: axisValue(i * hzStep, 'Hz', locale),
+  }));
   const floor = spec.noiseFloorDbv;
   const low = floor === null ? -100 : floor - 12;
   const maxDb = spec.bins.reduce((m, b) => Math.max(m, b.dbv ?? m), low + 7) + 3;
@@ -381,16 +389,27 @@ export function renderSpectrumSvg(spec: SpectrumResult, opts: SpectrumSvgOptions
   const max = linear ? Math.min(Number.MAX_VALUE, maxAmp * 1.08) || 1 : min + 8 * step;
   const label = linear ? `${spec.unit} RMS` : spec.unit === 'V²' ? 'dB re 1 V²' : 'dBV';
   const fraction = (value: number) => (value - min) / (max - min);
+  const yTicks = Array.from({ length: 9 }, (_, i) => {
+    const f = i / 8, value = min + f * (max - min);
+    return { fraction: f, label: linear ? axisValue(value, spec.unit, locale) : formatFixed(value, 0, locale) };
+  });
   return analysisPlot(opts, opts.title ?? `FFT ${spec.channel}`, false, locale === 'fr' ? 'Fréquence (Hz)' : 'Frequency (Hz)', label,
-    f => axisValue(maxHz * f, 'Hz', locale),
-    f => linear ? axisValue(min + f * (max - min), spec.unit, locale) : formatFixed(min + f * (max - min), 0, locale),
-    (x, y, ink) => {
-      const bins = spec.bins.map(b => `${x(b.frequencyHz / maxHz)},${y(Math.min(1, Math.max(0, fraction(amp(b)))))}`);
+    xTicks, yTicks, (x, y, ink) => {
+      const firstOutside = spec.bins.findIndex(b => b.frequencyHz > maxHz);
+      const visibleBins = firstOutside < 0 ? spec.bins : spec.bins.slice(0, firstOutside + 1);
+      const bins = visibleBins.map(b => `${x(b.frequencyHz / maxHz)},${y(Math.min(1, Math.max(0, fraction(amp(b)))))}`);
       const floorY = floor === null ? null : y(fraction(linear ? 10 ** (floor / 20) : floor));
-      const markers = (spec.harmonics.length ? spec.harmonics : spec.fundamental && [{ ...spec.fundamental, order: 1 }] || [])
+      const labels: { x: number; y: number }[] = [];
+      const harmonics = spec.harmonics.length ? spec.harmonics : spec.fundamental ? [{ ...spec.fundamental, order: 1 }] : [];
+      const markers = harmonics.filter(h => h.frequencyHz <= maxHz)
         .map(h => {
           const px = x(h.frequencyHz / maxHz), py = y(Math.min(0.96, Math.max(0.04, fraction(amp(h)))));
-          return `<circle cx="${px}" cy="${py}" r="2.5" fill="${ink}"/><text x="${px + 4}" y="${py - 5}" fill="${ink}" font-family="system-ui,sans-serif" font-size="10">H${h.order}</text>`;
+          const labelX = Math.min(px + 4, x(1) - 18);
+          let labelY = Math.max(y(1) + 11, py - 5);
+          const offset = labelY > y(0.5) ? -13 : 13;
+          while (labels.some(prior => Math.abs(prior.x - labelX) < 20 && Math.abs(prior.y - labelY) < 12)) labelY += offset;
+          labels.push({ x: labelX, y: labelY });
+          return `<circle cx="${px}" cy="${py}" r="2.5" fill="${ink}"/><text x="${labelX}" y="${labelY}" fill="${ink}" font-family="system-ui,sans-serif" font-size="10">H${h.order}</text>`;
         }).join('');
       return `<g clip-path="url(#analysis-plot-clip)">`
         + (bins.length ? `<polyline points="${bins.join(' ')}" fill="none" stroke="${ink}" stroke-width="1.1"/>` : '')

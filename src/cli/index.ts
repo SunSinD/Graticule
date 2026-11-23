@@ -58,8 +58,9 @@ function scale(raw: string, flag: string, unit: 's' | 'V', divisions: number, si
   const value = parseEngineering(raw);
   const compact = raw.replace(/\s+/g, '');
   const suffix = compact.replace(/\/div$/i, '');
+  const rawUnit = /(?:v[2²]|[vsa]|hz|db|div|[%°])$/i.exec(suffix)?.[0];
   if (signed && compact !== suffix) throw new Error(`Invalid ${flag} value: ${raw}`);
-  if (value === null || (!signed && value <= 0) || (/[vsa]$|(?:hz|db|div)$|[%°]$/i.test(suffix) && !suffix.toLowerCase().endsWith(unit.toLowerCase()))) {
+  if (value === null || (!signed && value <= 0) || (rawUnit && rawUnit.toLowerCase() !== unit.toLowerCase())) {
     throw new Error(`Invalid ${flag} value: ${raw}`);
   }
   if (!Number.isFinite(value * divisions)) throw new Error(`Invalid ${flag} value: ${raw} exceeds the numeric range across the grid`);

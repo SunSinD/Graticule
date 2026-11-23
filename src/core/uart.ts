@@ -40,6 +40,7 @@ export interface UartDecodeResult {
 }
 
 export const STANDARD_UART_BAUDS = [300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600] as const;
+const MIN_PX_PER_BIT = 6;
 
 interface Edge {
   readonly col: number;
@@ -187,8 +188,10 @@ function inspect(samples: readonly TraceSample[], edges: Edge[], px: number, thr
   const error = alignment / Math.max(1, included);
   // Observed stop samples still support a rate when the capture ends inside a stop bit.
   const frameWeight = good + (croppedStop ? 0.75 : 0);
+  // Frames at different baud rates earn equal credit when they cover the same number of samples.
+  const frameCoverage = frameWeight * px / MIN_PX_PER_BIT;
   const score = frameWeight > 0 ? 4 * frameWeight / frames.length + 2.5 * fraction + 2 * single / Math.max(1, included)
-    - 7 * error - 3 * short / Math.max(1, included) + 2 * Math.log2(1 + frameWeight) - 0.35 * bad : -Infinity;
+    - 7 * error - 3 * short / Math.max(1, included) + 2 * Math.log2(1 + frameCoverage) - 0.35 * bad : -Infinity;
   return { frames, score, good };
 }
 
@@ -235,7 +238,7 @@ export function decodeUart(result: ExtractionResult, options: UartOptions): Uart
   };
   const manual = typeof baud === 'number' && Number.isFinite(baud) && baud > 0 ? baud : null;
   if (!(dt > 0) || !Number.isFinite(dt) || (baud !== 'auto' && manual === null)) return out('baud_unresolved', manual, null);
-  if (manual !== null && 1 / (manual * dt) < 6 - 1e-9) return out('insufficient_resolution', manual, 1 / (manual * dt));
+  if (manual !== null && 1 / (manual * dt) < MIN_PX_PER_BIT - 1e-9) return out('insufficient_resolution', manual, 1 / (manual * dt));
   const step = (trace?.settings.voltsPerDiv ?? 0) / result.detection.grid.pxPerVDiv;
   if (thresholdVolts === null || !(swing > 0) || (options.thresholdVolts === undefined && swing < step * 3)
       || threshold <= lo || threshold >= hi) return out('insufficient_levels', manual, manual === null ? null : 1 / (manual * dt));
@@ -282,7 +285,7 @@ export function decodeUart(result: ExtractionResult, options: UartOptions): Uart
     ? STANDARD_UART_BAUDS.filter(rate => 1 / (rate * dt) >= 2).map(trial).sort((a, b) => b.score - a.score)[0]
     : trial(manual);
   if (!best || (manual === null && !Number.isFinite(best.score))) return out('baud_unresolved', null, null);
-  if (best.px < 6 - 1e-9) return out('insufficient_resolution', best.rate, best.px);
+  if (best.px < MIN_PX_PER_BIT - 1e-9) return out('insufficient_resolution', best.rate, best.px);
   if (best.px < 8 - 1e-9) warnings.push('low_resolution');
   if (best.frames.some(frame => frame.uncertain)) warnings.push('uncertain_frames');
   if (best.frames.some(frame => frame.framingError)) warnings.push('framing_errors');

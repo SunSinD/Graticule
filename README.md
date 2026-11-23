@@ -40,10 +40,10 @@ Drop a screenshot from your scope or take a photo of the screen on your phone, c
 ## What it does
 
 - Reads the grid, the time scale and the volts per division from the screenshot
-- Extracts every visible channel as time and voltage data
+- Extracts every visible analog channel as time and voltage data
 - Measures Vpp, Vmax, Vmin, Vavg, Vrms, period, frequency, duty cycle and the phase between any two channels
 - Measures rise time from 10 to 90%, fall time and overshoot on square waves
-- Compares its numbers with the scope MEASURE bar
+- Compares its numbers with the scope MEASURE bar on Siglent SDS2000X Plus
 - Adds a math channel like `C1 - C2`, `C1 + C2` or `C1 × C2`
 - Shows any two channels in XY mode, with the Lissajous phase and the Schmitt trigger thresholds
 - Shows the spectrum of a channel with its fundamental, its harmonics and its THD
@@ -63,7 +63,7 @@ Drop a screenshot from your scope or take a photo of the screen on your phone, c
 4. Check the scales on the right and fix them if needed. The plot updates by itself
 5. Pick a view at the top of the plot. Press 1 to 5 to switch faster
 6. Zoom with the slider or with Ctrl and the mouse wheel. Click the zoom percentage to go back to 100%
-7. Export with the buttons at the bottom right. They always export the view you are looking at
+7. Export with the buttons at the bottom right. Original and Overlay export the clean waveform, while Clean, XY, FFT and Bode export the view you are looking at
 
 Add several files or a whole folder, or tick two or more captures in the history. Then click Extract Bode to make a Bode plot, or Export all (.zip) to get a lab report.
 
@@ -95,7 +95,7 @@ XY mode puts one channel on each axis, like the XY mode of a real scope. Swap fl
 
 The FFT tab shows the spectrum of one channel in dBV or in volts. Pick the window that fits your signal. Hann is a good default and Flat top gives the most accurate peak heights.
 
-The results show the fundamental, the THD up to H10 and the H2 to H5 harmonics in dBc. Values below the dashed line are pixel noise, so a very clean sine shows a THD below 0.5%. When the THD cannot be trusted, like on a clipped signal or with too few cycles, Graticule says why instead of showing a number.
+The results show the fundamental, the THD up to H10 and the H2 to H5 harmonics in dBc. The dashed line is a fixed guide 50 dB below the peak. Values under it are pixel noise, so a very clean sine shows a THD below 0.5%. When the THD cannot be trusted, like on a clipped signal or with too few cycles, Graticule says why instead of showing a number.
 
 ## Lab report zip
 
@@ -118,7 +118,7 @@ While the cursors are on, they are also drawn in the SVG, the PNG and the copied
 
 Type a title in the Export panel to replace the file name on the plot. Give each channel a label like Vin or Vout under Channels. The title and the labels show up in the SVG, the PNG, the CSV and the copied tables, and the title also names the files you download.
 
-Bode plots have their own title field too. It goes on the Bode plot and names the SVG and CSV files.
+Bode plots have their own title field too. It goes on the Bode plot, in the CSV and in the tables, and it names the SVG and CSV files.
 
 Click Copy or press Ctrl+C to copy a white 2x PNG of the plot. Paste it right into Word, Google Docs or PowerPoint.
 
@@ -143,16 +143,18 @@ A real screenshot from the scope always gives better results than a photo.
 | Scope | Support |
 | --- | --- |
 | Siglent SDS2000X Plus | Native |
-| Siglent SDS1000X E | Native |
-| Siglent SDS800X HD | Native |
 | Rigol DS1054Z | Native |
-| Rigol DHO924 | Native |
-| Rohde & Schwarz RTB2004 | Native |
-| Tektronix DPO7104C | Native |
-| Keysight DSOX1000 | Native |
+| Siglent SDS1000X E | Partial (falls back to universal) |
+| Rigol DHO924 | Partial (falls back to universal) |
+| Rohde & Schwarz RTB2004 | Partial (falls back to universal) |
+| Tektronix DPO7104C | Partial (falls back to universal) |
+| Siglent SDS800X HD | Partial (falls back to universal) |
+| Keysight DSOX1000 | Partial (falls back to universal) |
 | Anything else | Universal mode with a crop box |
 
-Native scopes are found by themselves. You can also pick one by hand in the Profile menu. Siglent screenshots saved with inverted colors, with a white background, are read too.
+Partial scopes are read on their own when the screenshot matches a layout we tested. With any other layout, Graticule drops cleanly into universal mode so you can place the crop box yourself.
+
+Native and partial scopes are found by themselves. You can also pick one by hand in the Profile menu. Siglent screenshots saved with inverted colors, with a white background, are read too.
 
 In universal mode you drag the crop box onto the edge of the grid, then type the time scale and the volts per division. Click Cancel or the Clean tab if the box is already right. Crop has two shapes. Rectangle is best for screenshots and 4 corners is best for photos.
 

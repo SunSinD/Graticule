@@ -147,6 +147,16 @@ describe('XY analysis', () => {
     expect(svg.match(/<circle\b/g)).toHaveLength(3);
     expect(svg).toContain('Clipped rail');
     expect(svg).toContain('XY test &amp; label');
+    expect(svg).toContain('fill="#0a0a0a"');
+  });
+
+  test('uses round 1-2-5 steps on both XY axes', () => {
+    const xy = computeXyPlot(capture(5, 0.001, { wave: i => (i - 2) * 3.9 }, { wave: i => 10.2 + 1.6 * i }), 'C1', 'C2');
+    const svg = renderXySvg(xy);
+    const xTicks = Array.from(svg.matchAll(/text-anchor="middle">(-?\d+) V<\/text>/g), match => Number(match[1]));
+    const yTicks = Array.from(svg.matchAll(/text-anchor="end">(-?\d+) V<\/text>/g), match => Number(match[1]));
+    expect(xTicks).toEqual([-10, -5, 0, 5, 10]);
+    expect(yTicks).toEqual([8, 10, 12, 14, 16, 18]);
   });
 
   test('estimates phase for periodic sines and a single closed loop', () => {
@@ -402,6 +412,26 @@ describe('spectrum and harmonic THD', () => {
     expect(ticks.every((tick, i) => tick === ticks[0]! + i * step && tick % step === 0)).toBe(true);
   });
 
+  test('zooms the FFT plot around the harmonic band and retains Nyquist in the CSV', () => {
+    const spec = computeSpectrum(capture(1024, 1 / 200_000, { wave: i => sine(i, 200) }), { channel: 'C1' });
+    expect(spec.fundamental?.frequencyHz).toBeCloseTo(1000, 2);
+    const svg = renderSpectrumSvg(spec, { theme: 'dark' });
+    const xTicks = Array.from(svg.matchAll(/text-anchor="middle">(\d+ (?:k)?Hz)<\/text>/g), match => match[1]);
+    expect(xTicks).toEqual(['0 Hz', '5 kHz', '10 kHz', '15 kHz', '20 kHz']);
+    expect(svg).toContain('fill="#0a0a0a"');
+    expect(spec.bins.at(-1)?.frequencyHz).toBeCloseTo(100_000);
+    expect(renderSpectrumCsv(spec).trimEnd().split('\n').at(-1)).toMatch(/^100000,/);
+
+    const narrow = renderSpectrumSvg(spec, { width: 240, height: 240 });
+    const labels = Array.from(narrow.matchAll(/<text x="([\d.]+)" y="([\d.]+)"[^>]*>H[1-5]<\/text>/g), match => ({
+      x: Number(match[1]), y: Number(match[2]),
+    }));
+    expect(labels).toHaveLength(5);
+    for (const [i, label] of labels.entries()) {
+      expect(labels.slice(0, i).every(prior => Math.abs(prior.x - label.x) >= 16 || Math.abs(prior.y - label.y) >= 10)).toBe(true);
+    }
+  });
+
   test('exports a squared-voltage spectrum and sanitizes titles in FFT and XY CSV comments', () => {
     const result = capture(512, 1 / 20_000, { wave: i => sine(i, 64) }, { wave: () => 2 });
     const math = computeMathTrace(result, { op: 'mul', a: 'C1', b: 'C2' });
@@ -468,6 +498,11 @@ function uartCapture(bytes: readonly number[], px: number, baud: number,
 }
 
 describe('analog UART', () => {
+  test('resolves a 55 byte when the sixfold alias is also above the resolution limit', () => {
+    const result = uartCapture([0x55], 36, 9600);
+    expect(decodeUart(result, { channel: 'C1' })).toMatchObject({ baud: 9600, text: 'U', reason: null });
+  });
+
   test('snaps to the standard rate that fits consecutive frame edges and reports bytes in time order', () => {
     const result = uartCapture([65, 0, 85, 33], 19, 38400);
     const uart = decodeUart(result, { channel: 'C1' });
@@ -530,6 +565,8 @@ describe('analog UART', () => {
     const tooSmall = uartCapture([65, 90, 85], 5, 115200);
     expect(decodeUart(tooSmall, { channel: 'C1', baud: 115200 })).toMatchObject({ reason: 'insufficient_resolution', frames: [] });
     expect(decodeUart(tooSmall, { channel: 'C1' })).toMatchObject({ baud: 115200, reason: 'insufficient_resolution' });
+    const undersampled = uartCapture([0x80, 0x80, 0x80, 0x80, 0xff], 5, 9600);
+    expect(decodeUart(undersampled, { channel: 'C1' })).toMatchObject({ baud: 9600, reason: 'insufficient_resolution', frames: [] });
     const marginal = uartCapture([65, 90, 85], 7, 115200);
     expect(decodeUart(marginal, { channel: 'C1', baud: 115200 })).toMatchObject({ text: 'AZU', warnings: ['low_resolution'] });
   });
@@ -560,10 +597,19 @@ describe('scope CSV comparison', () => {
 
   test('requires an explicitly requested channel in named CSV columns unless overridden', () => {
     const result = capture(5, 1, { wave: i => i, id: 'C2' });
-    const named = parseScopeCsv('Time,C1,C3\n-1,1,9\n0,2,9\n1,3,9');
+    const named = parseScopeCsv('Time,C1_V,C3_mV\n-1,1,9\n0,2,9\n1,3,9');
     expect(() => compareWithScopeCsv(result, named, { channel: 'C2' })).toThrow(/CSV is missing channel C2/);
-    expect(compareWithScopeCsv(result, named, { channel: 'C2', csvColumn: 'c1' }).csvColumn).toBe('C1');
+    expect(compareWithScopeCsv(result, named, { channel: 'C2', csvColumn: 'c1_v' }).csvColumn).toBe('C1_V');
     expect(compareWithScopeCsv(result, parseScopeCsv('Second,Volt\n0,2\n1,3'), { channel: 'C2' }).csvColumn).toBe('Volt');
+  });
+
+  test.each([
+    ['C1_V', 'C2_V', 2], ['CH1_V', 'CH2_mV', 2000], ['c1_v', 'c2_v', 2], ['C1 (V)', 'C2 (V)', 2],
+  ])('selects %s or %s by channel name and applies the voltage unit', (first, second, voltage) => {
+    const result = capture(3, 1, { wave: () => 1 }, { wave: () => 2 });
+    const csv = parseScopeCsv(`Time,${first},${second}\n-1,1,${voltage}\n0,1,${voltage}\n1,1,${voltage}`);
+    expect(compareWithScopeCsv(result, csv, { channel: 'C1' })).toMatchObject({ csvColumn: first, unaligned: { rmseV: 0 } });
+    expect(compareWithScopeCsv(result, csv, { channel: 'C2' })).toMatchObject({ csvColumn: second, unaligned: { rmseV: 0 } });
   });
 
   test('reports unaligned and lag-aligned errors at usable timestamps, with a bounded search', () => {

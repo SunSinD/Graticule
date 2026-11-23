@@ -187,6 +187,13 @@ describe('UART capture boundaries and auto baud', () => {
     return capture(col => bits[Math.floor((col + cropLeft) / px)]!, end - cropLeft, maskedThrough);
   }
 
+  test('chooses 9600 baud for a single alternating 55 byte', () => {
+    const uart = decodeUart(bytes([0x55]), { channel: 'C1' });
+    expect(uart).toMatchObject({ baud: 9600, pxPerBit: 12, reason: null, text: 'U', warnings: [], frames: [
+      { hex: '55', parityError: false, framingError: false, uncertain: false },
+    ] });
+  });
+
   test('chooses 9600 baud for consecutive 80 bytes followed by FF', () => {
     const uart = decodeUart(bytes([0x80, 0x80, 0x80, 0x80, 0xff]), { channel: 'C1' });
     expect(uart.baud).toBe(9600);
