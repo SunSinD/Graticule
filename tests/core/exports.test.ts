@@ -31,7 +31,7 @@ function spacedTimeTicks(svg: string): string[] {
 
 describe('waveform exports', () => {
   test('formats engineering scales with optional units per division and rejects overflow', () => {
-    expect(GRATICULE_VERSION).toBe('2.0.7');
+    expect(GRATICULE_VERSION).toBe('2.0.8');
     expect(parseEngineering('5 mV/div')).toBe(0.005);
     expect(parseEngineering('5 V²')).toBe(5);
     expect(parseEngineering('200 mV²')).toBe(0.2);
@@ -208,7 +208,7 @@ describe('waveform exports', () => {
   test('adds an optional sanitized Bode title in CSV and a custom caption in LaTeX', () => {
     const bode = analyzeBodeBatch([result]);
     expect(renderBodeCsv(bode, 'Sweep, =1+1').split('\n').slice(0, 2)).toEqual([
-      '# Graticule v2.0.7', "# title: Sweep,' =1+1",
+      '# Graticule v2.0.8', "# title: Sweep,' =1+1",
     ]);
     expect(renderBodeCsv(bode, 'Run,"Probe\r\nA"')).toContain('# title: Run,\u201dProbe A\u201d\n');
     expect(renderBodeCsv(bode, ' \t ')).toBe(renderBodeCsv(bode));

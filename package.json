@@ -1,6 +1,6 @@
 {
   "name": "graticule",
-  "version": "2.0.7",
+  "version": "2.0.8",
   "description": "A clean tool that turns oscilloscope screenshots into plots and data.",
   "author": "SunSinD",
   "license": "MIT",

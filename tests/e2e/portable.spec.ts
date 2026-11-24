@@ -25,7 +25,11 @@ async function trackCspViolations(page: import('@playwright/test').Page): Promis
 test('portable file loads and extracts without page or console errors', async ({ browser }) => {
   test.skip(!fs.existsSync(portable), `Skipping portable E2E: ${portable} is not built.`);
   const context = await browser.newContext();
+  await context.setOffline(true);
   const page = await context.newPage();
+  await page.addInitScript(() => {
+    indexedDB.open = () => { throw new DOMException('Storage unavailable', 'SecurityError'); };
+  });
   const pageErrors: string[] = [];
   const consoleErrors: string[] = [];
   page.on('pageerror', (error) => pageErrors.push(error.message));
@@ -35,9 +39,14 @@ test('portable file loads and extracts without page or console errors', async ({
   await trackCspViolations(page);
 
   await page.goto(pathToFileURL(portable).href);
+  await expect(page.getByText('History is kept for this session only.')).toBeVisible();
   await page.locator('[data-testid="file-input"]').setInputFiles([sample]);
   await page.getByRole('button', { name: 'Extract', exact: true }).click();
   await expect(page.locator('.paper svg')).toBeVisible({ timeout: 10_000 });
+  const csvPending = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'CSV', exact: true }).click();
+  const csv = await csvPending;
+  expect(await fs.promises.readFile((await csv.path())!, 'utf8')).toContain(`# Graticule v${pkg.version}`);
   expect(pageErrors).toEqual([]);
   expect(consoleErrors).toEqual([]);
   expect(await cspViolations(page)).toEqual([]);

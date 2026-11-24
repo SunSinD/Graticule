@@ -199,7 +199,7 @@ Graticule never guesses what it cannot see. When a trace is clipped, hidden by a
 
 Graticule works without internet. After your first visit the website keeps working offline, and you can install it like an app from your browser. When a new version comes out, the app updates itself the next time you open it online.
 
-You can also download [the portable HTML file](https://github.com/SunSinD/Graticule/releases/latest/download/graticule-portable.html). It opens in your browser with no install and no internet.
+Download [the portable HTML file](https://github.com/SunSinD/Graticule/releases/latest/download/graticule-portable.html) and open it directly in a desktop browser with no install and no internet. Download a new copy to update. Some browsers cannot save history for local files. On phones and tablets, use the website offline after your first visit.
 
 ## Command line
 

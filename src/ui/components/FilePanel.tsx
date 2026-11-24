@@ -10,6 +10,7 @@ interface Props {
   readonly selected: ReadonlySet<string>;
   readonly rejected: ReadonlySet<string>;
   readonly keepHistory: boolean;
+  readonly historyUnavailable?: boolean;
   readonly onAdd: () => void;
   readonly onAddFolder: () => void;
   readonly onCamera?: () => void;
@@ -161,10 +162,14 @@ export function FilePanel(props: Props) {
         )}
       </section>
       <section className="keep-history">
-        <label className="inline" title={tx.keepHistoryHint}>
-          <input type="checkbox" checked={keepHistory} onChange={(e) => props.onKeepHistory(e.target.checked)} />
-          <span>{tx.keepHistory}</span>
-        </label>
+        {props.historyUnavailable ? (
+          <span className="muted small">{tx.historyUnavailable}</span>
+        ) : (
+          <label className="inline" title={tx.keepHistoryHint}>
+            <input type="checkbox" checked={keepHistory} onChange={(e) => props.onKeepHistory(e.target.checked)} />
+            <span>{tx.keepHistory}</span>
+          </label>
+        )}
       </section>
     </aside>
   );

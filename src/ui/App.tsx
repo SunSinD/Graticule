@@ -1579,6 +1579,7 @@ export function App() {
         selected={new Set(selected)}
         rejected={mode === 'bode' ? rejectedIds : new Set()}
         keepHistory={keepHistory}
+        historyUnavailable={historyReady && storeRef.current?.persistent !== true}
         onAdd={() => openPicker(false)}
         onAddFolder={() => openPicker(true)}
         onCamera={canUseCamera ? () => openCamera() : undefined}

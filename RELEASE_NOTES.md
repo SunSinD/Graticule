@@ -1,29 +1,24 @@
-# Graticule 2.0.7
+# Graticule 2.0.8
 
 Try it live at [sunsind.github.io/Graticule](https://sunsind.github.io/Graticule/).
 
-A fix and launch polish release.
+Download the portable HTML file below to use it offline in a desktop browser.
+
+A small fix release for Hantek screenshots and manual scales.
 
 ## Fixes
 
-- Bode reads the frequency from more file names, like `filter-1kHz.png`
-- Compare reads the time unit from scope CSV headers like `Time (ms)`, and reads Tektronix CSV files with extra columns
-- A quote in a title or a warning no longer breaks the comment lines at the top of a CSV
-- The XY CSV keeps full time precision when rounding would give two points the same time
-- UART decoding picks the right frame start more often when frames sit right next to each other
+- Universal mode finds the grid on some 800 × 480 Hantek screenshots and skips the yellow readouts and trigger marker. Enter the time and voltage scales shown on the scope
+- Cropping within the detected grid keeps the correct division spacing, and reopening the crop restores the guides
+- An aligned 4 corners crop gives the same result as a rectangle crop on these captures
+- Clean plots and SVG exports use the detected grid for voltage labels and division spacing
+- Pressing Enter on an unread time or voltage scale confirms the value shown
+- The portable HTML file has no separate icon file to load and shows when capture history can only be kept for the current session
 
-## History and offline
+## Docs
 
-- Clearing the history in one tab and then renaming a capture in another tab no longer brings that capture back
-- Two copies of Graticule hosted under different paths on the same site no longer delete each other's offline files
-
-## Polish
-
-- The empty screen has a small link to the source code on GitHub, so phone and tablet visitors can reach it too
-- Links shared on social apps now show a title, a short description and a preview image
-- The page title now says what Graticule does
-- The French rise time label reads 10 à 90%
-- The README has a Help add your scope section and a License section
+- The README links directly to the portable file and release downloads
+- Use the scope waveform export whenever possible. A screenshot provides estimated data
 
 ## Credits
 

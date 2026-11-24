@@ -213,7 +213,7 @@ describe('command line', () => {
     const result = cli(flag);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(`${GRATICULE_VERSION}\n`);
-    expect(GRATICULE_VERSION).toBe('2.0.7');
+    expect(GRATICULE_VERSION).toBe('2.0.8');
     expect(cli('--help').stdout).toContain('--version | -v');
   });
 

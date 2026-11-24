@@ -80,6 +80,9 @@ if (portableRequested || existsSync(portablePath)) {
   if (/<link[^>]+rel=["']stylesheet["'][^>]*>/i.test(html)) {
     throw new Error('Portable HTML contains an external stylesheet');
   }
+  for (const match of html.matchAll(/<link\b[^>]*\bhref=["']([^"']+)["'][^>]*>/gi)) {
+    if (!match[1].startsWith('data:')) throw new Error(`Portable HTML contains an external link asset: ${match[1]}`);
+  }
   if (!/<link[^>]+rel=["']icon["'][^>]+href=["']data:image\/svg\+xml[^"']*["'][^>]*>/i.test(html)) {
     throw new Error('Portable HTML does not embed an SVG data-URI favicon');
   }
