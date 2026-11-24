@@ -1322,6 +1322,32 @@ test('a typed scale far out of range such as 1e-30 is refused', async ({ page })
   }
 });
 
+test('entering the default scales confirms manual calibration', async ({ page }) => {
+  await addFiles(page, SINE);
+  await page.getByRole('combobox', { name: 'Profile' }).selectOption('universal-fallback');
+  await page.getByRole('button', { name: 'Extract', exact: true }).click();
+
+  const time = page.locator('#time-div');
+  const voltage = page.locator('#vdiv-C1');
+  const hints = page.getByText('not read, check it', { exact: true });
+  await expect(time.locator('../..')).toContainText('not read, check it');
+  await expect(voltage.locator('../..')).toContainText('not read, check it');
+  const uncalibrated = await hints.count();
+  await time.focus();
+  await time.press('Tab');
+  await expect(hints).toHaveCount(uncalibrated);
+  await time.focus();
+  await time.press('Enter');
+  await expect(time.locator('../..')).not.toContainText('not read, check it');
+  await voltage.fill('2 V');
+  await voltage.press('Escape');
+  await voltage.press('Tab');
+  await expect(voltage.locator('../..')).toContainText('not read, check it');
+  await voltage.fill('1.0 V');
+  await voltage.press('Enter');
+  await expect(voltage.locator('../..')).not.toContainText('not read, check it');
+});
+
 test('a Bode title names the Bode SVG and CSV downloads', async ({ page }) => {
   await extractSweep(page);
   const title = page.getByRole('textbox', { name: 'Title' });

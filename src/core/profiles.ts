@@ -1,4 +1,5 @@
 import data from './profiles.json' with { type: 'json' };
+import { cropFollowsGridAxis } from './deskew.js';
 import { matchBitmap, readBitmap } from './font/matcher.js';
 import { compactBadgeGlyphs, logo as siglentLogo } from './font/siglentFont.js';
 import { logo as rigolLogo } from './font/rigolFont.js';
@@ -434,22 +435,67 @@ export function findNativeCards(image: RgbaImage, profile: NativeProfile, invert
 
 const divisions = (n: number | undefined, fallback: number) => int(n) && n >= 1 && n <= 100 ? n : fallback;
 
-function fallbackGrid(image: RgbaImage, overrides: ExtractionOverrides): GridGeometry {
+function hantekGrid(image: RgbaImage): GridGeometry | null {
+  if (image.width !== 800 || image.height !== 480) return null;
+  const left = 15, right = 784, top = 31, bottom = 430;
+  const centerX = 399, centerY = 230, pitch = 50;
+  const ink: PixelPredicate = (r, g, b) => grayscale(r, g, b, 140, 185);
+  if (![top, bottom].every(y =>
+    proportion(image, { x: left, y, width: right - left + 1, height: 1 }, ink, 5) > 0.9)
+    || ![left, right].every(x =>
+      proportion(image, { x, y: top, width: 1, height: bottom - top + 1 }, ink, 5) > 0.9)) return null;
+  const colors = colorsFor('universal-fallback');
+  const axis: PixelPredicate = (r, g, b) => ink(r, g, b) || channelColor(r, g, b, colors) >= 0;
+  if (proportion(image, { x: left, y: centerY, width: right - left + 1, height: 1 }, axis, 5) <= 0.9
+      || proportion(image, { x: centerX, y: top, width: 1, height: bottom - top + 1 }, axis, 5) <= 0.9
+      || proportion(image, { x: left, y: top, width: right - left + 1, height: bottom - top + 1 },
+        (r, g, b) => luminance(r, g, b) < 38, 7) <= 0.65) return null;
+
+  const vLines = Array.from({ length: 15 }, (_, i) => centerX + (i - 7) * pitch);
+  const hLines = Array.from({ length: 9 }, (_, i) => centerY + (i - 4) * pitch);
+  // The vertical grid lines are dotted at 10 px intervals. Probe away from the horizontal lines.
+  const dots = vLines.filter(x => x !== centerX)
+    .flatMap(x => [50, 100, 150, 200, 250, 300, 350, 400].map(y => pixelMatches(image, x, y, ink)));
+  if (dots.filter(Boolean).length < dots.length * 0.85) return null;
+  // The outer border cuts through the last division on both sides.
+  return {
+    ...makeGrid(left, top, right, bottom, vLines.length - 1, hLines.length - 1, 'standard', false),
+    centerX, centerY, vLines, hLines, pxPerHDiv: pitch, pxPerVDiv: pitch,
+  };
+}
+
+function fallbackGrid(image: RgbaImage, overrides: ExtractionOverrides, detected: GridGeometry | null): GridGeometry {
   const bound = (value: number, max: number) => Math.min(Math.max(0, max), Math.max(0, Math.round(value)));
   const { width, height } = image;
   const crop = overrides.manualCrop;
-  const h = divisions(overrides.hDivs, 10);
-  const v = divisions(overrides.vDivs, 8);
   const invert = (l: number, t: number, r: number, b: number) => proportion(image,
     { x: l, y: t, width: Math.max(1, r - l), height: Math.max(1, b - t) }, (r, g, b) => luminance(r, g, b) > 210, 5) > 0.6;
+
+  const build = (left: number, top: number, right: number, bottom: number, variant: LayoutVariant): GridGeometry => {
+    // A crop within the known grid leaves the detected division spacing intact.
+    const x = detected && cropFollowsGridAxis(left, right, detected.left, detected.right, detected.centerX, detected.pxPerHDiv)
+      ? detected : null;
+    const y = detected && cropFollowsGridAxis(top, bottom, detected.top, detected.bottom, detected.centerY, detected.pxPerVDiv)
+      ? detected : null;
+    const h = divisions(overrides.hDivs, x?.hDivs ?? 10);
+    const v = divisions(overrides.vDivs, y?.vDivs ?? 8);
+    const grid = makeGrid(left, top, right, bottom, h, v, variant, invert(left, top, right, bottom));
+    return {
+      ...grid,
+      ...(x && h === x.hDivs && { centerX: x.centerX, vLines: x.vLines.filter(line => line >= left && line <= right), pxPerHDiv: x.pxPerHDiv }),
+      ...(y && v === y.vDivs && { centerY: y.centerY, hLines: y.hLines.filter(line => line >= top && line <= bottom), pxPerVDiv: y.pxPerVDiv }),
+    };
+  };
 
   if (crop && [crop.x, crop.y, crop.width, crop.height].every(finite) && crop.width > 0 && crop.height > 0) {
     const left = bound(crop.x, width - 2);
     const top = bound(crop.y, height - 2);
     const right = Math.max(Math.min(left + 1, width - 1), bound(crop.x + crop.width, width - 1));
     const bottom = Math.max(Math.min(top + 1, height - 1), bound(crop.y + crop.height, height - 1));
-    return makeGrid(left, top, right, bottom, h, v, 'manual', invert(left, top, right, bottom));
+    return build(left, top, right, bottom, 'manual');
   }
+
+  if (detected) return build(detected.left, detected.top, detected.right, detected.bottom, 'standard');
 
   const dark: PixelPredicate = (r, g, b) => luminance(r, g, b) < 38;
   const longest = (size: number, test: (index: number) => boolean): [number, number] => {
@@ -471,7 +517,7 @@ function fallbackGrid(image: RgbaImage, overrides: ExtractionOverrides): GridGeo
     { x, y: t, width: 1, height: b - t }, dark, 3) > 0.66) : [0, 0];
   const bounds: [number, number, number, number] = b - t >= height / 3 && r - l >= width / 3
     ? [l, t, r - 1, b - 1] : [0, 0, width - 1, height - 1];
-  return makeGrid(...bounds, h, v, 'standard', invert(...bounds));
+  return build(...bounds, 'standard');
 }
 
 export function detectProfile(image: RgbaImage, overrides: ExtractionOverrides = {}): ProfileDetection {
@@ -513,8 +559,10 @@ export function detectProfile(image: RgbaImage, overrides: ExtractionOverrides =
       };
     }
   }
+  const hantek = hantekGrid(image);
   return {
     profileId: 'universal-fallback', profileName: 'Universal Fallback', matchedAnchors: [], confidence: 0,
-    fallbackReason, grid: fallbackGrid(image, overrides), digitalOnly: false, warnings: [fallbackReason],
+    ...(hantek && { fallbackLayout: 'hantek-800x480' as const }),
+    fallbackReason, grid: fallbackGrid(image, overrides, hantek), digitalOnly: false, warnings: [fallbackReason],
   };
 }

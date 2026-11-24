@@ -15,6 +15,7 @@ interface Props {
   readonly decLabel?: string;
   readonly incLabel?: string;
   readonly hint?: string | null;
+  readonly uncalibrated?: boolean;
   readonly onChange: (value: number) => void;
 }
 
@@ -37,17 +38,16 @@ export function acceptScale(v: number | null, unit: Unit, allowZero = false): v 
 }
 
 export function ScaleInput(props: Props) {
-  const { id, label, value, unit, locale, disabled, stepper, allowZero, decLabel, incLabel, hint, onChange } = props;
+  const { id, label, value, unit, locale, disabled, stepper, allowZero, decLabel, incLabel, hint, uncalibrated, onChange } = props;
   const [draft, setDraft] = useState<string | null>(null);
   const shown = value === null ? '' : formatEng(value, unit, locale, { sig: 4, trim: true, empty: '' });
 
-  const commit = (): void => {
-    if (draft === null) return;
+  const commit = (confirmDefault = false): void => {
+    if (draft === null && !(confirmDefault && uncalibrated)) return;
     setDraft(null);
-    if (draft.trim() === shown) return;
-    const v = parseNumber(draft);
+    const v = draft === null || draft.trim() === shown ? value : parseNumber(draft);
     if (!acceptScale(v, unit, allowZero)) return;
-    if (v !== value) onChange(v);
+    if (v !== value || uncalibrated) onChange(v);
   };
 
   const step = (dir: 1 | -1): void => {
@@ -71,16 +71,15 @@ export function ScaleInput(props: Props) {
           className="num"
           disabled={disabled}
           value={draft ?? shown}
-          onFocus={() => setDraft(shown)}
           onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
+          onBlur={() => commit()}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
-              commit();
+              commit(true);
             } else if (e.key === 'Escape') {
               e.preventDefault();
               e.stopPropagation();
-              setDraft(shown);
+              setDraft(null);
             }
           }}
         />

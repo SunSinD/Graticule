@@ -3,10 +3,10 @@ import { CURSOR, OVERLAY } from './mask.js';
 import type { OverlayMask } from './mask.js';
 import type { ScopeMetadata } from './ocr.js';
 import { at, CHANNELS, channelColor, MIN_VISIBLE_ALPHA, pixelMatches } from './pixels.js';
-import type { ChannelColor } from './pixels.js';
+import type { ChannelColor, PixelPredicate } from './pixels.js';
 import { colorsFor, getNativeProfile, invertTraceColors, makeGrid } from './profiles.js';
 import type { ChannelId, ChannelSettings, ChannelTrace, ExtractionOverrides, GapStatus, GridGeometry, ProfileDetection,
-  RgbaImage, TimebaseSettings, TraceSample } from './types.js';
+  Rect, RgbaImage, TimebaseSettings, TraceSample } from './types.js';
 
 interface Cluster {
   readonly y: number;
@@ -192,13 +192,16 @@ interface TraceColumns {
   readonly thickness: number;
 }
 
-function rtbBottomLabels(image: RgbaImage, grid: GridGeometry, fill: (x1: number, y1: number, x2: number, y2: number) => void): void {
-  const left = grid.left + 1, top = grid.bottom - 20;
-  const width = grid.width - 1, height = 19;
+interface InkComponent extends Rect {
+  readonly indices: readonly number[];
+}
+
+function inkComponents(image: RgbaImage, { x: left, y: top, width, height }: Rect, predicate: PixelPredicate): InkComponent[] {
   const ink = new Uint8Array(width * height);
+  const components: InkComponent[] = [];
   for (let row = 0; row < height; row++) {
     for (let col = 0; col < width; col++) {
-      if (pixelMatches(image, left + col, top + row, (r, g, b) => Math.max(r, g, b) >= 128)) ink[row * width + col] = 1;
+      if (pixelMatches(image, left + col, top + row, predicate)) ink[row * width + col] = 1;
     }
   }
   for (let start = 0; start < ink.length; start++) {
@@ -219,26 +222,64 @@ function rtbBottomLabels(image: RgbaImage, grid: GridGeometry, fill: (x1: number
         }
       }
     }
-    // The labels are made of small glyphs. Waveforms can run across the band or cross its edges.
-    if (maxX - minX < 20 && maxY - minY >= 4 && maxY - minY < 15 && minY > 0 && maxY < height - 1) {
-      fill(left + minX, top + minY, left + maxX, top + maxY);
-    }
+    components.push({ x: left + minX, y: top + minY, width: maxX - minX + 1, height: maxY - minY + 1, indices: queue });
   }
+  return components;
 }
 
 function plotAnnotations(image: RgbaImage, detection: ProfileDetection, markers: readonly (number | null)[]): Uint8Array | null {
-  const { profileId, grid } = detection;
+  const { profileId, grid, fallbackLayout } = detection;
   const { left, right, top, bottom } = grid;
-  if (profileId !== 'rigol-dho924' && profileId !== 'rohde-schwarz-rtb2004' && profileId !== 'siglent-sds800x-hd') return null;
-  const native = getNativeProfile(profileId)!.graticule;
-  const { hLines, vLines } = grid.hDivs === native.hDivs && grid.vDivs === native.vDivs ? grid
-    : makeGrid(left, top, right, bottom, native.hDivs, native.vDivs, grid.layoutVariant, grid.inverted);
+  if (!fallbackLayout && profileId !== 'rigol-dho924' && profileId !== 'rohde-schwarz-rtb2004' && profileId !== 'siglent-sds800x-hd') return null;
   const pixels = new Uint8Array(image.width * image.height);
   const fill = (x1: number, y1: number, x2: number, y2: number) => {
     for (let y = Math.max(top, y1); y <= Math.min(bottom, y2); y++) {
       pixels.fill(OVERLAY, y * image.width + Math.max(left, x1), y * image.width + Math.min(right, x2) + 1);
     }
   };
+  const fillRect = ({ x, y, width, height }: Rect) => fill(x, y, x + width - 1, y + height - 1);
+  if (fallbackLayout === 'hantek-800x480') {
+    const maskInk = (area: Rect, component: InkComponent) => {
+      for (const index of component.indices) {
+        const x = area.x + index % area.width;
+        const y = area.y + Math.floor(index / area.width);
+        if (x >= left && x <= right && y >= top && y <= bottom) pixels[y * image.width + x] = OVERLAY;
+      }
+    };
+    const yellow: PixelPredicate = (r, g, b) => r > 180 && g > 180 && b < 80;
+    const readoutArea = { x: 16, y: 407, width: 768, height: 22 };
+    const glyphs = inkComponents(image, readoutArea, yellow)
+      .filter(({ y, width, height }) => y >= 410 && y + height <= 426 && width <= 18 && height >= 2)
+      .sort((a, b) => a.x - b.x);
+    // Group tightly spaced ink into readouts, then look for several glyphs on a shared baseline.
+    for (let start = 0; start < glyphs.length;) {
+      let end = start + 1;
+      let edge = glyphs[start]!.x + glyphs[start]!.width;
+      while (end < glyphs.length && glyphs[end]!.x - edge <= 8) {
+        const next = glyphs[end++]!;
+        edge = Math.max(edge, next.x + next.width);
+      }
+      const group = glyphs.slice(start, end);
+      if (group.filter(({ y, height }) => height >= 8 && Math.abs(y + height - 423) <= 1).length >= 4) {
+        for (const glyph of group) maskInk(readoutArea, glyph);
+      }
+      start = end;
+    }
+    const cyan: PixelPredicate = (r, g, b) => r < 60 && g > 150 && b > 160;
+    const triggerArea = { x: 16, y: 32, width: 768, height: 15 };
+    for (const arrow of inkComponents(image, triggerArea, cyan)) {
+      const { x, y, width, height } = arrow;
+      if (y === 32 && width >= 12 && width <= 20 && height >= 8 && height <= 12
+          && pixelMatches(image, x, y, cyan) && pixelMatches(image, x + width - 1, y, cyan)
+          && !pixelMatches(image, x, y + height - 1, cyan) && !pixelMatches(image, x + width - 1, y + height - 1, cyan)) {
+        maskInk(triggerArea, arrow);
+      }
+    }
+    return pixels;
+  }
+  const native = getNativeProfile(profileId)!.graticule;
+  const { hLines, vLines } = grid.hDivs === native.hDivs && grid.vDivs === native.vDivs ? grid
+    : makeGrid(left, top, right, bottom, native.hDivs, native.vDivs, grid.layoutVariant, grid.inverted);
   if (profileId === 'rigol-dho924') {
     for (const y of hLines.slice(1, -1)) fill(left + 8, Math.round(y) - 9, left + 36, Math.round(y) + 8);
     const zero = markers[0];
@@ -275,7 +316,13 @@ function plotAnnotations(image: RgbaImage, detection: ProfileDetection, markers:
     return pixels;
   }
   for (const y of hLines.slice(1, -1)) fill(left + 1, Math.round(y) - 18, left + 58, Math.round(y) - 4);
-  rtbBottomLabels(image, grid, fill);
+  const glyphs = inkComponents(image, { x: left + 1, y: bottom - 20, width: grid.width - 1, height: 19 },
+    (r, g, b) => Math.max(r, g, b) >= 128);
+  for (const glyph of glyphs) {
+    const { y, width, height } = glyph;
+    // Waveforms can run across the band or cross its edges.
+    if (width <= 20 && height >= 5 && height <= 15 && y > bottom - 20 && y + height <= bottom - 2) fillRect(glyph);
+  }
   for (let x = left + 1; x < right; x++) {
     if (pixelMatches(image, x, top + 2, (r, g, b) => r === 244 && g === 244 && b === 0)) {
       fill(x - 4, top, x + 4, top + 30);

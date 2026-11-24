@@ -154,7 +154,7 @@ function waveformLayout(result: ExtractionResult, options: SvgExportOptions) {
   const marginR = traces.length > 1 ? 76 : 28;
   const width = dimension(options.width, 960, x0 + marginR + 1);
   const plotW = width - x0 - marginR;
-  const plotH = plotW / (grid.width / grid.pxPerHDiv) * Math.max(1, grid.vDivs);
+  const plotH = plotW / (grid.width / grid.pxPerHDiv) * (grid.height / grid.pxPerVDiv);
   const laneGap = 5;
   const lanesH = traces.length * laneGap + 6;
   const axisLabelH = options.cursors ? 52 : 34;
@@ -218,6 +218,16 @@ function cursorMarkup(result: ExtractionResult, frame: WaveformFrame, cursors: P
   return lines.join('') + '</g>';
 }
 
+function minorTicks(start: number, end: number, major: number, pitch: number): number[] {
+  const step = pitch / 5;
+  const ticks: number[] = [];
+  for (let i = Math.floor((start - major) / step) + 1; major + i * step < end - 1e-9; i++) {
+    const position = major + i * step;
+    if (i % 5 !== 0 && position > start + 1e-9) ticks.push(position);
+  }
+  return ticks;
+}
+
 export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOptions = {}): string {
   const pal = PALETTES[options.theme ?? 'light'];
   const locale: Locale = options.locale ?? 'en';
@@ -225,13 +235,12 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
   const showGrid = options.showGrid ?? true;
   const showLegend = options.showLegend ?? true;
   const grid = result.detection.grid;
-  const vDivs = Math.max(1, grid.vDivs);
   const { frame, traces, laneGap, lanesH, axisLabelH, legendRowH } = waveformLayout(result, options);
   const { width, height, x0, y0, x1, y1, plotW, plotH } = frame;
-  const vDivPx = plotH / vDivs;
   const channelLabel = (id: ChannelId) => options.channelLabels?.[id]?.trim() || id;
   const gw = Math.max(1e-9, grid.width);
   const gh = Math.max(1e-9, grid.height);
+  const vDivPx = grid.pxPerVDiv / gh * plotH;
   const mapX = (px: number): number => x0 + ((px - grid.left) / gw) * plotW;
   const mapY = (py: number): number => y0 + ((py - grid.top) / gh) * plotH;
 
@@ -250,20 +259,18 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
     for (const x of grid.vLines) {
       if (x > grid.left && x < grid.right) g.push(line(mapX(x), y0, mapX(x), y1, pal.grid, 1));
     }
-    for (let j = 1; j < vDivs; j++) g.push(line(x0, y0 + j * vDivPx, x1, y0 + j * vDivPx, pal.grid, 1));
+    for (const y of grid.hLines) {
+      if (y > grid.top && y < grid.bottom) g.push(line(x0, mapY(y), x1, mapY(y), pal.grid, 1));
+    }
     const cx = mapX(grid.centerX);
     const cy = mapY(grid.centerY);
-    const subX = grid.pxPerHDiv / 5;
-    const firstLine = grid.vLines[0] ?? grid.left;
-    for (let k = 1; firstLine + k * subX < grid.right - 1e-9; k++) {
-      if (k % 5 === 0) continue;
-      const xx = mapX(firstLine + k * subX);
-      if (xx <= x0) continue;
+    for (const x of minorTicks(grid.left, grid.right, grid.vLines[0] ?? grid.left, grid.pxPerHDiv)) {
+      const xx = mapX(x);
       g.push(line(xx, cy - 3, xx, cy + 3, pal.soft, 1));
     }
-    for (let k = 1; k < vDivs * 5; k++) {
-      if (k % 5 === 0) continue;
-      const yy = y0 + k * vDivPx / 5;
+    const majorY = grid.hLines[Math.floor(grid.hLines.length / 2)] ?? grid.centerY;
+    for (const y of minorTicks(grid.top, grid.bottom, majorY, grid.pxPerVDiv)) {
+      const yy = mapY(y);
       g.push(line(cx - 3, yy, cx + 3, yy, pal.soft, 1));
     }
     out.push(`<g aria-hidden="true">${g.join('')}</g>`);
@@ -309,11 +316,11 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
   axisTraces.forEach((tr, idx) => {
     const left = idx === 0;
     const ax = left ? x0 : x1;
-    for (let j = 0; j <= vDivs; j++) {
-      const yy = y0 + j * vDivPx;
+    for (const [j, y] of grid.hLines.entries()) {
+      const yy = mapY(y);
       ticks.push(line(ax, yy, left ? ax - 4 : ax + 4, yy, pal.ink, 1));
       if (j % voltageLabelStride !== 0) continue;
-      const v = frame.voltAt(tr.channel, j / vDivs)!;
+      const v = frame.voltAt(tr.channel, (y - grid.top) / gh)!;
       const clean = Math.abs(v) < tr.settings.voltsPerDiv * 1e-6 ? 0 : v;
       ticks.push(
         text(left ? ax - 7 : ax + 7, yy + 3.5, svgMinus(formatEng(clean, 'V', locale, { sig: 4, trim: true })), {

@@ -1,6 +1,6 @@
 import { analyzeBodeBatch as fitBatch, frequenciesDiffer } from './bode.js';
 import type { BodeOverrides } from './bode.js';
-import { rectifyGrid } from './deskew.js';
+import { rectangleFromQuad, rectifyGrid } from './deskew.js';
 import { extractTraces, makeTimebase } from './extract.js';
 import { buildOverlayMask } from './mask.js';
 import { compareScope, measureChannel, measurePhase, scopeFrequency } from './measurements.js';
@@ -24,10 +24,17 @@ export type { XyAxisId, XyPoint, XyResult, XySvgOptions, XyValidPoint } from './
 
 export function analyzeCapture(source: RgbaImage, fileName: string, overrides: ExtractionOverrides = {}): ExtractionResult {
   const start = performance.now();
-  const quad = overrides.manualQuad;
+  const requestedQuad = overrides.manualQuad;
+  const rectangle = requestedQuad && source.width === 800 && source.height === 480 ? rectangleFromQuad(requestedQuad) : null;
+  const rectangularDetection = rectangle && rectangle.x >= 0 && rectangle.y >= 0
+    && rectangle.x + rectangle.width < source.width && rectangle.y + rectangle.height < source.height
+    ? detectProfile(source, { ...overrides, manualCrop: rectangle }) : null;
+  // Keep the Hantek grid and its annotation coordinates when there is no perspective to correct.
+  const aligned = rectangularDetection?.fallbackLayout ? rectangularDetection : null;
+  const quad = aligned ? undefined : requestedQuad;
   const image = quad ? rectifyGrid(source, quad) : source;
   const nativeGrid = quad && overrides.profileId ? getNativeProfile(overrides.profileId)?.graticule : undefined;
-  const detection = detectProfile(image, quad ? {
+  const detection = aligned ?? detectProfile(image, quad ? {
     ...overrides,
     hDivs: overrides.hDivs ?? nativeGrid?.hDivs, vDivs: overrides.vDivs ?? nativeGrid?.vDivs,
     manualCrop: { x: 0, y: 0, width: image.width - 1, height: image.height - 1 },

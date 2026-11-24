@@ -1,8 +1,21 @@
-import type { Point, Quad, RgbaImage } from './types.js';
+import type { Point, Quad, Rect, RgbaImage } from './types.js';
 
 export interface DeskewSize {
   readonly width: number;
   readonly height: number;
+}
+
+export function rectangleFromQuad(quad: Quad): Rect | null {
+  if (quad.length !== 4) return null;
+  const [tl, tr, br, bl] = quad;
+  if (!tl || !tr || !br || !bl || ![tl.x, tl.y, br.x, br.y].every(Number.isInteger)
+      || tr.y !== tl.y || bl.x !== tl.x || tr.x !== br.x || bl.y !== br.y || br.x <= tl.x || br.y <= tl.y) return null;
+  return { x: tl.x, y: tl.y, width: br.x - tl.x, height: br.y - tl.y };
+}
+
+export function cropFollowsGridAxis(start: number, end: number, first: number, last: number, center: number, pitch: number): boolean {
+  const tick = pitch / 5;
+  return start >= first - tick && end <= last + tick && start < center && end > center;
 }
 
 const maxSide = 4096;

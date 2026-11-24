@@ -7,11 +7,12 @@
 
 <h1 align="center">Graticule</h1>
 
-<p align="center">Graticule turns oscilloscope screenshots into clean plots and real data.</p>
+<p align="center">Graticule turns oscilloscope screenshots into clean plots and estimated waveform data.</p>
 
 <p align="center">
   <a href="https://sunsind.github.io/Graticule/"><strong>Open Graticule</strong></a><br />
-  Runs in your browser. Nothing to install.
+  Runs in your browser. Nothing to install.<br />
+  <a href="#offline">Offline download</a> or <a href="#command-line">command line</a>
 </p>
 
 <p align="center">
@@ -36,6 +37,8 @@
 </details>
 
 Drop a screenshot from your scope or take a photo of the screen on your phone, click Extract, and you get a print ready plot, a CSV of every trace, and a measurement table you can paste into Word or LaTeX. Everything runs in your browser, so your files never leave your device.
+
+Use your scope's waveform export whenever you can save the original samples. Graticule estimates the visible waveform from the image when all you have is a screenshot or photo.
 
 ## What it does
 
@@ -160,6 +163,8 @@ Native and partial scopes are found by themselves. You can also pick one by hand
 
 In universal mode you drag the crop box onto the edge of the grid, then type the time scale and the volts per division. Click Cancel or the Clean tab if the box is already right. Crop has two shapes. Rectangle is best for screenshots and 4 corners is best for photos.
 
+Universal mode can also find the grid on some 800 × 480 Hantek screenshots. Enter the time and voltage scales shown on the scope.
+
 ## Help add your scope
 
 Is your scope missing, or read only in universal mode? [Open an issue](https://github.com/SunSinD/Graticule/issues) with a few screenshots saved straight from the scope, and the CSV it saves too if it can. Tell us the scope model and the time and volt scales you used. Real captures are the best way to add a new scope.
@@ -194,7 +199,7 @@ Graticule never guesses what it cannot see. When a trace is clipped, hidden by a
 
 Graticule works without internet. After your first visit the website keeps working offline, and you can install it like an app from your browser. When a new version comes out, the app updates itself the next time you open it online.
 
-You can also download `graticule-portable.html` from the latest release. It is one file that opens in any browser, with no install and no internet.
+You can also download [the portable HTML file](https://github.com/SunSinD/Graticule/releases/latest/download/graticule-portable.html). It opens in your browser with no install and no internet.
 
 ## Command line
 
@@ -217,10 +222,10 @@ npm run cli -- compare capture.png scope.csv --channel C1 --csv-column "CH1 Volt
 
 `compare` checks a screenshot against the CSV saved by the scope itself and tells you how far apart they are. Add `--csv-column` to pick the scope CSV column by its label. `--decode uart` reads the bytes of a serial signal from the trace.
 
-To use it without the source code, download the `.tgz` file from a release and install it once.
+To use it without the source code, download the `.tgz` file from the [latest release](https://github.com/SunSinD/Graticule/releases/latest) and replace `VERSION` with the version in the file name.
 
 ```sh
-npm install -g ./graticule-2.0.7.tgz
+npm install -g ./graticule-VERSION.tgz
 graticule --version
 ```
 

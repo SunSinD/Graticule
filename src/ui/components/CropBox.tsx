@@ -1,7 +1,7 @@
 import { useId, useRef } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
-import type { Point, Quad, Rect } from '../../core/types';
-import { projectRectToQuad } from '../../core/deskew';
+import type { GridGeometry, Point, Quad, Rect } from '../../core/types';
+import { cropFollowsGridAxis, projectRectToQuad, rectangleFromQuad } from '../../core/deskew';
 import type { Dict } from '../i18n';
 
 type Corner = 'tl' | 'tr' | 'bl' | 'br';
@@ -29,6 +29,7 @@ interface Common {
   readonly imageHeight: number;
   readonly hDivs: number;
   readonly vDivs: number;
+  readonly detectedGrid?: GridGeometry;
   readonly onApply: () => void;
   readonly onCancel: () => void;
 }
@@ -120,7 +121,23 @@ function moveRect(grip: Grip, r: Rect, dx: number, dy: number, w: number, h: num
   };
 }
 
-export function CropBox({ tx, rect, imageWidth, imageHeight, hDivs, vDivs, onChange, onApply, onCancel }: RectProps) {
+function guides(divisions: number, start: number, span: number, lines?: readonly number[]): number[] {
+  return lines ? lines.map(line => (line - start) / span).filter(line => line > 0 && line < 1)
+    : Array.from({ length: divisions - 1 }, (_, i) => (i + 1) / divisions);
+}
+
+function cropGuides(hDivs: number, vDivs: number, rect: Rect | null, grid?: GridGeometry) {
+  if (!rect || !grid) return { vertical: guides(hDivs, 0, 1), horizontal: guides(vDivs, 0, 1) };
+  const { x, y, width, height } = rect;
+  const calibratedX = hDivs === grid.hDivs && cropFollowsGridAxis(x, x + width, grid.left, grid.right, grid.centerX, grid.pxPerHDiv);
+  const calibratedY = vDivs === grid.vDivs && cropFollowsGridAxis(y, y + height, grid.top, grid.bottom, grid.centerY, grid.pxPerVDiv);
+  return {
+    vertical: guides(hDivs, x, width, calibratedX ? grid.vLines : undefined),
+    horizontal: guides(vDivs, y, height, calibratedY ? grid.hLines : undefined),
+  };
+}
+
+export function CropBox({ tx, rect, imageWidth, imageHeight, hDivs, vDivs, detectedGrid, onChange, onApply, onCancel }: RectProps) {
   const drag = useRef<{ grip: Grip; start: Point; rect: Rect } | null>(null);
   const { ref, toImage } = useStageMapping(imageWidth, imageHeight);
   const hintId = useId();
@@ -154,8 +171,7 @@ export function CropBox({ tx, rect, imageWidth, imageHeight, hDivs, vDivs, onCha
   };
 
   const pct = (v: number, of: number): string => `${(v / Math.max(1, of)) * 100}%`;
-  const vLines = Array.from({ length: Math.max(0, hDivs - 1) }, (_, i) => (i + 1) / hDivs);
-  const hLines = Array.from({ length: Math.max(0, vDivs - 1) }, (_, i) => (i + 1) / vDivs);
+  const { vertical: vLines, horizontal: hLines } = cropGuides(hDivs, vDivs, rect, detectedGrid);
 
   return (
     <div
@@ -225,7 +241,7 @@ function shiftQuad(quad: Quad, dx: number, dy: number, w: number, h: number): Qu
   return quad.map((p) => ({ x: Math.round(p.x + sx), y: Math.round(p.y + sy) })) as unknown as Quad;
 }
 
-export function QuadBox({ tx, quad, valid, imageWidth, imageHeight, hDivs, vDivs, onChange, onApply, onCancel }: QuadProps) {
+export function QuadBox({ tx, quad, valid, imageWidth, imageHeight, hDivs, vDivs, detectedGrid, onChange, onApply, onCancel }: QuadProps) {
   const drag = useRef<{ grip: number | 'move'; start: Point; quad: Quad } | null>(null);
   const { ref, toImage } = useStageMapping(imageWidth, imageHeight);
   const w = imageWidth;
@@ -274,12 +290,13 @@ export function QuadBox({ tx, quad, valid, imageWidth, imageHeight, hDivs, vDivs
   const pts = quad.map((p) => `${p.x} ${p.y}`).join(' ');
   const lines: { key: string; a: Point; b: Point }[] = [];
   if (valid) {
-    const size = { width: hDivs + 1, height: vDivs + 1 };
-    for (let i = 1; i < hDivs; i++) {
-      lines.push({ key: `v${i}`, a: projectRectToQuad({ x: i, y: 0 }, quad, size), b: projectRectToQuad({ x: i, y: vDivs }, quad, size) });
+    const size = { width: 2, height: 2 };
+    const { vertical: vLines, horizontal: hLines } = cropGuides(hDivs, vDivs, rectangleFromQuad(quad), detectedGrid);
+    for (const x of vLines) {
+      lines.push({ key: `v${x}`, a: projectRectToQuad({ x, y: 0 }, quad, size), b: projectRectToQuad({ x, y: 1 }, quad, size) });
     }
-    for (let j = 1; j < vDivs; j++) {
-      lines.push({ key: `h${j}`, a: projectRectToQuad({ x: 0, y: j }, quad, size), b: projectRectToQuad({ x: hDivs, y: j }, quad, size) });
+    for (const y of hLines) {
+      lines.push({ key: `h${y}`, a: projectRectToQuad({ x: 0, y }, quad, size), b: projectRectToQuad({ x: 1, y }, quad, size) });
     }
   }
 

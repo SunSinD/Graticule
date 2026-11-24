@@ -9,7 +9,7 @@ import { parseQuantity } from '../../src/core/font/matcher.js';
 import { analyzeCapture, analyzePngBytes, compareWithScopeCsv, parseScopeCsv } from '../../src/core/pipeline.js';
 import { decodePng } from '../../src/core/png.js';
 import { detectProfile, getNativeProfile, validateProfiles } from '../../src/core/profiles.js';
-import { bitmap, paint, pixel, sample, yellow } from './fixtures.js';
+import { bitmap, magenta, paint, pixel, sample, yellow } from './fixtures.js';
 
 describe('native capture profiles', () => {
   test('checks profile version, required fields, geometry and bounds at startup', () => {
@@ -147,6 +147,79 @@ describe('native capture profiles', () => {
       fallbackReason: 'manual_crop', grid: { left: 50, right: 350, top: 55, bottom: 247, pxPerHDiv: 25, pxPerVDiv: 32 },
     });
     expect(analyzeCapture(bitmap(1, 1), 'tiny.png').detection.profileId).toBe('universal-fallback');
+  });
+
+  test('keeps the full Hantek plot and extracts the trace without the readouts or trigger marker', () => {
+    const image = bitmap(800, 480);
+    const grid = [163, 159, 155] as const;
+    for (const y of [31, 230, 430]) paint(image, { x: 15, y, width: 770, height: 1 }, grid);
+    for (const x of [15, 399, 784]) paint(image, { x, y: 31, width: 1, height: 400 }, grid);
+    for (let x = 49; x <= 749; x += 50) {
+      for (let y = 50; y <= 400; y += 50) pixel(image, x, y, grid);
+    }
+    for (let x = 15; x <= 784; x++) {
+      const y = Math.round(230 - 139 * Math.sin((x - 15) * 2 * Math.PI / 383));
+      paint(image, { x, y, width: 1, height: 2 }, yellow);
+    }
+    for (const x of [31, 45, 59, 73]) {
+      paint(image, { x, y: 411, width: 2, height: 12 }, yellow);
+      paint(image, { x, y: 411, width: 8, height: 2 }, yellow);
+    }
+    for (let row = 0; row < 10; row++) {
+      const inset = Math.max(0, row - 2);
+      paint(image, { x: 392 + inset, y: 32 + row, width: 15 - 2 * inset, height: 1 }, [21, 201, 220]);
+    }
+    const scales = { secPerDiv: 500e-9, channels: { C1: { voltsPerDiv: 0.5 } } };
+    const result = analyzeCapture(image, 'hantek.bmp', scales);
+    expect(result.detection.grid).toMatchObject({
+      left: 15, right: 784, top: 31, bottom: 430, hDivs: 14, vDivs: 8, pxPerHDiv: 50, pxPerVDiv: 50,
+    });
+    expect(result.traces).toMatchObject([{ channel: 'C1', validCount: 770 }]);
+    expect(result.measurements[0]?.vpp).toBeCloseTo(2.78, 2);
+    expect(result.measurements[0]?.frequencyHz).toBeCloseTo(1e8 / 383, -2);
+
+    const reapplied = analyzeCapture(image, 'hantek.bmp', {
+      ...scales, manualCrop: { x: 15, y: 31, width: 769, height: 399 }, hDivs: 14, vDivs: 8,
+    });
+    expect(reapplied.detection.grid).toEqual({ ...result.detection.grid, layoutVariant: 'manual' });
+    expect(reapplied.measurements).toEqual(result.measurements);
+
+    const nudged = analyzeCapture(image, 'hantek.bmp', {
+      ...scales, manualCrop: { x: 16, y: 32, width: 768, height: 398 }, hDivs: 14, vDivs: 8,
+    });
+    expect(nudged.detection.grid).toMatchObject({ left: 16, top: 32, pxPerHDiv: 50, pxPerVDiv: 50 });
+    expect(nudged.measurements[0]?.frequencyHz).toBeCloseTo(1e8 / 383, -2);
+    expect(renderWaveformSvg(nudged)).toMatch(/<g aria-label="axes">.*>0 V<\/text>/);
+    expect(renderWaveformSvg(nudged)).not.toContain('−10 mV</text>');
+
+    const alignedQuad = analyzeCapture(image, 'hantek.bmp', {
+      ...scales, manualQuad: [{ x: 16, y: 32 }, { x: 784, y: 32 }, { x: 784, y: 430 }, { x: 16, y: 430 }], hDivs: 14, vDivs: 8,
+    });
+    expect(alignedQuad.detection.grid).toEqual(nudged.detection.grid);
+    expect(alignedQuad.traces).toEqual(nudged.traces);
+
+    const cropped = analyzeCapture(image, 'hantek.bmp', {
+      ...scales, manualCrop: { x: 49, y: 31, width: 700, height: 399 }, hDivs: 14,
+    });
+    expect(cropped.detection.grid).toMatchObject({ left: 49, right: 749, layoutVariant: 'manual', pxPerHDiv: 50 });
+    expect(cropped.traces).toMatchObject([{ channel: 'C1', validCount: 701 }]);
+    expect(cropped.measurements[0]?.vpp).toBeCloseTo(2.78, 2);
+    expect(detectProfile(image, { manualCrop: { x: 15, y: 31, width: 734, height: 399 } }).grid)
+      .toMatchObject({ right: 749, pxPerHDiv: 50, hDivs: 14 });
+
+    let visibleMagenta = 0;
+    for (let x = 20; x < 110; x++) {
+      if (image.data[(418 * image.width + x) * 4] === yellow[0]) continue;
+      pixel(image, x, 418, magenta);
+      visibleMagenta++;
+    }
+    paint(image, { x: 670, y: 416, width: 16, height: 3 }, yellow);
+    const [c1, c2] = analyzeCapture(image, 'hantek.bmp', scales).traces;
+    expect(c1?.samples.slice(655, 671).map(point => point.yPx)).toEqual(Array(16).fill(417));
+    expect(c2).toMatchObject({ channel: 'C2', validCount: visibleMagenta });
+
+    paint(image, { x: 15, y: 230, width: 770, height: 1 }, yellow);
+    expect(detectProfile(image).fallbackLayout).toBe('hantek-800x480');
   });
 
   test('preserves the cropped RTB2004 horizontal calibration and compares all visible columns', () => {

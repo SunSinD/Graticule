@@ -140,6 +140,7 @@ export function ScaleControls({ tx, locale, result, overrides, disabled, labels,
   const sources = active.filter((r) => r.trace?.settings.enabled).map((r) => r.ch);
   const canAddMath = Boolean(math && !math.config && result && !disabled && sources.length >= 2);
   const mathConfig = math?.config ?? null;
+  const timeUncalibrated = !overrides.secPerDiv && result?.timebase.source === 'default';
   return (
     <section>
       <ScaleInput
@@ -152,7 +153,8 @@ export function ScaleControls({ tx, locale, result, overrides, disabled, labels,
         disabled={disabled || !result}
         decLabel={tx.decreaseTime}
         incLabel={tx.increaseTime}
-        hint={result && !overrides.secPerDiv && result.timebase.source === 'default' ? tx.scaleDefault : null}
+        hint={timeUncalibrated ? tx.scaleDefault : null}
+        uncalibrated={timeUncalibrated}
         onChange={(v) => onOverrides({ ...overrides, secPerDiv: v })}
       />
       <div className="section-head">
@@ -191,6 +193,7 @@ export function ScaleControls({ tx, locale, result, overrides, disabled, labels,
           {active.map(({ ch, trace, o, locked }) => {
             const vdiv = o?.voltsPerDiv ?? trace?.settings.voltsPerDiv ?? 1;
             const off = o?.offsetVolts ?? trace?.settings.offsetVolts ?? 0;
+            const voltageUncalibrated = !o?.voltsPerDiv && trace?.settings.scaleSource === 'default';
             return (
               <fieldset key={ch} className="channel" disabled={locked}>
                 <legend>
@@ -218,7 +221,8 @@ export function ScaleControls({ tx, locale, result, overrides, disabled, labels,
                   disabled={locked}
                   decLabel={tx.decreaseScale(ch)}
                   incLabel={tx.increaseScale(ch)}
-                  hint={trace && !o?.voltsPerDiv && trace.settings.scaleSource === 'default' ? tx.scaleDefault : null}
+                  hint={voltageUncalibrated ? tx.scaleDefault : null}
+                  uncalibrated={voltageUncalibrated}
                   onChange={(v) => patchChannel(ch, { voltsPerDiv: v })}
                 />
                 <ScaleInput
