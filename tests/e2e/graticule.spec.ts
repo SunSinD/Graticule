@@ -869,6 +869,44 @@ test('Apply and Cancel in the crop bar give focus back to the Crop button', asyn
   await expect(crop).toBeFocused();
 });
 
+test('reopening and widening a Hantek crop restores the detected guides', async ({ page }) => {
+  const base64 = await page.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 800;
+    canvas.height = 480;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillRect(0, 0, 800, 480);
+    ctx.fillStyle = 'rgb(163,159,155)';
+    for (const y of [31, 230, 430]) ctx.fillRect(15, y, 770, 1);
+    for (const x of [15, 399, 784]) ctx.fillRect(x, 31, 1, 400);
+    for (let x = 49; x <= 749; x += 50) {
+      for (let y = 50; y <= 400; y += 50) ctx.fillRect(x, y, 1, 1);
+    }
+    ctx.fillStyle = '#ffff00';
+    ctx.fillRect(16, 180, 768, 1);
+    return canvas.toDataURL('image/png').split(',')[1]!;
+  });
+  await addFiles(page, [{ name: 'hantek.png', mimeType: 'image/png', buffer: Buffer.from(base64, 'base64') }]);
+  await page.getByRole('button', { name: 'Extract', exact: true }).click();
+  await expect(page.getByTestId('measurement-summary')).toBeVisible();
+  await page.keyboard.press('1');
+  const crop = page.getByRole('button', { name: 'Crop', exact: true });
+  const box = page.getByTestId('crop-box');
+  if (!(await box.isVisible())) await crop.click();
+  const lines = box.locator('.crop-line.v');
+  const corner = page.getByRole('slider', { name: 'Top left corner' });
+  await expect(lines).toHaveCount(15);
+  for (let i = 0; i < 9; i++) await corner.press('Shift+ArrowRight');
+  await expect(lines).toHaveCount(13);
+  await page.getByRole('button', { name: 'Apply crop' }).click();
+  await expect(page.locator('#time-div')).toBeEnabled();
+  await page.getByRole('button', { name: 'Original', exact: true }).click();
+  await crop.click();
+  await expect(corner).toHaveAttribute('aria-valuetext', 'x 105, y 31');
+  for (let i = 0; i < 9; i++) await corner.press('Shift+ArrowLeft');
+  await expect(lines).toHaveCount(15);
+});
+
 test('inspecting a Bode point focuses Back, and going back focuses that point again', async ({ page }) => {
   await extractSweep(page);
   const point = page.locator('.bode-table td.file .linklike').nth(2);

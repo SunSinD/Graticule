@@ -435,10 +435,17 @@ export function findNativeCards(image: RgbaImage, profile: NativeProfile, invert
 
 const divisions = (n: number | undefined, fallback: number) => int(n) && n >= 1 && n <= 100 ? n : fallback;
 
+const HANTEK_GRID: GridGeometry = {
+  ...makeGrid(15, 31, 784, 430, 14, 8, 'standard', false),
+  // The outer border cuts through the last division on both sides.
+  centerX: 399, centerY: 230, pxPerHDiv: 50, pxPerVDiv: 50,
+  vLines: Array.from({ length: 15 }, (_, i) => 49 + i * 50),
+  hLines: Array.from({ length: 9 }, (_, i) => 30 + i * 50),
+};
+
 function hantekGrid(image: RgbaImage): GridGeometry | null {
   if (image.width !== 800 || image.height !== 480) return null;
-  const left = 15, right = 784, top = 31, bottom = 430;
-  const centerX = 399, centerY = 230, pitch = 50;
+  const { left, right, top, bottom, centerX, centerY, vLines } = HANTEK_GRID;
   const ink: PixelPredicate = (r, g, b) => grayscale(r, g, b, 140, 185);
   if (![top, bottom].every(y =>
     proportion(image, { x: left, y, width: right - left + 1, height: 1 }, ink, 5) > 0.9)
@@ -451,17 +458,11 @@ function hantekGrid(image: RgbaImage): GridGeometry | null {
       || proportion(image, { x: left, y: top, width: right - left + 1, height: bottom - top + 1 },
         (r, g, b) => luminance(r, g, b) < 38, 7) <= 0.65) return null;
 
-  const vLines = Array.from({ length: 15 }, (_, i) => centerX + (i - 7) * pitch);
-  const hLines = Array.from({ length: 9 }, (_, i) => centerY + (i - 4) * pitch);
   // The vertical grid lines are dotted at 10 px intervals. Probe away from the horizontal lines.
   const dots = vLines.filter(x => x !== centerX)
     .flatMap(x => [50, 100, 150, 200, 250, 300, 350, 400].map(y => pixelMatches(image, x, y, ink)));
   if (dots.filter(Boolean).length < dots.length * 0.85) return null;
-  // The outer border cuts through the last division on both sides.
-  return {
-    ...makeGrid(left, top, right, bottom, vLines.length - 1, hLines.length - 1, 'standard', false),
-    centerX, centerY, vLines, hLines, pxPerHDiv: pitch, pxPerVDiv: pitch,
-  };
+  return HANTEK_GRID;
 }
 
 function fallbackGrid(image: RgbaImage, overrides: ExtractionOverrides, detected: GridGeometry | null): GridGeometry {
@@ -562,7 +563,7 @@ export function detectProfile(image: RgbaImage, overrides: ExtractionOverrides =
   const hantek = hantekGrid(image);
   return {
     profileId: 'universal-fallback', profileName: 'Universal Fallback', matchedAnchors: [], confidence: 0,
-    ...(hantek && { fallbackLayout: 'hantek-800x480' as const }),
+    ...(hantek && { fallbackLayout: 'hantek-800x480' as const, referenceGrid: hantek }),
     fallbackReason, grid: fallbackGrid(image, overrides, hantek), digitalOnly: false, warnings: [fallbackReason],
   };
 }

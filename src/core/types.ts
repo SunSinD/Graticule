@@ -82,6 +82,7 @@ export interface ProfileDetection {
   readonly fallbackReason: string | null;
   readonly grid: GridGeometry;
   readonly fallbackLayout?: 'hantek-800x480';
+  readonly referenceGrid?: GridGeometry;
   readonly digitalOnly: boolean;
   readonly warnings: readonly string[];
 }

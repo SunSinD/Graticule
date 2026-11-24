@@ -227,7 +227,7 @@ export function CaptureView(props: Props) {
   const z = zoom / 100;
   const quadValid = quad !== null && size !== null && validateQuad(quad, size.width, size.height);
   const canApply = cropMode === 'quad' ? quadValid : rect !== null;
-  const detectedGrid = result?.detection.fallbackLayout ? result.detection.grid : undefined;
+  const detectedGrid = result?.detection.referenceGrid;
   const cursorsVisible = showClean && props.cursors !== null && frame !== null && result !== null;
 
   // The Apply and Cancel buttons and the crop handles go away, so focus goes back to the Crop button.
