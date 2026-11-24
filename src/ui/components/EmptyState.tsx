@@ -31,6 +31,9 @@ export function EmptyState({ tx, onAdd, onCamera, onSample, busy = false }: Prop
         </button>
       )}
       <p className="muted small">{tx.emptyPrivacy}</p>
+      <a className="empty-source" href="https://github.com/SunSinD/Graticule" target="_blank" rel="noopener noreferrer">
+        {tx.sourceCode}
+      </a>
     </div>
   );
 }

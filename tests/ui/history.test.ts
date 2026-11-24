@@ -280,6 +280,51 @@ describe('history store writes across tabs', () => {
     expect((await second.loadAll()).find((i) => i.id === 'r2')?.title).toBe('Newer title');
   });
 
+  test('a rename in a second tab never brings back a capture the first tab cleared', async () => {
+    const db = new FakeDb(1000);
+    seed(db, [item('a', 10, 1), item('b', 10, 2)]);
+    const first = idbStore(db as unknown as IDBDatabase);
+    const second = idbStore(db as unknown as IDBDatabase);
+    expect((await first.loadAll()).map((i) => i.id).sort()).toEqual(['a', 'b']);
+    expect((await second.loadAll()).map((i) => i.id).sort()).toEqual(['a', 'b']);
+
+    await first.clear();
+    const renamed = await second.put({ ...item('a', 10, 1), title: 'Renamed' }, new Set(), { existing: true });
+    expect(renamed).toEqual({ ok: false, evicted: [], gone: true });
+    // A save of a capture added before the clear, even one never saved yet, stays out too.
+    expect(await second.put({ ...item('b', 10, 2), title: 'Renamed' })).toEqual({ ok: false, evicted: [], gone: true });
+    expect(await first.loadAll()).toEqual([]);
+    expect(await second.loadAll()).toEqual([]);
+    expect([...db.data.keys()].filter((id) => id === 'a' || id === 'b')).toEqual([]);
+  });
+
+  test('after a clear in another tab, new captures still save and the clearing tab can save again', async () => {
+    const db = new FakeDb(1000);
+    const first = idbStore(db as unknown as IDBDatabase);
+    const second = idbStore(db as unknown as IDBDatabase);
+    await second.loadAll();
+    await first.clear();
+    const fresh = { ...item('new', 10, 3), addedAt: Date.now() + 1000 };
+    expect(await second.put(fresh)).toEqual({ ok: true, evicted: [] });
+    // Turning history off then on again in the same tab saves the session again.
+    expect(await first.put(item('mine', 10, 1))).toEqual({ ok: true, evicted: [] });
+    expect((await first.loadAll()).map((i) => i.id).sort()).toEqual(['mine', 'new']);
+  });
+
+  test('a rename in a second tab never brings back a capture the first tab removed', async () => {
+    const db = new FakeDb(1000);
+    seed(db, [item('a', 10, 1)]);
+    const first = idbStore(db as unknown as IDBDatabase);
+    const second = idbStore(db as unknown as IDBDatabase);
+    await first.remove('a');
+    expect(await second.put({ ...item('a', 10, 1), title: 'Renamed' }, new Set(), { existing: true })).toEqual({
+      ok: false,
+      evicted: [],
+      gone: true,
+    });
+    expect(db.data.has('a')).toBe(false);
+  });
+
   test('saves still work when the browser refuses Web Locks', async () => {
     vi.stubGlobal('navigator', {
       locks: { request: () => Promise.reject(new DOMException('Access to the Locks API is denied', 'SecurityError')) },
@@ -312,7 +357,7 @@ describe('cursor saves', () => {
     expect(await settles(store.updateCursors('r1', C1, true))).toBe(false);
     expect(await settles(store.clear())).toBeUndefined();
     expect(await settles(store.put(item('a', 5, 2)))).toEqual({ ok: true, evicted: [] });
-    expect([...db.data.keys()]).toEqual(['a']);
+    expect([...db.data.keys()].filter((id) => !id.startsWith('meta:'))).toEqual(['a']);
   });
 
   test('an urgent cursor save after another tab renamed the capture keeps the newer title', async () => {

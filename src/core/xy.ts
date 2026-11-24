@@ -2,7 +2,7 @@ import { columnSamples, columnInterval, isClipped, samplesFor, sampleStatus } fr
 import { fitShared, median, quantile, valid, wrapPhase } from './dsp.js';
 import { analysisPlot, axisValue, niceCeiling125 } from './export/analysis-plot.js';
 import type { AnalysisPlotOptions } from './export/analysis-plot.js';
-import { csvComment } from './export/csv.js';
+import { csvComment, csvTimestamps } from './export/csv.js';
 import { csvNumber, GRATICULE_VERSION } from './export/format.js';
 import type { ChannelTrace, ExtractionResult, GapStatus, MathTraceResult, TraceSample, XyAxisId } from './types.js';
 
@@ -222,11 +222,14 @@ export function renderXySvg(xy: XyResult, opts: XySvgOptions = {}): string {
 }
 
 export function renderXyCsv(xy: XyResult, title?: string): string {
+  const first = xy.points[0], last = xy.points.at(-1);
+  const sampleInterval = first && last && last.col > first.col ? (last.timeSec - first.timeSec) / (last.col - first.col) : 0;
+  const timestamps = csvTimestamps(xy.points.map(p => Number.isFinite(p.timeSec) ? p.timeSec : null), sampleInterval);
   return [
     `# Graticule v${GRATICULE_VERSION}`,
     ...(title?.trim() ? [`# title: ${csvComment(title)}`] : []),
     `# x: ${xy.xAxis} (${xy.xUnit}), y: ${xy.yAxis} (${xy.yUnit})`,
     `column,time_s,x_${xy.xUnit === 'V²' ? 'v2' : 'v'},y_${xy.yUnit === 'V²' ? 'v2' : 'v'},x_status,y_status`,
-    ...xy.points.map(p => [p.col, csvNumber(p.timeSec), csvNumber(p.x), csvNumber(p.y), p.xStatus, p.yStatus].join(',')),
+    ...xy.points.map((p, i) => [p.col, timestamps[i], csvNumber(p.x), csvNumber(p.y), p.xStatus, p.yStatus].join(',')),
   ].join('\n') + '\n';
 }

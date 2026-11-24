@@ -312,6 +312,7 @@ const MIME: Record<string, string> = {
 /**
  * Serves dist with a worker script the test can swap, since browser routes never see the
  * worker script fetch. Each server is its own origin, so its caches and storage start empty.
+ * The same build is also served under /b/, like a second deployment on the same origin.
  */
 async function releaseServer() {
   const dist = path.resolve(root, 'dist');
@@ -319,7 +320,8 @@ async function releaseServer() {
   const virtual = new Map<string, { body: string; type: string; status: number }>();
   const holds = new Map<string, { gate: Promise<void>; seen: () => void; open: () => void }>();
   const server = http.createServer(async (request, response) => {
-    const pathname = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
+    const requested = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
+    const pathname = requested.startsWith('/b/') ? requested.slice(2) : requested;
     const held = holds.get(pathname);
     if (held) {
       held.seen();
@@ -494,6 +496,35 @@ test('older builds stay while another tab is open and go once the only tab reloa
     await second.reload();
     await expect.poll(() => cacheNames(second), { timeout: 10_000 }).not.toContain('graticule-vA-test');
     expect(await cacheNames(second)).toContain(current);
+  });
+});
+
+test('a deployment under another path on the same origin never loses its caches when this one activates', async ({ browser }) => {
+  await withRelease(browser, async (release, context, page) => {
+    const current = builtWorker().cacheName;
+    const other = `${current}@/b/`;
+    await seedBuild(page, 'graticule-vA-test', 'build-a-chunk.js', BUILD_A);
+
+    const second = await context.newPage();
+    await second.goto(`${release.url}b/`);
+    await expect(second.locator('[data-testid="file-input"]')).toBeAttached();
+    await second.evaluate(async () => {
+      await navigator.serviceWorker.ready;
+    });
+    await second.waitForFunction(() => navigator.serviceWorker.controller !== null);
+    // A cache from before scoped names that holds the /b/ page belongs to /b/ too.
+    await seedBuild(second, 'graticule-vL-legacy', 'legacy-b-chunk.js', 'export const legacy = true;');
+    expect(await cacheNames(second)).toEqual(expect.arrayContaining([current, 'graticule-vA-test', other, 'graticule-vL-legacy']));
+
+    expect(await updateWorker(release, page, workerFor('graticule-vC-test'))).toBe('activated');
+    expect(await cacheNames(page)).toEqual(expect.arrayContaining(['graticule-vA-test', current, other, 'graticule-vL-legacy', 'graticule-vC-test']));
+
+    await second.close();
+    await page.reload();
+    await expect.poll(() => cacheNames(page), { timeout: 10_000 }).not.toContain('graticule-vA-test');
+    const names = await cacheNames(page);
+    expect(names).not.toContain(current);
+    expect(names).toEqual(expect.arrayContaining(['graticule-vC-test', other, 'graticule-vL-legacy']));
   });
 });
 

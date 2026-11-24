@@ -332,6 +332,14 @@ describe('UART capture boundaries and auto baud', () => {
     expect(uart.frames.map(frame => frame.hex)).toEqual(['80', '80', '80', '80', 'FF']);
   });
 
+  test('decodes two 80 bytes and reports the clean half-rate alias', () => {
+    const uart = decodeUart(bytes([0x80, 0x80]), { channel: 'C1' });
+    expect(uart).toMatchObject({ baud: 9600, warnings: ['baud_ambiguous'], frames: [
+      { hex: '80', framingError: false, uncertain: false },
+      { hex: '80', framingError: false, uncertain: false },
+    ] });
+  });
+
   test('rejects a square wave with a half cycle of 5.25 bit periods', () => {
     const halfCycle = 5.25 * px;
     const result = capture(col => 1 - (Math.floor(col / halfCycle) % 2), 20 * halfCycle);
@@ -356,6 +364,15 @@ describe('UART capture boundaries and auto baud', () => {
       { hex: '5A', framingError: false, uncertain: false },
       { hex: '55', framingError: false, uncertain: false },
     ]);
+  });
+
+  test.each([9600, 'auto'] as const)('finds the real start after a cropped 41 start bit at baud %s', rate => {
+    const uart = decodeUart(bytes([0x41, 0x42, 0x43], 3 * px + 4), { channel: 'C1', baud: rate });
+    expect(uart).toMatchObject({ baud: 9600, frames: [
+      { byte: null, framingError: true, uncertain: true },
+      { hex: '42', framingError: false, uncertain: false },
+      { hex: '43', framingError: false, uncertain: false },
+    ] });
   });
 
   test.each([9600, 'auto'] as const)('flags a right-cropped stop bit at baud %s even when its center is visible', rate => {
@@ -390,10 +407,22 @@ describe('scope CSV regression cases', () => {
     expect(parseScopeCsv(`Time (${timeUnit}),CH1 (mV)\n1,2000`).rows).toEqual([{ timeSec: scale, values: [2] }]);
   });
 
+  test.each(['Time\u00b5s', 'Timeus', 'Time(\u00b5s)', 'Time\u03bcs', 'X-axisns'])('scales the unit attached to %s', header => {
+    const seconds = header === 'X-axisns' ? 1e-9 : 1e-6;
+    expect(parseScopeCsv(`${header},CH1\ns,V\n1,2`).rows).toEqual([{ timeSec: seconds, values: [2] }]);
+  });
+
   test('reads Tektronix samples beside metadata', () => {
     expect(parseScopeCsv('Record Length,2,,0,1\nSample Interval,0.001,,0.001,2').rows).toEqual([
       { timeSec: 0, values: [1] }, { timeSec: 0.001, values: [2] },
     ]);
+  });
+
+  test('reads Tektronix samples beside metadata with unit columns', () => {
+    expect(parseScopeCsv('Record Length,3,Points,-0.001,1,\r\nSample Interval,0.001,s,0,,\r\n,,s,0.001,3,')).toEqual({
+      format: 'generic', columns: ['Volt'],
+      rows: [{ timeSec: -0.001, values: [1] }, { timeSec: 0, values: [null] }, { timeSec: 0.001, values: [3] }],
+    });
   });
 
   test('does not shift a short flat reference to discard a mismatched boundary sample', () => {

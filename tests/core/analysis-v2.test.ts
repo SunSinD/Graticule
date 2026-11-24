@@ -134,6 +134,22 @@ describe('math trace', () => {
 });
 
 describe('XY analysis', () => {
+  test('preserves all timestamps at 10 ns per division with a one-second offset', () => {
+    const base = capture(1001, 1e-10, { wave: sine }, { wave: sine });
+    const result = {
+      ...base, timebase: { ...base.timebase, triggerOffsetSec: 1 },
+      traces: base.traces.map(trace => ({
+        ...trace, samples: trace.samples.map(sample => ({ ...sample, timeSec: sample.timeSec + 1 })),
+      })),
+    };
+    const xy = computeXyPlot(result, 'C1', 'C2');
+    const timestamps = renderXyCsv(xy).trimEnd().split('\n').slice(3).map(row => Number(row.split(',')[1]));
+    expect(new Set(timestamps).size).toBe(1001);
+    const waveformTimes = renderWaveformCsv(result).trimEnd().split('\n').filter(row => !row.startsWith('#')).slice(1)
+      .map(row => Number(row.split(',')[0]));
+    expect(timestamps).toEqual(waveformTimes);
+  });
+
   test('pairs faults independently and never connects points across invalid columns', () => {
     const result = capture(8, 0.1, { wave: i => i, faults: { 2: 'clipped_high', 4: 'masked_overlay', 6: 'unresolved' } },
       { wave: i => 9 + i, faults: { 4: 'masked_cursor', 6: 'clipped_low' } });
@@ -508,6 +524,9 @@ describe('spectrum and harmonic THD', () => {
     expect(spectrumCsv).toContain("# title: Scan,' =1+1\n");
     expect(renderXyCsv(xy, 'Scan, =1+1')).toContain("# title: Scan,' =1+1\n");
     expect(renderXyCsv(xy, 'Scan, trial 2')).toContain('# title: Scan, trial 2\n');
+    for (const csv of [renderSpectrumCsv(spec, 'Run,"Probe\r\nA"'), renderXyCsv(xy, 'Run,"Probe\r\nA"')]) {
+      expect(csv.split('\n')[1]).toBe('# title: Run,\u201dProbe A\u201d');
+    }
   });
 
   test.each([

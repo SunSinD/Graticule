@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { crc32, deflateSync } from 'node:zlib';
 import { afterAll, describe, expect, test } from 'vitest';
-import { version } from '../../package.json';
 import { renderWaveformCsv } from '../../src/core/export/csv.js';
 import { GRATICULE_VERSION } from '../../src/core/export/format.js';
 import { analyzePngBytes } from '../../src/core/pipeline.js';
@@ -61,7 +60,7 @@ describe('command line', () => {
   test('writes the --title argument immediately after the filename in waveform CSV', () => {
     const result = cli(input, '--csv', '--title', 'Bench capture');
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.split('\n').slice(0, 3)).toEqual([`# Graticule v${version}`, '# file: capture.png', '# title: Bench capture']);
+    expect(result.stdout.split('\n').slice(0, 3)).toEqual([`# Graticule v${GRATICULE_VERSION}`, '# file: capture.png', '# title: Bench capture']);
   });
 
   test('matches the browser CSV renderer with nanosecond samples at a one-second offset', () => {
@@ -214,7 +213,7 @@ describe('command line', () => {
     const result = cli(flag);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(`${GRATICULE_VERSION}\n`);
-    expect(GRATICULE_VERSION).toBe('2.0.6');
+    expect(GRATICULE_VERSION).toBe('2.0.7');
     expect(cli('--help').stdout).toContain('--version | -v');
   });
 

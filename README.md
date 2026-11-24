@@ -160,6 +160,10 @@ Native and partial scopes are found by themselves. You can also pick one by hand
 
 In universal mode you drag the crop box onto the edge of the grid, then type the time scale and the volts per division. Click Cancel or the Clean tab if the box is already right. Crop has two shapes. Rectangle is best for screenshots and 4 corners is best for photos.
 
+## Help add your scope
+
+Is your scope missing, or read only in universal mode? [Open an issue](https://github.com/SunSinD/Graticule/issues) with a few screenshots saved straight from the scope, and the CSV it saves too if it can. Tell us the scope model and the time and volt scales you used. Real captures are the best way to add a new scope.
+
 ## Honest data
 
 Graticule never guesses what it cannot see. When a trace is clipped, hidden by a cursor or a menu, or crosses another trace, that part is marked instead of filled in.
@@ -216,7 +220,7 @@ npm run cli -- compare capture.png scope.csv --channel C1 --csv-column "CH1 Volt
 To use it without the source code, download the `.tgz` file from a release and install it once.
 
 ```sh
-npm install -g ./graticule-2.0.6.tgz
+npm install -g ./graticule-2.0.7.tgz
 graticule --version
 ```
 
@@ -246,3 +250,7 @@ npm run build:portable
 ```
 
 Built with Vite and React. The engine in `src/core` has no browser or Node dependencies and runs in a Web Worker.
+
+## License
+
+MIT. See [LICENSE](LICENSE). Made by SunSinD.

@@ -264,6 +264,8 @@ export function App() {
   const inFlightSave = useRef<Map<string, HistoryItem>>(new Map());
   // Snapshots that did not fit on disk. They are not retried until their saved fields change.
   const failedSave = useRef<Map<string, HistoryItem>>(new Map());
+  // Captures deleted or cleared on disk by another tab. They stay in this session but are never saved again.
+  const goneOnDisk = useRef<Set<string>>(new Set());
   const batchRef = useRef(false);
   const batchTokenRef = useRef(0);
   const mathByIdRef = useRef<Readonly<Record<string, MathConfig>>>({});
@@ -411,7 +413,8 @@ export function App() {
       stopCursorTimer(id);
       pendingCursors.current.delete(id);
     };
-    const save = (item: HistoryItem): void => {
+    // `existing` means this tab already saved the capture, so the write is skipped if it is gone from disk.
+    const save = (item: HistoryItem, existing: boolean): void => {
       const id = item.id;
       // The same snapshot is already being written, so later renders do not queue it again.
       if (inFlightSave.current.get(id) === item) return;
@@ -423,9 +426,17 @@ export function App() {
       saveSeq.current.set(id, seq);
       // Captures the user is looking at are never deleted to make room for another one.
       const keep = new Set([...selectedRef.current, ...(activeRef.current ? [activeRef.current] : [])]);
-      void store.put(item, keep).then(({ ok, evicted }) => {
+      void store.put(item, keep, { existing }).then(({ ok, evicted, gone }) => {
         settle();
         if (storeRef.current !== store) return;
+        if (gone) {
+          // Deleted or cleared in another tab, so this copy must never bring it back.
+          goneOnDisk.current.add(id);
+          persisted.current.delete(id);
+          failedSave.current.delete(id);
+          cancelCursorSave(id);
+          return;
+        }
         for (const gone of evicted) {
           // Deleted from disk to make room. It stays in this session but is not written back,
           // otherwise it would push out another capture in turn.
@@ -452,7 +463,7 @@ export function App() {
         // The item changed while this write ran, and nothing newer was saved for it.
         if (latest !== item && latest.state !== 'extracting' && storedChange(item, latest) !== 'none') {
           stopCursorTimer(id);
-          save(latest);
+          save(latest, true);
         }
       }, settle);
     };
@@ -481,6 +492,10 @@ export function App() {
       for (const id of [...pendingCursors.current.keys()]) flushCursor(id, true);
     };
     for (const item of items) {
+      if (goneOnDisk.current.has(item.id)) {
+        cancelCursorSave(item.id);
+        continue;
+      }
       const was = prev.get(item.id);
       const change = was ? storedChange(was, item) : 'other';
       const failed = failedSave.current.get(item.id);
@@ -515,7 +530,7 @@ export function App() {
         // cursor move stays pending for pagehide until a save with it commits.
         stopCursorTimer(id);
         if (was && (pend || item.cursors !== was.cursors)) track();
-        save(item);
+        save(item, Boolean(was));
       } else if (change === 'cursors' && was) {
         next.set(id, was);
         if (track()) schedule();
@@ -534,6 +549,7 @@ export function App() {
     }
     const live = new Set(items.map((i) => i.id));
     for (const id of [...failedSave.current.keys()]) if (!live.has(id)) failedSave.current.delete(id);
+    for (const id of [...goneOnDisk.current]) if (!live.has(id)) goneOnDisk.current.delete(id);
     persisted.current = next;
   }, [items, keepHistory, historyReady]);
 
@@ -764,6 +780,7 @@ export function App() {
     persisted.current = new Map();
     inFlightSave.current.clear();
     failedSave.current.clear();
+    goneOnDisk.current.clear();
     for (const timer of cursorSaves.current.values()) window.clearTimeout(timer);
     cursorSaves.current.clear();
     pendingCursors.current.clear();
@@ -787,6 +804,7 @@ export function App() {
     // A write that started before this switch may land before a clear, so the item is written again.
     inFlightSave.current.clear();
     failedSave.current.clear();
+    goneOnDisk.current.clear();
     for (const timer of cursorSaves.current.values()) window.clearTimeout(timer);
     cursorSaves.current.clear();
     pendingCursors.current.clear();

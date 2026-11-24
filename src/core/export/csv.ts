@@ -7,12 +7,22 @@ const TIME_ROUNDING_FRACTION = 1e-4;
 
 export function csvComment(text: string): string {
   return spreadsheetText(text.replace(/[\r\n]+/g, ' ').trim())
-    .replace(/([,;])(?=[^\S\t]*(?:"+[^\S\t]*)?[=+\-@\t])/g, "$1'");
+    .replace(/([,;])(?=[^\S\t]*(?:"+[^\S\t]*)?[=+\-@\t])/g, "$1'")
+    .replace(/"/g, '\u201d');
 }
 
 export function csvField(text: string): string {
   const safe = spreadsheetText(text);
   return /^#|[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+}
+
+export function csvTimestamps(times: readonly (number | null)[], sampleInterval: number): string[] {
+  const rounded = times.map(time => csvNumber(time, 15));
+  const distinct = new Set(rounded);
+  const tolerance = sampleInterval * TIME_ROUNDING_FRACTION;
+  const keepPrecision = distinct.size !== new Set(times).size || distinct.has('Infinity') || distinct.has('-Infinity')
+    || times.some((time, i) => time !== null && Math.abs(Number(rounded[i]) - time) > tolerance);
+  return keepPrecision ? times.map(time => String(time ?? '')) : rounded;
 }
 
 function channelComment(trace: ChannelTrace): string {
@@ -81,21 +91,16 @@ export function renderWaveformCsv(result: ExtractionResult, channelLabels?: Part
   for (const samples of series) for (const s of samples) cols.add(s.col);
   const sortedCols = [...cols].sort((a, b) => a - b);
 
-  const times = sortedCols.map(col => {
+  const times = csvTimestamps(sortedCols.map(col => {
     for (const m of byCol) {
       const s = m.get(col);
       if (s && Number.isFinite(s.timeSec)) return s.timeSec;
     }
     return null;
-  });
-  const roundedTimes = times.map(time => csvNumber(time, 15));
-  const distinctTimes = new Set(roundedTimes);
-  const tolerance = columnInterval(result) * TIME_ROUNDING_FRACTION;
-  const keepPrecision = distinctTimes.size !== new Set(times).size || distinctTimes.has('Infinity') || distinctTimes.has('-Infinity')
-    || times.some((time, i) => time !== null && Math.abs(Number(roundedTimes[i]) - time) > tolerance);
+  }), columnInterval(result));
 
   for (const [i, col] of sortedCols.entries()) {
-    const row = [keepPrecision ? String(times[i] ?? '') : roundedTimes[i]!];
+    const row = [times[i]!];
     for (const m of byCol) {
       const s = m.get(col);
       if (!s) {

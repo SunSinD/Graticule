@@ -190,7 +190,8 @@ function inspect(samples: readonly TraceSample[], edges: Edge[], px: number, thr
     }
   }
   // A start shared by two verified frame boundaries explains another edge.
-  const fraction = (included + frameStarts) / Math.max(1, edges.length - 1);
+  const edgeCount = Math.max(1, edges.length - 1);
+  const fraction = (included + frameStarts) / edgeCount;
   const error = alignment / Math.max(1, included);
   // Observed stop samples still support a rate when the capture ends inside a stop bit.
   const frameWeight = good + (croppedStop ? 0.75 : 0);
@@ -198,7 +199,10 @@ function inspect(samples: readonly TraceSample[], edges: Edge[], px: number, thr
   const frameCoverage = frameWeight * px / MIN_PX_PER_BIT;
   const score = frameWeight > 0 ? 4 * frameWeight / frames.length + 2.5 * fraction
     - 7 * error - 3 * short / Math.max(1, included) + 2 * Math.log2(1 + frameCoverage) - 0.35 * bad : -Infinity;
-  return { frames, score, good, edgeCoverage: fraction };
+  const trailingStart = edges.some(edge => !edge.bit && edge.col >= nextCol);
+  // A verified adjacent frame start supports the bit period even without a one-bit pulse.
+  const startSupport = frameStarts > 0 ? 1 / edgeCount : 0;
+  return { frames, score, good, edgeCoverage: fraction, startSupport, trailingStart };
 }
 
 function pulseTiming(edges: readonly Edge[], px: number, frameBits: number) {
@@ -275,7 +279,11 @@ export function decodeUart(result: ExtractionResult, options: UartOptions): Uart
       for (let i = first + 1; i < filtered.length && filtered[i]!.col < (frameBits - 0.25) * px; i++) {
         if (filtered[i]!.bit || filtered[i]!.gap) continue;
         const candidate = inspect(samples, [...filtered], px, threshold, dt, settings, i);
-        if (candidate.good > best.good) {
+        // With the same number of complete frames, prefer fewer errors and a phase
+        // that explains the last falling edge as part of a frame.
+        const betterFit = candidate.frames.length < best.frames.length
+          || (candidate.frames.length === best.frames.length && best.trailingStart && !candidate.trailingStart);
+        if (candidate.good > best.good || (candidate.good > 0 && candidate.good === best.good && betterFit)) {
           best = candidate;
           partial = true;
         }
@@ -289,10 +297,10 @@ export function decodeUart(result: ExtractionResult, options: UartOptions): Uart
       });
     }
     const score = manual !== null ? best.score
-      : alignment >= 0.75 ? best.score + 2 * singleFraction - 4 * (1 - alignment) : -Infinity;
+      : alignment >= 0.75 ? best.score + 2 * (singleFraction + best.startSupport) - 4 * (1 - alignment) : -Infinity;
     const fullyExplained = alignment === 1 && best.edgeCoverage >= 1 && best.good > 0
       && best.frames.length === best.good && best.frames.every(frame => !frame.uncertain);
-    return { rate, px, frames: best.frames, good: best.good, score, singleFraction, fullyExplained };
+    return { rate, px, frames: best.frames, good: best.good, score, fullyExplained };
   };
   const trials = manual === null
     ? STANDARD_UART_BAUDS.filter(rate => 1 / (rate * dt) >= 2).map(trial)
@@ -302,7 +310,7 @@ export function decodeUart(result: ExtractionResult, options: UartOptions): Uart
   if (!best || (manual === null && !Number.isFinite(best.score))) return out('baud_unresolved', null, null);
   if (best.px < MIN_PX_PER_BIT - 1e-9) return out('insufficient_resolution', best.rate, best.px);
   if (best.fullyExplained && alternatives.some(other => other.px >= MIN_PX_PER_BIT - 1e-9 && other.fullyExplained
-      && other.singleFraction === best.singleFraction && other.good !== best.good
+      && other.good !== best.good
       && Math.abs(other.frames[0]!.startSec - best.frames[0]!.startSec) <= dt
       && Math.abs(other.frames.at(-1)!.endSec - best.frames.at(-1)!.endSec) <= dt)) {
     warnings.push('baud_ambiguous');

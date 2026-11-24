@@ -80,7 +80,7 @@ function splitRow(line: string, separator: string): string[] {
 const numeric = (value: string | undefined): number | null =>
   value && /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(value) && Number.isFinite(Number(value)) ? Number(value) : null;
 const clean = (label: string) => label.trim().toLowerCase().replace(/\s+/g, ' ');
-const timeHeader = /^(?:(?:x(?:-axis)?|time)(?:[\s_]*[(\[]?\s*(?:[mun\u00b5\u03bc]?s|seconds?)\s*[)\]]?)?|seconds?)$/i;
+const timeHeader = /^(?:(?:x(?:-axis)?|time)(?:[\s_]*[(\[]?\s*([mun\u00b5\u03bc]?s|seconds?)\s*[)\]]?)?|seconds?)$/i;
 const channelHeader = /^(?:C(?:H(?:ANNEL)?)?[\s_]*([1-4])(?=\b|_)|([1-4])(?=$|\s*[([]))/i;
 const timeUnit = /^(?:([mun\u00b5\u03bc]?)s|seconds?)$/i;
 const voltageUnit = /^(?:([muk\u00b5\u03bc]?)v|volts?)$/i;
@@ -104,7 +104,7 @@ function unitScale(pattern: RegExp, header: string, units = ''): number {
 }
 
 function tektronixData(row: readonly string[]): boolean {
-  return row.length === 5 && !row[2] && numeric(row[3]) !== null;
+  return row.length >= 5 && numeric(row[3]) !== null && row.slice(5).every(cell => !cell);
 }
 
 interface CsvRow {
@@ -159,7 +159,7 @@ export function parseScopeCsv(text: string): ScopeCsvData {
   const firstUnit = clean(units?.[0] ?? '');
   const unitsRow = units && (unit(firstUnit, timeUnit) || firstUnit === 'sequence'
     || (/^(?:units?)?$/.test(firstUnit) && columnIndices.some(col => unit(units[col] ?? '', voltageUnit)))) ? units : undefined;
-  const timeScale = unitScale(timeUnit, header[0]!, unitsRow?.[0]);
+  const timeScale = unitScale(timeUnit, timeHeader.exec(header[0]!)?.[1] ?? '', unitsRow?.[0]);
   const rawColumns = columnIndices.map(col => header[col]!);
   const voltageScales = rawColumns.map((label, i) => unitScale(voltageUnit, label, unitsRow?.[columnIndices[i]!]));
   const columns: string[] = [];

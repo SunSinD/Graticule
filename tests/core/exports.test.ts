@@ -31,7 +31,7 @@ function spacedTimeTicks(svg: string): string[] {
 
 describe('waveform exports', () => {
   test('formats engineering scales with optional units per division and rejects overflow', () => {
-    expect(GRATICULE_VERSION).toBe('2.0.6');
+    expect(GRATICULE_VERSION).toBe('2.0.7');
     expect(parseEngineering('5 mV/div')).toBe(0.005);
     expect(parseEngineering('5 V²')).toBe(5);
     expect(parseEngineering('200 mV²')).toBe(0.2);
@@ -92,15 +92,25 @@ describe('waveform exports', () => {
     const csv = renderWaveformCsv({ ...result, fileName: 'capture, +probe.png' }, { C1: 'Input,-1' },
       'Bench, =1+1,\tprobe,\rtrace,"=SUM(1)"', math);
     expect(csv).toContain("# file: capture,' +probe.png\n");
-    expect(csv).toContain("# title: Bench,' =1+1,'\tprobe, trace,'\"=SUM(1)\"\n");
+    expect(csv).toContain("# title: Bench,' =1+1,'\tprobe, trace,'\u201d=SUM(1)\u201d\n");
     expect(csv).toContain("# C1 label: Input,'-1\n");
     expect(csv).toContain("# M: Math,' @probe C1 add C2");
     expect(renderWaveformCsv({ ...result, fileName: 'capture, probe.png' })).toContain('# file: capture, probe.png\n');
   });
 
+  test('keeps quote and newline characters in waveform metadata from starting CSV fields', () => {
+    const name = 'Run,"Probe\r\nA"';
+    const csv = renderWaveformCsv({ ...result, fileName: name }, { C1: name }, name);
+    const comments = csv.split('\n').filter(line => line.startsWith('#'));
+    const safe = 'Run,\u201dProbe A\u201d';
+    expect(comments).toEqual(expect.arrayContaining([`# title: ${safe}`, `# file: ${safe}`, `# C1 label: ${safe}`]));
+    expect(comments.join('\n')).not.toMatch(/["\r]/);
+    expect(csv).toContain('"Run,""Probe\r\nA""_v"');
+  });
+
   test('guards CSV and TSV text after newlines, Unicode whitespace and quoted delimiters', () => {
     expect(csvComment('\n\u00a0=calc()')).toBe("'=calc()");
-    expect(csvComment('Title; \n\u2003""@probe, ""-1')).toBe("Title;'  \u2003\"\"@probe,' \"\"-1");
+    expect(csvComment('Title; \n\u2003""@probe, ""-1')).toBe("Title;'  \u2003\u201d\u201d@probe,' \u201d\u201d-1");
     expect(csvField('\n\u2003+probe')).toBe('"\'\n\u2003+probe"');
     const table = { caption: '\n=calc()', head: ['\u00a0@header', 'Number'], rows: [['\t\u2003+probe', '-2']], numericFrom: 1 };
     expect(renderTables([table], 'tsv')).toBe("' =calc()\n'\u00a0@header\tNumber\n' \u2003+probe\t-2\n");
@@ -198,8 +208,9 @@ describe('waveform exports', () => {
   test('adds an optional sanitized Bode title in CSV and a custom caption in LaTeX', () => {
     const bode = analyzeBodeBatch([result]);
     expect(renderBodeCsv(bode, 'Sweep, =1+1').split('\n').slice(0, 2)).toEqual([
-      '# Graticule v2.0.6', "# title: Sweep,' =1+1",
+      '# Graticule v2.0.7', "# title: Sweep,' =1+1",
     ]);
+    expect(renderBodeCsv(bode, 'Run,"Probe\r\nA"')).toContain('# title: Run,\u201dProbe A\u201d\n');
     expect(renderBodeCsv(bode, ' \t ')).toBe(renderBodeCsv(bode));
     const point = { ...bode.points[0]!, accepted: false, rejectionReasons: ['frequency_mismatch'] };
     const latex = renderBodeTable({ ...bode, points: [point] }, 'latex', 'fr', ' Balayage ');

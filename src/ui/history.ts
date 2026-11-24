@@ -53,13 +53,26 @@ export interface PutResult {
   readonly ok: boolean;
   /** Older records deleted to make room. Only set when the write committed with them. */
   readonly evicted: readonly string[];
+  /**
+   * Set when nothing was written because the capture was deleted or cleared on disk, maybe in
+   * another tab, so it must not be saved again from this copy.
+   */
+  readonly gone?: boolean;
+}
+
+export interface PutOptions {
+  /**
+   * The capture was already saved by this tab, so this write only changes it. It is skipped when
+   * the capture is no longer on disk, so a rename never brings back a capture deleted in another tab.
+   */
+  readonly existing?: boolean;
 }
 
 export interface HistoryStore {
   readonly persistent: boolean;
   loadAll(): Promise<HistoryItem[]>;
   /** Records in `protectedIds` are never deleted to make room for this one. */
-  put(item: HistoryItem, protectedIds?: ReadonlySet<string>): Promise<PutResult>;
+  put(item: HistoryItem, protectedIds?: ReadonlySet<string>, options?: PutOptions): Promise<PutResult>;
   /** Updates small fields without the caller rebuilding the whole record. */
   updateMeta(id: string, patch: MetaUpdate): Promise<boolean>;
   /**
@@ -85,6 +98,21 @@ const STORE = 'items';
  * capture replaces them all. Older versions wrote one `cursors:<id>` record, which is still read.
  */
 const CURSOR_PREFIX = 'cursors:';
+/**
+ * Written by every clear, with when it happened and which tab did it. A capture that is not on disk
+ * and was added before a clear from another tab is never written back, even as a new save.
+ */
+const CLEAR_KEY = 'meta:cleared';
+
+interface ClearRecord {
+  readonly id: typeof CLEAR_KEY;
+  readonly at: number;
+  readonly token: string;
+}
+
+function asClear(v: unknown): ClearRecord | undefined {
+  return isRecord(v) && v.id === CLEAR_KEY && isFiniteNumber(v.at) && typeof v.token === 'string' ? (v as unknown as ClearRecord) : undefined;
+}
 const cursorKey = (id: string, rev: number): string =>
   `${CURSOR_PREFIX}${id}:${String(Math.max(0, Math.floor(rev))).padStart(16, '0')}:${newId()}`;
 
@@ -292,7 +320,8 @@ function memoryStore(): HistoryStore {
   return {
     persistent: false,
     loadAll: async () => loadValid([...map.values()]),
-    put: async (item) => {
+    put: async (item, _protectedIds, options) => {
+      if (options?.existing && !map.has(item.id)) return { ok: false, evicted: [], gone: true };
       map.set(item.id, toStored(item));
       return { ok: true, evicted: [] };
     },
@@ -426,16 +455,19 @@ function sidesFor(found: unknown, id: string): CursorRecord[] {
   return Array.isArray(found) ? found.filter((r): r is CursorRecord => isCursorRecord(r) && sideItemId(r) === id) : [];
 }
 
-/** Reads one capture and all its cursor records, then lets `decide` write, in one transaction. */
+/**
+ * Reads one capture, all its cursor records and the last clear, then lets `decide` write, in one
+ * transaction.
+ */
 function readItem(
   db: IDBDatabase,
   id: string,
-  decide: (store: IDBObjectStore, item: StoredItem | undefined, sides: CursorRecord[]) => void,
+  decide: (store: IDBObjectStore, item: StoredItem | undefined, sides: CursorRecord[], cleared: ClearRecord | undefined) => void,
 ): Promise<void> {
   return readThenWrite(
     db,
-    (store) => [store.get(id), readSides(store, id)],
-    (store, [item, sides]) => decide(store, validStored(item) ? item : undefined, sidesFor(sides, id)),
+    (store) => [store.get(id), readSides(store, id), store.get(CLEAR_KEY)],
+    (store, [item, sides, cleared]) => decide(store, validStored(item) ? item : undefined, sidesFor(sides, id), asClear(cleared)),
   );
 }
 
@@ -490,6 +522,12 @@ export function idbStore(db: IDBDatabase): HistoryStore {
     }
   };
   const failed: PutResult = { ok: false, evicted: [] };
+  const gone: PutResult = { ok: false, evicted: [], gone: true };
+  /** The last clear this tab made or saw on load. A newer one came from another tab. */
+  let knownClear: string | undefined;
+  /** True when another tab cleared history after this capture was added, so it must stay gone. */
+  const clearedElsewhere = (record: StoredItem, cleared: ClearRecord | undefined): boolean =>
+    Boolean(cleared && cleared.token !== knownClear && cleared.at >= record.addedAt);
   const storageUsage = async (): Promise<number | null> => {
     try {
       const est = await navigator.storage?.estimate?.();
@@ -503,13 +541,19 @@ export function idbStore(db: IDBDatabase): HistoryStore {
    * transaction never makes room. Old records are deleted in their own transaction, one at a time,
    * until the new one fits. If it never fits, every deleted record is written back.
    */
-  const put = async (item: HistoryItem, protectedIds: ReadonlySet<string>): Promise<PutResult> => {
+  const put = async (item: HistoryItem, protectedIds: ReadonlySet<string>, existing: boolean): Promise<PutResult> => {
     const record = toStored(item);
+    // Set inside the write transaction when the capture is gone from disk, so nothing is written.
+    let missing = false;
     // Cursors on disk that moved after this copy's cursors, maybe in another tab or in a pagehide
     // save, are kept, so a rename or any other full save never puts older cursors back. The record
-    // then holds the newest cursors, so the cursor record goes in the same transaction.
+    // then holds the newest cursors, so the cursor record goes in the same transaction. Whether the
+    // capture was deleted or cleared on disk is checked in that same transaction, under the shared
+    // lock, so another tab's clear never lands between the check and the write.
     const write = (): Promise<void> =>
-      readItem(db, record.id, (store, onDisk, sides) => {
+      readItem(db, record.id, (store, onDisk, sides, cleared) => {
+        missing = !onDisk && (existing || clearedElsewhere(record, cleared));
+        if (missing) return;
         const disk = newestCursors(onDisk, sides);
         store.put(disk.rev > revOf(record) ? withCursors(record, disk.cursors, disk.rev) : record);
         for (const side of sides) store.delete(side.id);
@@ -517,7 +561,7 @@ export function idbStore(db: IDBDatabase): HistoryStore {
     const usageBefore = await storageUsage();
     try {
       await write();
-      return { ok: true, evicted: [] };
+      return missing ? gone : { ok: true, evicted: [] };
     } catch (e) {
       if (!isQuota(e)) return failed;
     }
@@ -536,13 +580,14 @@ export function idbStore(db: IDBDatabase): HistoryStore {
     // A victim's cursor records go with it, so their room is freed too and they never outlive it.
     // The victim and its cursor records are read again in the transaction that deletes them, so a
     // rollback puts back what was really on disk, even if another tab changed it since the listing.
-    const deleted: Array<{ victim: StoredItem; sides: CursorRecord[] }> = [];
+    const deleted: Array<{ victim: StoredItem; sides: CursorRecord[]; clearedAtEviction: string | undefined }> = [];
     for (const candidate of candidates) {
-      const snap: { victim?: StoredItem; sides: CursorRecord[] } = { sides: [] };
+      const snap: { victim?: StoredItem; sides: CursorRecord[]; clearedAtEviction?: string } = { sides: [] };
       try {
-        await readItem(db, candidate.id, (store, victim, sides) => {
+        await readItem(db, candidate.id, (store, victim, sides, cleared) => {
           snap.victim = victim;
           snap.sides = sides;
+          snap.clearedAtEviction = cleared?.token;
           if (victim) store.delete(victim.id);
           for (const side of sides) store.delete(side.id);
         });
@@ -551,10 +596,11 @@ export function idbStore(db: IDBDatabase): HistoryStore {
       }
       // Already deleted by another tab, so there is nothing to put back.
       if (!snap.victim) continue;
-      deleted.push({ victim: snap.victim, sides: snap.sides });
+      deleted.push({ victim: snap.victim, sides: snap.sides, clearedAtEviction: snap.clearedAtEviction });
       try {
         await write();
-        return { ok: true, evicted: deleted.map((d) => d.victim.id) };
+        if (!missing) return { ok: true, evicted: deleted.map((d) => d.victim.id) };
+        break;
       } catch (e) {
         if (!isQuota(e)) break;
       }
@@ -565,12 +611,14 @@ export function idbStore(db: IDBDatabase): HistoryStore {
       // record can exceed a tight Chromium LevelDB quota even when each record fits on its own.
       // A capture saved again meanwhile by another tab is newer and is kept. So is any cursor record
       // written meanwhile, maybe by a pagehide in another tab, since it has its own key.
-      for (const { victim, sides } of [...deleted].reverse()) {
+      for (const { victim, sides, clearedAtEviction } of [...deleted].reverse()) {
         let restored = false;
         for (const waitMs of [0, 25, 75]) {
           if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs));
           try {
-            await readItem(db, victim.id, (store, now, sidesNow) => {
+            await readItem(db, victim.id, (store, now, sidesNow, cleared) => {
+              // Skip the entire rollback when history was cleared again after this victim was evicted.
+              if (cleared && cleared.token !== clearedAtEviction) return;
               if (!now) store.put(victim);
               const floor = now ? revOf(now) : -1;
               const present = new Set(sidesNow.map((side) => side.id));
@@ -585,7 +633,7 @@ export function idbStore(db: IDBDatabase): HistoryStore {
         if (!restored) notRestored.push(victim.id);
       }
     }
-    return { ok: false, evicted: notRestored };
+    return missing ? { ...gone, evicted: notRestored } : { ok: false, evicted: notRestored };
   };
   /**
    * Reads the saved capture and its cursor record, then writes the capture back with new cursors, in
@@ -621,6 +669,8 @@ export function idbStore(db: IDBDatabase): HistoryStore {
     loadAll: () =>
       serial(async () => {
         const all = await request(tx('readonly').getAll() as IDBRequest<unknown[]>);
+        const seenClear = all.map(asClear).find(Boolean);
+        if (seenClear) knownClear = seenClear.token;
         const late = new Map<string, CursorRecord[]>();
         for (const r of all) {
           if (!isCursorRecord(r)) continue;
@@ -679,7 +729,7 @@ export function idbStore(db: IDBDatabase): HistoryStore {
           return withCursors(r, validCursors(side.cursors), sideRev(side) || undefined);
         }));
       }),
-    put: (item, protectedIds = new Set()) => serial(() => put(item, protectedIds)),
+    put: (item, protectedIds = new Set(), options) => serial(() => put(item, protectedIds, options?.existing === true)),
     updateMeta: (id, patch) =>
       serial(() =>
         update((store) => {
@@ -711,7 +761,23 @@ export function idbStore(db: IDBDatabase): HistoryStore {
           }),
         ),
       ),
-    clear: () => serial(() => safe(() => commit(db, 'readwrite', (store) => store.clear(), true))),
+    clear: () =>
+      serial(() => {
+        const marker: ClearRecord = { id: CLEAR_KEY, at: Date.now(), token: newId() };
+        // Known before the write, so this tab can save its own captures again right after.
+        knownClear = marker.token;
+        return safe(() =>
+          commit(
+            db,
+            'readwrite',
+            (store) => {
+              store.clear();
+              store.put(marker);
+            },
+            true,
+          ),
+        );
+      }),
   };
 }
 

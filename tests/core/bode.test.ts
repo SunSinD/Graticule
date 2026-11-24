@@ -436,6 +436,7 @@ test.each([
   ['1e3Hz.png', 1000], ['osc_1.2e+3Hz.png', 1200], ['.2kHz.png', 200], ['2,5 kHz.png', 2500],
   ['10µHz.png', 1e-5], ['1KHz.png', null], ['/archive/500Hz/capture.png', null],
   ['01 - 500 Hz.png', 500], ['01 - -500 Hz.png', null], ['-500Hz.png', null],
+  ['sweep-1kHz.png', 1000], ['sweep--1kHz.png', null], ['sweep-1e-3Hz.png', 0.001],
 ] as const)('reads only positive complete frequency tokens in %s', (name, expected) => {
   expect(frequencyFromFileName(name)).toBe(expected);
 });

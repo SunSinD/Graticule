@@ -2,7 +2,7 @@ import { columnInterval, columnSamples, isClipped, samplesFor } from './columns.
 import { valid } from './dsp.js';
 import { analysisPlot, axisValue, niceCeiling125 } from './export/analysis-plot.js';
 import type { AnalysisPlotOptions } from './export/analysis-plot.js';
-import { csvComment, csvField } from './export/csv.js';
+import { csvComment } from './export/csv.js';
 import { csvNumber, formatEng, formatFixed, GRATICULE_VERSION } from './export/format.js';
 import { renderTables } from './export/table.js';
 import type { TableFormat } from './export/table.js';
@@ -457,7 +457,7 @@ export function renderSpectrumCsv(spec: SpectrumResult, title?: string): string 
     `# sample_rate_hz: ${csvNumber(spec.sampleRateHz)}, resolution_bandwidth_hz=${csvNumber(spec.resolutionBandwidthHz)}`,
     `# used_start_s: ${csvNumber(spec.usedStartSec)}, used_end_s=${csvNumber(spec.usedEndSec)}, coverage=${csvNumber(spec.coverage)}, interpolated_gaps=${spec.interpolatedGaps}`,
     `# noise_floor_${dbColumn}: ${csvNumber(spec.noiseFloorDbv)}, thd_pct=${csvNumber(spec.thdPct)}, thd_below_floor=${spec.thdBelowFloor}, thd_reason=${spec.thdReason ?? ''}`,
-    `# warnings: ${csvField(spec.warnings.join(' | '))}`,
+    `# warnings: ${csvComment(spec.warnings.join(' | '))}`,
     ...spec.harmonics.map(h => `# H${h.order}: frequency_hz=${csvNumber(h.frequencyHz)}, ${rmsColumn}=${csvNumber(h.vrms)}, dbc=${csvNumber(h.dbc)}`),
     `frequency_hz,${rmsColumn},${dbColumn}`,
     ...spec.bins.map(b => [csvNumber(b.frequencyHz), csvNumber(b.vrms), csvNumber(b.dbv)].join(',')),
