@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://sunsind.github.io/Graticule/"><strong>Open Graticule</strong></a><br />
   Runs in your browser. Nothing to install.<br />
-  <a href="#offline">Offline download</a> or <a href="#command-line">command line</a>
+  <a href="#offline">Offline Download</a> or <a href="#command-line">Command Line</a>
 </p>
 
 <p align="center">
