@@ -20,6 +20,17 @@ export const PROFILE_OPTIONS: readonly (readonly [ProfileId, string])[] = [
   ['keysight-dsox1000', 'Keysight DSOX1000'],
 ];
 
+const UNRECOGNIZED = new Set(['unsupported_resolution', 'native_anchors_mismatch']);
+
+/** Detection notes to show, with a clear Hantek message in place of the generic layout warning. */
+export function detectionNotes(d: ExtractionResult['detection'] | undefined): string[] {
+  if (!d) return [];
+  const hantek = d.fallbackLayout === 'hantek-800x480';
+  return [d.fallbackReason, ...d.warnings]
+    .map((w) => (hantek && w && UNRECOGNIZED.has(w) ? 'hantek_grid' : w))
+    .filter((w, i, all): w is string => !!w && all.indexOf(w) === i);
+}
+
 interface ProfileProps {
   readonly tx: Dict;
   readonly choice: ProfileChoice;
@@ -30,7 +41,7 @@ interface ProfileProps {
 
 export function ProfilePanel({ tx, choice, result, disabled, onChoice }: ProfileProps) {
   const d = result?.detection;
-  const notes = d ? [d.fallbackReason, ...d.warnings].filter((w, i, all): w is string => !!w && all.indexOf(w) === i) : [];
+  const notes = detectionNotes(d);
   return (
     <section>
       <h2>{tx.profile}</h2>
@@ -305,7 +316,7 @@ function MathCard({ tx, locale, field, config, sources, disabled }: MathCardProp
       </div>
       <ScaleInput
         id="vdiv-M"
-        label={tx.mathVdiv}
+        label={unit === 'V²' ? tx.mathV2div : tx.mathVdiv}
         value={config.voltsPerDiv ?? field.result?.voltsPerDiv ?? null}
         unit={unit}
         locale={locale}

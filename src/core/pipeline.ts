@@ -5,7 +5,7 @@ import { extractTraces, makeTimebase } from './extract.js';
 import { buildOverlayMask } from './mask.js';
 import { compareScope, measureChannel, measurePhase, scopeFrequency } from './measurements.js';
 import { readScopeMetadata } from './ocr.js';
-import { decodePng } from './png.js';
+import { decodeImage } from './png.js';
 import { detectProfile, getNativeProfile, invertTraceColors } from './profiles.js';
 import type { BodeGateOptions, BodeRejectedCapture, BodeResult, ChannelId, ExtractionOverrides, ExtractionResult, RgbaImage } from './types.js';
 
@@ -48,7 +48,7 @@ export function analyzeCapture(source: RgbaImage, fileName: string, overrides: E
   // A fallback source has no native badges to read, so check trace polarity on the rectified plot instead.
   const inverted = sourceProfile === undefined || sourceProfile === 'universal-fallback' ? undefined
     : invertTraceColors(source, sourceProfile, true);
-  const { traces, warnings } = extractTraces(image, detection, metadata, mask, timebase, overrides, inverted);
+  const { traces, warnings, maskCoveragePct } = extractTraces(image, detection, metadata, mask, timebase, overrides, inverted);
   const measurements = traces.map(trace => measureChannel(trace, detection.grid.pxPerVDiv));
   const frequency = (channel: ChannelId) => timebase.source === 'default' ? null
     : scopeFrequency(scopeReadings, channel, topFrequencyHz, topFrequencyRaw)
@@ -69,13 +69,13 @@ export function analyzeCapture(source: RgbaImage, fileName: string, overrides: E
     measurements, phaseC1ToC2, scopeReadings,
     ...(phase?.phaseDeg != null && { phasePair: { from: phase.refChannel, to: phase.targetChannel, phaseDeg: phase.phaseDeg } }),
     comparisons: compareScope(scopeReadings, measurements, traces, topFrequencyHz, topFrequencyRaw),
-    maskCoveragePct: mask.coveragePct, elapsedMs: performance.now() - start,
+    maskCoveragePct, elapsedMs: performance.now() - start,
   };
 }
 
 export function analyzePngBytes(bytes: Uint8Array, fileName: string, overrides?: ExtractionOverrides): ExtractionResult {
   const start = performance.now();
-  const result = analyzeCapture(decodePng(bytes), fileName, overrides);
+  const result = analyzeCapture(decodeImage(bytes), fileName, overrides);
   return { ...result, elapsedMs: performance.now() - start };
 }
 

@@ -1,5 +1,6 @@
 import { Camera, Plus } from 'lucide-react';
 import type { Dict } from '../i18n';
+import { SourceLinks } from './SourceLinks';
 
 interface Props {
   readonly tx: Dict;
@@ -31,9 +32,7 @@ export function EmptyState({ tx, onAdd, onCamera, onSample, busy = false }: Prop
         </button>
       )}
       <p className="muted small">{tx.emptyPrivacy}</p>
-      <a className="empty-source" href="https://github.com/SunSinD/Graticule" target="_blank" rel="noopener noreferrer">
-        {tx.sourceCode}
-      </a>
+      <SourceLinks tx={tx} className="empty-links" linkClassName="empty-source" />
     </div>
   );
 }

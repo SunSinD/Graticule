@@ -273,6 +273,14 @@ function plotAnnotations(image: RgbaImage, detection: ProfileDetection, markers:
           && pixelMatches(image, x, y, cyan) && pixelMatches(image, x + width - 1, y, cyan)
           && !pixelMatches(image, x, y + height - 1, cyan) && !pixelMatches(image, x + width - 1, y + height - 1, cyan)) {
         maskInk(triggerArea, arrow);
+        const colors = colorsFor('universal-fallback');
+        for (let row = Math.max(top, y - 1); row <= Math.min(bottom, y + height); row++) {
+          for (let col = Math.max(left, x - 1); col <= Math.min(right, x + width); col++) {
+            if (pixelMatches(image, col, row, (r, g, b) => channelColor(r, g, b, colors) === 2)) {
+              pixels[row * image.width + col] = OVERLAY;
+            }
+          }
+        }
       }
     }
     return pixels;
@@ -362,18 +370,23 @@ function maskedAt(image: RgbaImage, mask: OverlayMask, grid: GridGeometry, x: nu
 
 export function extractTraces(image: RgbaImage, detection: ProfileDetection, metadata: ScopeMetadata, mask: OverlayMask,
   timebase: TimebaseSettings, overrides: ExtractionOverrides,
-  inverted = invertTraceColors(image, overrides.profileId ?? detection.profileId, detection.grid.inverted, detection.grid)): { traces: ChannelTrace[]; warnings: string[] } {
+  inverted = invertTraceColors(image, overrides.profileId ?? detection.profileId, detection.grid.inverted, detection.grid)): { traces: ChannelTrace[]; warnings: string[]; maskCoveragePct: number } {
   const grid = detection.grid;
   const times = Array.from({ length: grid.width + 1 }, (_, col) =>
     (grid.left + col - grid.centerX) / grid.pxPerHDiv * timebase.secPerDiv + timebase.triggerOffsetSec);
   if (times.some((time, col) => !Number.isFinite(time) || (col > 0 && time <= times[col - 1]!))) {
     throw new Error('Invalid trigger offset or time scale: adjacent columns need distinct timestamps.');
   }
-  if (detection.digitalOnly) return { traces: [], warnings: [] };
+  if (detection.digitalOnly) return { traces: [], warnings: [], maskCoveragePct: mask.coveragePct };
   const colors = metadata.colors ?? colorsFor(overrides.profileId ?? detection.profileId);
   const markers = markerYs(image, detection, colors, inverted);
   const annotations = plotAnnotations(image, detection, markers);
-  const plotMask = annotations ? { ...mask, pixels: mask.pixels.map((bits, index) => bits | annotations[index]!) } : mask;
+  let annotationCount = 0;
+  const plotMask = annotations ? { ...mask, pixels: mask.pixels.map((bits, index) => {
+    if (!bits && annotations[index]) annotationCount++;
+    return bits | annotations[index]!;
+  }) } : mask;
+  const maskCoveragePct = mask.coveragePct + 100 * annotationCount / ((grid.width + 1) * (grid.height + 1));
   const native = getNativeProfile(detection.profileId);
   const active = CHANNELS.map((channel, i) => !metadata.unsupportedChannels?.has(channel)
     && (overrides.channels?.[channel]?.enabled ?? (!native || metadata.cards.has(channel) || markers[i] !== null)));
@@ -447,5 +460,5 @@ export function extractTraces(image: RgbaImage, detection: ProfileDetection, met
       overlapCount: count('overlap_ambiguous'), unresolvedCount: count('unresolved'), medianThicknessPx: trace.thickness,
     };
   });
-  return { traces: extracted, warnings };
+  return { traces: extracted, warnings, maskCoveragePct };
 }

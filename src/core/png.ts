@@ -1,4 +1,5 @@
 import { Inflate } from 'fflate';
+import { decodeBmp, hasBmpSignature } from './bmp.js';
 import type { RgbaImage } from './types.js';
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
@@ -41,6 +42,12 @@ function adler32(bytes: Uint8Array): number {
 
 export function hasPngSignature(bytes: Uint8Array): boolean {
   return PNG_SIGNATURE.every((byte, index) => bytes[index] === byte);
+}
+
+export function decodeImage(bytes: Uint8Array): RgbaImage {
+  if (hasPngSignature(bytes)) return decodePng(bytes);
+  if (hasBmpSignature(bytes)) return decodeBmp(bytes);
+  throw new Error('Unsupported image format: expected PNG or BMP');
 }
 
 function readU32BE(buf: Uint8Array, offset: number): number {

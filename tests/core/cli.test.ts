@@ -9,7 +9,8 @@ import { afterAll, describe, expect, test } from 'vitest';
 import { renderWaveformCsv } from '../../src/core/export/csv.js';
 import { GRATICULE_VERSION } from '../../src/core/export/format.js';
 import { analyzePngBytes } from '../../src/core/pipeline.js';
-import { sample } from './fixtures.js';
+import { decodePng } from '../../src/core/png.js';
+import { encodeBmp24, sample } from './fixtures.js';
 
 const root = mkdtempSync(join(tmpdir(), 'graticule-cli-'));
 const cliPath = fileURLToPath(new URL('../../src/cli/index.ts', import.meta.url));
@@ -57,6 +58,27 @@ const cli = (...args: string[]) => spawnSync(process.execPath, ['--import', 'tsx
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 describe('command line', () => {
+  test('accepts BMP captures directly, in compare, and in Bode folders', () => {
+    const bmp = join(root, 'capture.BMP');
+    writeFileSync(bmp, encodeBmp24(decodePng(sample('sine_schmitt.png'))));
+    const result = cli(bmp, '--json');
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ fileName: 'capture.BMP', traces: [
+      expect.objectContaining({ channel: 'C1' }), expect.objectContaining({ channel: 'C2' }),
+    ] });
+    const scope = join(root, 'bmp-reference.csv');
+    writeFileSync(scope, 'time_s,CH2_V\n-0.003,1\n0,1\n0.003,1\n');
+    const comparison = cli('compare', bmp, scope, '--channel', 'C2', '--json');
+    expect(comparison.status, comparison.stderr).toBe(0);
+    expect(JSON.parse(comparison.stdout)).toMatchObject({ channel: 'C2' });
+    const dir = join(root, 'bmp-sweep');
+    mkdirSync(dir);
+    writeFileSync(join(dir, '1kHz.BMP'), encodeBmp24(decodePng(sample('sweep_04.png'))));
+    const sweep = cli('--bode', dir, '--json');
+    expect(sweep.status, sweep.stderr).toBe(0);
+    expect(JSON.parse(sweep.stdout)).toMatchObject({ acceptedCount: 1, points: [{ fileName: '1kHz.BMP', accepted: true }] });
+  }, 20_000);
+
   test('writes the --title argument immediately after the filename in waveform CSV', () => {
     const result = cli(input, '--csv', '--title', 'Bench capture');
     expect(result.status, result.stderr).toBe(0);
@@ -213,7 +235,7 @@ describe('command line', () => {
     const result = cli(flag);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(`${GRATICULE_VERSION}\n`);
-    expect(GRATICULE_VERSION).toBe('2.0.8');
+    expect(GRATICULE_VERSION).toBe('2.0.9');
     expect(cli('--help').stdout).toContain('--version | -v');
   });
 

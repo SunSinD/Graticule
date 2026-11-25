@@ -167,14 +167,20 @@ describe('native capture profiles', () => {
     }
     for (let row = 0; row < 10; row++) {
       const inset = Math.max(0, row - 2);
-      paint(image, { x: 392 + inset, y: 32 + row, width: 15 - 2 * inset, height: 1 }, [21, 201, 220]);
+      paint(image, { x: 392 + inset, y: 32 + row, width: 15 - 2 * inset, height: 1 }, [0, 160, 225]);
+      pixel(image, 391 + inset, 32 + row, [0, 148, 208]);
+      pixel(image, 407 - inset, 32 + row, [0, 148, 208]);
     }
+    pixel(image, 399, 42, [0, 148, 208]);
     const scales = { secPerDiv: 500e-9, channels: { C1: { voltsPerDiv: 0.5 } } };
     const result = analyzeCapture(image, 'hantek.bmp', scales);
     expect(result.detection.grid).toMatchObject({
       left: 15, right: 784, top: 31, bottom: 430, hDivs: 14, vDivs: 8, pxPerHDiv: 50, pxPerVDiv: 50,
     });
     expect(result.traces).toMatchObject([{ channel: 'C1', validCount: 770 }]);
+    expect(result.maskCoveragePct).toBeGreaterThan(0);
+    expect(result.detection.grid.hLines[0]).toBe(30);
+    expect(renderWaveformSvg(result)).toContain('>2 V</text>');
     expect(result.measurements[0]?.vpp).toBeCloseTo(2.78, 2);
     expect(result.measurements[0]?.frequencyHz).toBeCloseTo(1e8 / 383, -2);
 
@@ -206,6 +212,12 @@ describe('native capture profiles', () => {
     expect(cropped.measurements[0]?.vpp).toBeCloseTo(2.78, 2);
     expect(detectProfile(image, { manualCrop: { x: 15, y: 31, width: 734, height: 399 } }).grid)
       .toMatchObject({ right: 749, pxPerHDiv: 50, hDivs: 14 });
+    const offCenter = analyzeCapture(image, 'hantek.bmp', {
+      ...scales, manualCrop: { x: 15, y: 31, width: 335, height: 399 },
+    });
+    expect(offCenter.detection.grid).toMatchObject({ left: 15, right: 350, pxPerHDiv: 50, pxPerVDiv: 50, centerX: 399, centerY: 230 });
+    expect(offCenter.traces[0]?.samples[0]?.timeSec).toBeCloseTo(-3.84e-6, 12);
+    expect(waveformFrame(offCenter).timeAt(1)).toBeCloseTo(-490e-9, 12);
 
     let visibleMagenta = 0;
     for (let x = 20; x < 110; x++) {

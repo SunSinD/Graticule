@@ -484,7 +484,7 @@ function fallbackGrid(image: RgbaImage, overrides: ExtractionOverrides, detected
     return {
       ...grid,
       ...(x && h === x.hDivs && { centerX: x.centerX, vLines: x.vLines.filter(line => line >= left && line <= right), pxPerHDiv: x.pxPerHDiv }),
-      ...(y && v === y.vDivs && { centerY: y.centerY, hLines: y.hLines.filter(line => line >= top && line <= bottom), pxPerVDiv: y.pxPerVDiv }),
+      ...(y && v === y.vDivs && { centerY: y.centerY, hLines: y.hLines.filter(line => line >= top - (top === y.top ? 1 : 0) && line <= bottom), pxPerVDiv: y.pxPerVDiv }),
     };
   };
 

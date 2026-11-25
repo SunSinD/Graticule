@@ -1,3 +1,4 @@
+import { hasBmpSignature, isSupportedBmpHeader } from '../core/bmp.js';
 import { hasPngSignature } from '../core/png.js';
 
 export interface LoadedFile {
@@ -100,6 +101,24 @@ export function isRawPng(bytes: Uint8Array): boolean {
   return !hasExifChunk(bytes);
 }
 
+/** True when the bytes start with the BM signature of a Windows bitmap. */
+export function hasBmpBytes(bytes: Uint8Array): boolean {
+  return bytes.length >= 2 && hasBmpSignature(bytes);
+}
+
+export function imageMime(bytes: Uint8Array): 'image/bmp' | 'image/png' {
+  return hasBmpBytes(bytes) ? 'image/bmp' : 'image/png';
+}
+
+const BMP_DIB_SIZES = new Set([40, 52, 56, 108, 124]);
+
+/** True only for plain or RLE Windows bitmaps the core decoder reads directly. Others go through the canvas. */
+export function isRawBmp(bytes: Uint8Array): boolean {
+  if (!hasBmpBytes(bytes) || bytes.length < 54) return false;
+  const dibSize = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(14, true);
+  return BMP_DIB_SIZES.has(dibSize) && isSupportedBmpHeader(bytes);
+}
+
 async function decodeBitmap(file: Blob): Promise<ImageBitmap> {
   try {
     return await createImageBitmap(file, { imageOrientation: 'from-image' });
@@ -128,13 +147,13 @@ async function toPngBytes(file: Blob): Promise<Uint8Array> {
 }
 
 export function makeUrl(bytes: Uint8Array): string {
-  return URL.createObjectURL(new Blob([bytes as BlobPart], { type: 'image/png' }));
+  return URL.createObjectURL(new Blob([bytes as BlobPart], { type: imageMime(bytes) }));
 }
 
 export async function loadFile(file: Blob, name: string, options: LoadOptions = {}): Promise<LoadedFile> {
   let bytes: Uint8Array = new Uint8Array(await file.arrayBuffer());
   const hasExif = hasExifChunk(bytes);
-  if (options.photo || !isRawPng(bytes)) {
+  if (options.photo || !(isRawPng(bytes) || isRawBmp(bytes))) {
     const fixed = hasExif ? moveExifBeforeIdat(bytes) : null;
     bytes = await toPngBytes(fixed ? new Blob([fixed as BlobPart], { type: 'image/png' }) : file);
   }

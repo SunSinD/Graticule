@@ -1,6 +1,6 @@
 import type { Locale } from '../types.js';
 
-export const GRATICULE_VERSION = '2.0.8';
+export const GRATICULE_VERSION = '2.0.9';
 export const EMPTY_CELL = '\u2014';
 
 export function spreadsheetText(text: string): string {

@@ -12,7 +12,8 @@
 <p align="center">
   <a href="https://sunsind.github.io/Graticule/"><strong>Open Graticule</strong></a><br />
   Runs in your browser. Nothing to install.<br />
-  <a href="#offline">Offline Download</a> or <a href="#command-line">Command Line</a>
+  <a href="https://github.com/SunSinD/Graticule/releases/latest/download/graticule-portable.html">Download the offline HTML file</a><br />
+  <a href="#offline-download">Offline download</a> or <a href="#command-line">Command line</a>
 </p>
 
 <p align="center">
@@ -61,7 +62,7 @@ Use your scope's waveform export whenever you can save the original samples. Gra
 ## How to use it
 
 1. Open the app
-2. Drop a screenshot, paste one with Ctrl+V, press O, or click Add
+2. Drop a screenshot, paste one with Ctrl+V, press O, or click Add. PNG, JPG and BMP files all work
 3. Click Extract when you are ready. Nothing runs before that
 4. Check the scales on the right and fix them if needed. The plot updates by itself
 5. Pick a view at the top of the plot. Press 1 to 5 to switch faster
@@ -195,11 +196,17 @@ Graticule never guesses what it cannot see. When a trace is clipped, hidden by a
 | Escape | Cancel the crop or what you are typing |
 | ? | Show or hide the shortcuts |
 
-## Offline
+## Offline download
 
-Graticule works without internet. After your first visit the website keeps working offline, and you can install it like an app from your browser. When a new version comes out, the app updates itself the next time you open it online.
+Graticule works without internet in three ways.
 
-Download [the portable HTML file](https://github.com/SunSinD/Graticule/releases/latest/download/graticule-portable.html) and open it directly in a desktop browser with no install and no internet. Download a new copy to update. Some browsers cannot save history for local files. On phones and tablets, use the website offline after your first visit.
+**Website.** After your first visit, your browser keeps a copy of the app, so the website keeps working offline. You can also install it like an app from your browser. When a new version comes out, the app updates itself the next time you open it online.
+
+**Single HTML file.** Download [the offline HTML file](https://github.com/SunSinD/Graticule/releases/latest/download/graticule-portable.html), copy it to any computer with a USB key, and open it in a desktop browser. It works on a lab PC with no internet and nothing to install. Download a new copy to update. Some browsers cannot save history for local files. On phones and tablets, use the website offline after your first visit.
+
+**Command line.** The `.tgz` file from each release has everything it needs inside, so it installs on a PC with no internet. See [Command line](#command-line).
+
+Scope screenshots saved as `.bmp` open directly in the website, the HTML file and the command line.
 
 ## Command line
 
@@ -222,12 +229,20 @@ npm run cli -- compare capture.png scope.csv --channel C1 --csv-column "CH1 Volt
 
 `compare` checks a screenshot against the CSV saved by the scope itself and tells you how far apart they are. Add `--csv-column` to pick the scope CSV column by its label. `--decode uart` reads the bytes of a serial signal from the trace.
 
-To use it without the source code, download the `.tgz` file from the [latest release](https://github.com/SunSinD/Graticule/releases/latest) and replace `VERSION` with the version in the file name.
+To use it without the source code, you need Node 22 or newer. Download the `.tgz` file from the [latest release](https://github.com/SunSinD/Graticule/releases/latest) and replace `VERSION` with the version in the file name.
 
 ```sh
 npm install -g ./graticule-VERSION.tgz
 graticule --version
 ```
+
+The `.tgz` file needs no internet to install. Copy it to a PC with no internet and run:
+
+```sh
+npm install -g --offline ./graticule-VERSION.tgz
+```
+
+The command line reads `.png` and `.bmp` files, including in `--bode` folders and with `compare`.
 
 ## Accuracy
 

@@ -37,6 +37,37 @@ export function acceptScale(v: number | null, unit: Unit, allowZero = false): v 
   return size >= lo && size <= hi;
 }
 
+const UNIT_TAIL = /(hz|db|div|v²|v2|v|s|°|%|a)$/;
+const UNIT_OK: Readonly<Record<Unit, readonly string[]>> = {
+  s: ['s', 'div'],
+  V: ['v', 'div'],
+  'V²': ['v²', 'v2', 'div'],
+};
+
+/** False when the text ends in a unit that does not belong in this field, such as ms in a volt field. */
+export function unitFits(text: string, unit: Unit): boolean {
+  const tail = UNIT_TAIL.exec(text.trim().replace(/\s+/g, '').replace(/\/div$/i, '').toLowerCase());
+  return !tail || UNIT_OK[unit].includes(tail[1]!);
+}
+
+/** Parses a typed scale, refusing a unit from another kind of field. */
+export function parseScale(text: string, unit: Unit): number | null {
+  return unitFits(text, unit) ? parseNumber(text) : null;
+}
+
+/** The next 1 2 5 step, kept inside the range the field accepts. */
+export function stepWithin(value: number, dir: 1 | -1, unit: Unit): number {
+  const [lo, hi] = RANGE[unit];
+  const next = Math.min(hi, Math.max(lo, stepScale125(value, dir)));
+  return (dir > 0 ? next > value : next < value) ? next : value;
+}
+
+/** True when a stepper button can still move the value in that direction. */
+export function canStep(value: number | null, dir: 1 | -1, unit: Unit): boolean {
+  if (value === null || !Number.isFinite(value)) return false;
+  return stepWithin(value, dir, unit) !== value;
+}
+
 export function ScaleInput(props: Props) {
   const { id, label, value, unit, locale, disabled, stepper, allowZero, decLabel, incLabel, hint, uncalibrated, onChange } = props;
   const [draft, setDraft] = useState<string | null>(null);
@@ -45,14 +76,14 @@ export function ScaleInput(props: Props) {
   const commit = (confirmDefault = false): void => {
     if (draft === null && !(confirmDefault && uncalibrated)) return;
     setDraft(null);
-    const v = draft === null || draft.trim() === shown ? value : parseNumber(draft);
+    const v = draft === null || draft.trim() === shown ? value : parseScale(draft, unit);
     if (!acceptScale(v, unit, allowZero)) return;
     if (v !== value || uncalibrated) onChange(v);
   };
 
   const step = (dir: 1 | -1): void => {
-    if (value === null) return;
-    onChange(stepScale125(value, dir));
+    if (!canStep(value, dir, unit)) return;
+    onChange(stepWithin(value!, dir, unit));
   };
 
   return (
@@ -60,7 +91,7 @@ export function ScaleInput(props: Props) {
       <label htmlFor={id}>{label}</label>
       <div className={stepper ? 'stepper' : 'stepper solo'}>
         {stepper && (
-          <button type="button" className="btn icon" aria-label={decLabel} title={decLabel} disabled={disabled || value === null} onClick={() => step(-1)}>
+          <button type="button" className="btn icon" aria-label={decLabel} title={decLabel} disabled={disabled || !canStep(value, -1, unit)} onClick={() => step(-1)}>
             <Minus size={16} aria-hidden="true" />
           </button>
         )}
@@ -84,7 +115,7 @@ export function ScaleInput(props: Props) {
           }}
         />
         {stepper && (
-          <button type="button" className="btn icon" aria-label={incLabel} title={incLabel} disabled={disabled || value === null} onClick={() => step(1)}>
+          <button type="button" className="btn icon" aria-label={incLabel} title={incLabel} disabled={disabled || !canStep(value, 1, unit)} onClick={() => step(1)}>
             <Plus size={16} aria-hidden="true" />
           </button>
         )}

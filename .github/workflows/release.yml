@@ -47,9 +47,10 @@ jobs:
         run: |
           set -euo pipefail
           smoke_dir="$(mktemp -d /tmp/graticule-cli-smoke.XXXXXX)"
+          smoke_cache="$(mktemp -d /tmp/graticule-npm-cache.XXXXXX)"
           cd "$smoke_dir"
           npm init -y >/dev/null
-          npm install --omit=dev --ignore-scripts "$GITHUB_WORKSPACE/dist-portable"/graticule-*.tgz
+          npm install --offline --cache "$smoke_cache" --omit=dev --ignore-scripts "$GITHUB_WORKSPACE/dist-portable"/graticule-*.tgz
           ./node_modules/.bin/graticule --help >/dev/null
           ./node_modules/.bin/graticule --csv --out "$smoke_dir/sine-schmitt.csv" "$GITHUB_WORKSPACE/tests/fixtures/samples/sine_schmitt.png"
           test -s "$smoke_dir/sine-schmitt.csv"

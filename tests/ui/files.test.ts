@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { filesFromDataTransfer, hasExifChunk, isImageFile, isRawPng, moveExifBeforeIdat } from '../../src/ui/files.js';
+import { filesFromDataTransfer, hasExifChunk, imageMime, isImageFile, isRawBmp, isRawPng, loadFile, moveExifBeforeIdat } from '../../src/ui/files.js';
 import { decodePng } from '../../src/core/png.js';
 import { sample } from '../core/fixtures.js';
 
@@ -175,5 +175,78 @@ describe('filesFromDataTransfer', () => {
   test('works without a skipped list', async () => {
     const files = await filesFromDataTransfer(dropOf([fileEntry('x.png', true), fileEntry('y.png')]));
     expect(files.map((f) => f.name)).toEqual(['y.png']);
+  });
+});
+
+function bmp({ dib = 40, bpp = 24, compression = 0, width = 2, height = 2, planes = 1 } = {}): Uint8Array {
+  const rle = compression === 1 || compression === 2;
+  const masks = compression === 3 && dib === 40 ? 12 : 0;
+  const palette = bpp <= 8 ? 4 * 2 ** bpp : 0;
+  const offset = 14 + dib + masks + palette;
+  const pixels = rle ? new Uint8Array([0, 1]) : new Uint8Array(Math.ceil((width * bpp) / 32) * 4 * Math.abs(height));
+  const out = new Uint8Array(offset + pixels.length);
+  const view = new DataView(out.buffer);
+  out[0] = 0x42;
+  out[1] = 0x4d;
+  view.setUint32(2, out.length, true);
+  view.setUint32(10, offset, true);
+  view.setUint32(14, dib, true);
+  view.setInt32(18, width, true);
+  view.setInt32(22, height, true);
+  view.setUint16(26, planes, true);
+  view.setUint16(28, bpp, true);
+  view.setUint32(30, compression, true);
+  if (compression === 3) {
+    const rgb = bpp === 16 ? [0xf800, 0x07e0, 0x001f] : [0xff0000, 0xff00, 0xff];
+    rgb.forEach((mask, i) => view.setUint32(54 + i * 4, mask, true));
+  }
+  out.set(pixels, offset);
+  return out;
+}
+
+describe('BMP files', () => {
+  test('keeps plain and RLE Windows bitmaps as they are', () => {
+    for (const dib of [40, 52, 56, 108, 124]) expect(isRawBmp(bmp({ dib }))).toBe(true);
+    for (const bpp of [1, 4, 8, 16, 24, 32]) expect(isRawBmp(bmp({ bpp }))).toBe(true);
+    expect(isRawBmp(bmp({ bpp: 8, compression: 1 }))).toBe(true);
+    expect(isRawBmp(bmp({ bpp: 4, compression: 2 }))).toBe(true);
+    expect(isRawBmp(bmp({ bpp: 32, compression: 3 }))).toBe(true);
+    expect(isRawBmp(bmp({ height: -2 }))).toBe(true);
+  });
+
+  test('sends unusual bitmaps through the canvas', () => {
+    expect(isRawBmp(bmp({ dib: 12 }))).toBe(false);
+    expect(isRawBmp(bmp({ dib: 64 }))).toBe(false);
+    expect(isRawBmp(bmp({ compression: 4 }))).toBe(false);
+    expect(isRawBmp(bmp({ bpp: 24, compression: 1 }))).toBe(false);
+    expect(isRawBmp(bmp({ bpp: 8, compression: 1, height: -2 }))).toBe(false);
+    expect(isRawBmp(bmp({ bpp: 2 }))).toBe(false);
+    expect(isRawBmp(bmp({ width: 0 }))).toBe(false);
+    expect(isRawBmp(bmp({ planes: 2 }))).toBe(false);
+    expect(isRawBmp(bmp().subarray(0, 40))).toBe(false);
+    expect(isRawBmp(png)).toBe(false);
+  });
+
+  test('uses the BMP type for bitmap bytes and PNG for the rest', () => {
+    expect(imageMime(bmp())).toBe('image/bmp');
+    expect(imageMime(png)).toBe('image/png');
+    expect(imageMime(new Uint8Array([0x42]))).toBe('image/png');
+  });
+
+  test('loads a plain bitmap without converting it', async () => {
+    const bytes = bmp();
+    const created: Blob[] = [];
+    const original = URL.createObjectURL;
+    URL.createObjectURL = (blob: Blob | MediaSource) => {
+      created.push(blob as Blob);
+      return 'blob:test';
+    };
+    try {
+      const loaded = await loadFile(new Blob([bytes as BlobPart]), 'scope.bmp');
+      expect(Array.from(loaded.bytes)).toEqual(Array.from(bytes));
+      expect(created[0]!.type).toBe('image/bmp');
+    } finally {
+      URL.createObjectURL = original;
+    }
   });
 });

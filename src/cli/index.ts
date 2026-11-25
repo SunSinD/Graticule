@@ -20,11 +20,12 @@ import { computeXyPlot, renderXyCsv, renderXySvg } from '../core/xy.js';
 import type { BodeRejectedCapture, ChannelId, ExtractionOverrides, ExtractionResult, Locale, ProfileId, Quad, XyAxisId } from '../core/types.js';
 
 const usage = `Usage
-  graticule capture.png [options]
+  graticule capture.png|capture.bmp [options]
   graticule --version
   graticule --bode folder [options]
-  graticule compare capture.png scope.csv [--channel C1] [--csv-column <label>] [--json]
+  graticule compare capture.png|capture.bmp scope.csv [--channel C1] [--csv-column <label>] [--json]
 
+Accepts PNG and BMP captures, including in Bode folders.
 With no output flag, prints a table. Use --out with a file path for one format
 or a directory path for multiple formats.
 
@@ -191,9 +192,9 @@ async function run(): Promise<void> {
   if (values.bode !== undefined) {
     const folder = values.bode;
     const entries = (await readdir(folder, { withFileTypes: true }))
-      .filter(entry => entry.isFile() && extname(entry.name).toLowerCase() === '.png')
+      .filter(entry => entry.isFile() && ['.png', '.bmp'].includes(extname(entry.name).toLowerCase()))
       .sort((a, b) => a.name.localeCompare(b.name, 'en', { numeric: true }));
-    if (!entries.length) throw new Error(`No PNG files in ${folder}`);
+    if (!entries.length) throw new Error(`No PNG or BMP files in ${folder}`);
     const captures: (ExtractionResult | BodeRejectedCapture)[] = [];
     for (const { name } of entries) {
       const file = join(folder, name);

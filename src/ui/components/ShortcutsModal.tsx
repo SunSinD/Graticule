@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { Dict } from '../i18n';
+import { SourceLinks } from './SourceLinks';
 
 interface Props {
   readonly tx: Dict;
@@ -80,11 +81,7 @@ export function ShortcutsModal({ tx, onClose }: Props) {
             </div>
           ))}
         </dl>
-        <p className="modal-foot">
-          <a href="https://github.com/SunSinD/Graticule" target="_blank" rel="noopener noreferrer">
-            {tx.sourceCode}
-          </a>
-        </p>
+        <SourceLinks tx={tx} className="modal-foot" />
       </div>
     </div>
   );

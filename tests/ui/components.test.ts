@@ -6,12 +6,14 @@ import { computeMathTrace } from '../../src/core/math.js';
 import { analyzePngBytes } from '../../src/core/pipeline.js';
 import type { SpectrumResult } from '../../src/core/spectrum.js';
 import type { Locale, MathConfig } from '../../src/core/types.js';
-import { ScaleControls } from '../../src/ui/components/Controls.js';
+import { ScaleControls, detectionNotes } from '../../src/ui/components/Controls.js';
 import { CropBox, QuadBox } from '../../src/ui/components/CropBox.js';
 import { CursorOverlay, CursorReadout, cursorTime, snapZero } from '../../src/ui/components/Cursors.js';
+import { EmptyState } from '../../src/ui/components/EmptyState.js';
 import { MeasurementsPanel } from '../../src/ui/components/Measurements.js';
-import { acceptScale } from '../../src/ui/components/ScaleInput.js';
+import { acceptScale, canStep, parseScale, stepWithin, unitFits } from '../../src/ui/components/ScaleInput.js';
 import { ShortcutsModal } from '../../src/ui/components/ShortcutsModal.js';
+import { OFFLINE_COPY_URL } from '../../src/ui/components/SourceLinks.js';
 import { TopBar } from '../../src/ui/components/TopBar.js';
 import { DICTS, formatWarning, t } from '../../src/ui/i18n.js';
 import { sample } from '../core/fixtures.js';
@@ -42,6 +44,50 @@ describe('acceptScale', () => {
     expect(acceptScale(0, 'V', true)).toBe(true);
     expect(acceptScale(-2.5, 'V', true)).toBe(true);
     expect(acceptScale(-1e6, 'V', true)).toBe(false);
+  });
+});
+
+describe('scale units', () => {
+  test('refuses time units in a volt field and volt units in a time field', () => {
+    for (const text of ['5 ms', '2us', '10 ns', '1 s', '1 kHz', '5ms/div']) expect(parseScale(text, 'V')).toBeNull();
+    for (const text of ['5 V', '200mV', '50 uV', '1 kHz', '2 mV/div']) expect(parseScale(text, 's')).toBeNull();
+    expect(parseScale('5 V', 'V²')).toBeNull();
+    expect(parseScale('1 A', 'V')).toBeNull();
+  });
+
+  test('keeps plain numbers, prefixes and the matching unit', () => {
+    expect(parseScale('200mV', 'V')).toBeCloseTo(0.2);
+    expect(parseScale('2 V/div', 'V')).toBe(2);
+    expect(parseScale('0.5', 'V')).toBe(0.5);
+    expect(parseScale('5m', 'V')).toBeCloseTo(0.005);
+    expect(parseScale('5 ms', 's')).toBeCloseTo(0.005);
+    expect(parseScale('10 µs/div', 's')).toBeCloseTo(1e-5);
+    expect(parseScale('3 V²', 'V²')).toBe(3);
+    expect(unitFits('5 div', 's')).toBe(true);
+  });
+});
+
+describe('scale steppers', () => {
+  test('stay inside the range the field accepts', () => {
+    expect(stepWithin(1e4, 1, 's')).toBe(1e4);
+    expect(stepWithin(5e3, 1, 's')).toBe(1e4);
+    expect(stepWithin(1e-12, -1, 'V')).toBe(1e-12);
+    expect(stepWithin(1e8, 1, 'V²')).toBe(1e8);
+    expect(canStep(1e4, 1, 's')).toBe(false);
+    expect(canStep(1e4, -1, 's')).toBe(true);
+    expect(canStep(1e-12, -1, 'V')).toBe(false);
+    expect(canStep(null, 1, 'V')).toBe(false);
+  });
+
+  test('never move the wrong way from a value already outside the range', () => {
+    expect(stepWithin(5e4, 1, 's')).toBe(5e4);
+    expect(stepWithin(5e4, -1, 's')).toBe(1e4);
+    expect(acceptScale(stepWithin(5e4, -1, 's'), 's')).toBe(true);
+  });
+
+  test('keep normal 1 2 5 steps', () => {
+    expect(stepWithin(1e-3, 1, 's')).toBe(2e-3);
+    expect(stepWithin(0.5, -1, 'V')).toBe(0.2);
   });
 });
 
@@ -179,6 +225,59 @@ describe('accessible names', () => {
     for (const key of [tx.keyCropKeys, tx.keyArrows, tx.keyShiftArrows, tx.keyEnds]) expect(html).toContain(`<kbd>${key}</kbd>`);
     for (const label of [tx.shortcutCropKeys, tx.shortcutMoveKeys, tx.shortcutBigSteps, tx.shortcutEnds]) {
       expect(html).toContain(label);
+    }
+  });
+});
+
+describe('Hantek detected grid', () => {
+  const base = {
+    profileId: 'universal-fallback' as const,
+    profileName: 'Universal Fallback',
+    matchedAnchors: [],
+    confidence: 0,
+    grid: {} as never,
+    digitalOnly: false,
+  };
+
+  test.each(['unsupported_resolution', 'native_anchors_mismatch'])('replaces %s with a clear message', (reason) => {
+    const notes = detectionNotes({ ...base, fallbackLayout: 'hantek-800x480', fallbackReason: reason, warnings: [reason] });
+    expect(notes).toEqual(['hantek_grid']);
+    expect(formatWarning(notes[0]!, 'en')).toBe('Found a Hantek grid. Type the time and volt scales shown on the scope.');
+    expect(formatWarning(notes[0]!, 'fr')).toBe('Grille Hantek trouvée. Entrez les échelles de temps et de volts affichées sur l’oscilloscope.');
+  });
+
+  test('keeps the generic message without a Hantek grid and keeps a manual crop note', () => {
+    expect(detectionNotes({ ...base, fallbackReason: 'native_anchors_mismatch', warnings: ['native_anchors_mismatch'] })).toEqual([
+      'native_anchors_mismatch',
+    ]);
+    expect(detectionNotes({ ...base, fallbackLayout: 'hantek-800x480', fallbackReason: 'manual_crop', warnings: ['manual_crop'] })).toEqual([
+      'manual_crop',
+    ]);
+  });
+});
+
+describe('offline copy link', () => {
+  test.each(['en', 'fr'] as const)('sits next to the source link in the empty page and shortcuts list in %s', (locale) => {
+    const tx = t(locale);
+    for (const html of [
+      renderToStaticMarkup(createElement(EmptyState, { tx, onAdd: noop })),
+      renderToStaticMarkup(createElement(ShortcutsModal, { tx, onClose: noop })),
+    ]) {
+      expect(html).toContain(`href="${OFFLINE_COPY_URL}" target="_blank" rel="noopener noreferrer">${tx.offlineCopy}</a>`);
+      expect(html.indexOf(tx.sourceCode)).toBeLessThan(html.indexOf(tx.offlineCopy));
+      expect(html).not.toMatch(/[•·–—]/);
+    }
+  });
+
+  test('is hidden in the portable file', () => {
+    const g = globalThis as { __GRATICULE_PORTABLE__?: boolean };
+    g.__GRATICULE_PORTABLE__ = true;
+    try {
+      const tx = t('en');
+      expect(renderToStaticMarkup(createElement(EmptyState, { tx, onAdd: noop }))).not.toContain(OFFLINE_COPY_URL);
+      expect(renderToStaticMarkup(createElement(ShortcutsModal, { tx, onClose: noop }))).not.toContain(OFFLINE_COPY_URL);
+    } finally {
+      delete g.__GRATICULE_PORTABLE__;
     }
   });
 });

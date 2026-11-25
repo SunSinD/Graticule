@@ -264,14 +264,14 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
     }
     const cx = mapX(grid.centerX);
     const cy = mapY(grid.centerY);
-    for (const x of minorTicks(grid.left, grid.right, grid.vLines[0] ?? grid.left, grid.pxPerHDiv)) {
+    for (const x of minorTicks(grid.left, grid.right, grid.vLines[0] ?? grid.centerX, grid.pxPerHDiv)) {
       const xx = mapX(x);
-      g.push(line(xx, cy - 3, xx, cy + 3, pal.soft, 1));
+      if (cy >= y0 && cy <= y1) g.push(line(xx, cy - 3, xx, cy + 3, pal.soft, 1));
     }
     const majorY = grid.hLines[Math.floor(grid.hLines.length / 2)] ?? grid.centerY;
     for (const y of minorTicks(grid.top, grid.bottom, majorY, grid.pxPerVDiv)) {
       const yy = mapY(y);
-      g.push(line(cx - 3, yy, cx + 3, yy, pal.soft, 1));
+      if (cx >= x0 && cx <= x1) g.push(line(cx - 3, yy, cx + 3, yy, pal.soft, 1));
     }
     out.push(`<g aria-hidden="true">${g.join('')}</g>`);
   }
@@ -317,7 +317,7 @@ export function renderWaveformSvg(result: ExtractionResult, options: SvgExportOp
     const left = idx === 0;
     const ax = left ? x0 : x1;
     for (const [j, y] of grid.hLines.entries()) {
-      const yy = mapY(y);
+      const yy = mapY(Math.max(grid.top, y));
       ticks.push(line(ax, yy, left ? ax - 4 : ax + 4, yy, pal.ink, 1));
       if (j % voltageLabelStride !== 0) continue;
       const v = frame.voltAt(tr.channel, (y - grid.top) / gh)!;

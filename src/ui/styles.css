@@ -1324,8 +1324,16 @@ input.tiny {
   opacity: 0.6;
 }
 
+.empty-links {
+  margin: -8px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 12px;
+  max-width: 100%;
+}
+
 .empty-source {
-  margin-top: -8px;
   padding: 4px 8px;
   font-size: 12px;
   color: var(--muted);
@@ -1439,6 +1447,9 @@ input.tiny {
 }
 
 .modal-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
   margin: 16px 0 0;
   padding-top: 12px;
   border-top: 1px solid var(--line);

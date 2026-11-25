@@ -40,6 +40,8 @@ test('portable file loads and extracts without page or console errors', async ({
 
   await page.goto(pathToFileURL(portable).href);
   await expect(page.getByText('History is kept for this session only.')).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Source code on GitHub' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Offline copy' })).toHaveCount(0);
   await page.locator('[data-testid="file-input"]').setInputFiles([sample]);
   await page.getByRole('button', { name: 'Extract', exact: true }).click();
   await expect(page.locator('.paper svg')).toBeVisible({ timeout: 10_000 });
@@ -65,6 +67,7 @@ test('first visit becomes available offline and extracts after reload', async ({
 
   await page.goto('/');
   await expect(page.locator('[data-testid="file-input"]')).toBeAttached();
+  await expect(page.getByRole('link', { name: 'Offline copy' })).toBeVisible();
   await page.evaluate(async () => {
     await navigator.serviceWorker.ready;
   });

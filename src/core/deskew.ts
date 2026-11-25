@@ -13,9 +13,9 @@ export function rectangleFromQuad(quad: Quad): Rect | null {
   return { x: tl.x, y: tl.y, width: br.x - tl.x, height: br.y - tl.y };
 }
 
-export function cropFollowsGridAxis(start: number, end: number, first: number, last: number, center: number, pitch: number): boolean {
+export function cropFollowsGridAxis(start: number, end: number, first: number, last: number, _center: number, pitch: number): boolean {
   const tick = pitch / 5;
-  return start >= first - tick && end <= last + tick && start < center && end > center;
+  return start >= first - tick && end <= last + tick && start < end;
 }
 
 const maxSide = 4096;

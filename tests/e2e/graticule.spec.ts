@@ -6,6 +6,7 @@ import { test, expect, type Page } from '@playwright/test';
 
 const FIXTURES = path.resolve('tests/fixtures/samples');
 const SINE = path.join(FIXTURES, 'sine_schmitt.png');
+const OFFLINE_COPY = 'https://github.com/SunSinD/Graticule/releases/latest/download/graticule-portable.html';
 const SWEEP = Array.from({ length: 10 }, (_, i) => path.join(FIXTURES, `sweep_${String(i + 1).padStart(2, '0')}.png`));
 const PHONE = {
   hasTouch: true,
@@ -889,6 +890,8 @@ test('reopening and widening a Hantek crop restores the detected guides', async 
   await addFiles(page, [{ name: 'hantek.png', mimeType: 'image/png', buffer: Buffer.from(base64, 'base64') }]);
   await page.getByRole('button', { name: 'Extract', exact: true }).click();
   await expect(page.getByTestId('measurement-summary')).toBeVisible();
+  await expect(page.locator('.note', { hasText: 'Found a Hantek grid. Type the time and volt scales shown on the scope.' })).toHaveCount(1);
+  await expect(page.locator('.note', { hasText: 'not recognized' })).toHaveCount(0);
   await page.keyboard.press('1');
   const crop = page.getByRole('button', { name: 'Crop', exact: true });
   const box = page.getByTestId('crop-box');
@@ -1801,18 +1804,87 @@ test('the shortcuts panel links to the source code and keeps the link inside its
   await expect(link).toHaveAttribute('href', 'https://github.com/SunSinD/Graticule');
   await expect(link).toHaveAttribute('target', '_blank');
   await expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  const offline = dialog.getByRole('link', { name: 'Offline copy' });
+  await expect(offline).toHaveAttribute('href', OFFLINE_COPY);
+  await expect(offline).toHaveAttribute('target', '_blank');
+  await expect(offline).toHaveAttribute('rel', 'noopener noreferrer');
+  await expect(dialog.locator('.modal-foot')).not.toContainText(/[•·–—]/);
   const close = dialog.getByRole('button', { name: 'Close' });
   await close.focus();
   await page.keyboard.press('Tab');
   await expect(link).toBeFocused();
   await page.keyboard.press('Tab');
+  await expect(offline).toBeFocused();
+  await page.keyboard.press('Tab');
   await expect(close).toBeFocused();
   await page.keyboard.press('Shift+Tab');
-  await expect(link).toBeFocused();
+  await expect(offline).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
 
   await page.getByRole('button', { name: 'FR', exact: true }).click();
   await page.keyboard.press('?');
   await expect(page.getByRole('dialog').getByRole('link', { name: 'Code source sur GitHub' })).toBeVisible();
+  await expect(page.getByRole('dialog').getByRole('link', { name: 'Copie hors ligne' })).toBeVisible();
+});
+
+test('the empty page shows a quiet offline copy link next to the source link on desktop and phones', async ({ page, browser }) => {
+  const links = page.locator('.empty-links');
+  await expect(links.getByRole('link', { name: 'Source code on GitHub' })).toBeVisible();
+  await expect(links.getByRole('link', { name: 'Offline copy' })).toHaveAttribute('href', OFFLINE_COPY);
+  await expect(links).not.toContainText(/[•·–—]/);
+
+  for (const viewport of [{ width: 360, height: 640 }, { width: 390, height: 844 }]) {
+    const ctx = await browser.newContext({ ...PHONE, viewport });
+    const phone = await ctx.newPage();
+    await phone.goto('/');
+    for (const lang of ['EN', 'FR']) {
+      if (lang === 'FR') await phone.getByRole('button', { name: 'FR', exact: true }).click();
+      const offline = phone.getByRole('link', { name: lang === 'FR' ? 'Copie hors ligne' : 'Offline copy' });
+      await expect(offline).toBeVisible();
+      const box = await offline.boundingBox();
+      expect(box && box.x >= 0 && box.x + box.width <= viewport.width, `${lang} ${viewport.width}`).toBe(true);
+      expect(await phone.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
+    }
+    await ctx.close();
+  }
+});
+
+test('a scale field refuses units from the other kind of field', async ({ page }) => {
+  await extractSine(page);
+  const time = page.locator('#time-div');
+  const vdiv = page.locator('#vdiv-C1');
+  for (const [field, texts] of [[time, ['5 mV', '2 V', '1 kHz']], [vdiv, ['2 ms', '5 us', '10 ns', '1 s', '1 kHz']]] as const) {
+    for (const text of texts) {
+      const before = await field.inputValue();
+      await field.fill(text);
+      await field.press('Enter');
+      await expect(field, text).toHaveValue(before);
+    }
+  }
+  await time.fill('5 ms');
+  await time.press('Enter');
+  await expect(time).toHaveValue(/^5\s?ms$/);
+});
+
+test('scale steppers stop at the largest and smallest scale a field accepts', async ({ page }) => {
+  await extractSine(page);
+  const time = page.locator('#time-div');
+  const plus = page.getByRole('button', { name: 'Increase Time/div' });
+  const minus = page.getByRole('button', { name: 'Decrease Time/div' });
+  await time.fill('10000');
+  await time.press('Enter');
+  await expect(plus).toBeDisabled();
+  const top = await time.inputValue();
+  await minus.click();
+  await expect(time).not.toHaveValue(top);
+  await expect(plus).toBeEnabled();
+  await plus.click();
+  await expect(time).toHaveValue(top);
+  await expect(plus).toBeDisabled();
+
+  const vdiv = page.locator('#vdiv-C1');
+  await vdiv.fill('1p');
+  await vdiv.press('Enter');
+  await expect(page.getByRole('button', { name: 'Decrease C1 scale' })).toBeDisabled();
 });
