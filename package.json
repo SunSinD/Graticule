@@ -1,6 +1,6 @@
 {
   "name": "graticule",
-  "version": "2.0.9",
+  "version": "2.0.10",
   "description": "A clean tool that turns oscilloscope screenshots into plots and data.",
   "author": "SunSinD",
   "license": "MIT",
@@ -37,7 +37,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "fflate": "^0.8.2"
+    "fflate": "0.8.3"
   },
   "bundleDependencies": [
     "fflate"

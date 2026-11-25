@@ -16,12 +16,13 @@ function readHeader(bytes: Uint8Array) {
   if (!hasBmpSignature(bytes)) invalid('bad signature');
   if (bytes.length < 18) invalid('buffer too short');
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const fileSize = view.getUint32(2, true);
+  const declaredSize = view.getUint32(2, true);
+  const fileSize = declaredSize === 0 || declaredSize > bytes.length ? bytes.length : declaredSize;
   const offset = view.getUint32(10, true);
   const headerSize = view.getUint32(14, true);
   if (![12, 40, 52, 56, 108, 124].includes(headerSize)) throw new Error('Unsupported BMP DIB header');
   const headerEnd = 14 + headerSize;
-  if (fileSize > bytes.length || fileSize < headerEnd || offset < headerEnd || offset > fileSize) {
+  if (fileSize < headerEnd || offset < headerEnd || offset > fileSize) {
     invalid('truncated header or invalid pixel offset/file size');
   }
   const core = headerSize === 12;
@@ -185,6 +186,11 @@ export function decodeBmp(bytes: Uint8Array): RgbaImage {
           }
         }
       }
+    }
+    if (depth === 32 && components[3]) {
+      let transparent = true;
+      for (let i = 3; i < data.length && transparent; i += 4) if (data[i]) transparent = false;
+      if (transparent) for (let i = 3; i < data.length; i += 4) data[i] = 255;
     }
   }
   return { width, height, data };

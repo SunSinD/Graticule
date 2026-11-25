@@ -329,7 +329,7 @@ const MIME: Record<string, string> = {
 async function releaseServer() {
   const dist = path.resolve(root, 'dist');
   let worker = builtWorker().source;
-  const virtual = new Map<string, { body: string; type: string; status: number }>();
+  const virtual = new Map<string, { body: string; type: string; status: number; cacheControl: string }>();
   const holds = new Map<string, { gate: Promise<void>; seen: () => void; open: () => void }>();
   const server = http.createServer(async (request, response) => {
     const requested = decodeURIComponent(new URL(request.url ?? '/', 'http://localhost').pathname);
@@ -341,7 +341,7 @@ async function releaseServer() {
     }
     const served = virtual.get(pathname);
     if (served !== undefined) {
-      response.writeHead(served.status, { 'Content-Type': served.type, 'Cache-Control': 'no-store' });
+      response.writeHead(served.status, { 'Content-Type': served.type, 'Cache-Control': served.cacheControl });
       response.end(served.body);
       return;
     }
@@ -370,8 +370,8 @@ async function releaseServer() {
       worker = source;
     },
     /** Serves a small file at this path instead of the one in dist, a script unless `type` says otherwise. */
-    serve: (pathname: string, source: string, type = 'text/javascript', status = 200) => {
-      virtual.set(pathname, { body: source, type, status });
+    serve: (pathname: string, source: string, type = 'text/javascript', status = 200, cacheControl = 'no-store') => {
+      virtual.set(pathname, { body: source, type, status, cacheControl });
     },
     /** Holds every request for this path until `release` is called. `requested` resolves on the first one. */
     hold: (pathname: string) => {
@@ -656,6 +656,25 @@ test('reloading the only tab while a newer build precaches never deletes that bu
     expect(await settleWorker(page)).toBe('activated');
     expect(await cacheNames(page)).toContain('graticule-vB-test');
     expect(await hasCompletePage(page, 'graticule-vB-test')).toBe(true);
+  });
+});
+
+test('a newer build precaches the new page even when the HTTP cache still holds the old one', async ({ browser }) => {
+  await withRelease(browser, async (release, _context, page) => {
+    const html = 'text/html; charset=utf-8';
+    const oldPage = '<!doctype html><title>old page</title>';
+    const newPage = '<!doctype html><title>new page</title>';
+    release.serve('/index.html', oldPage, html, 200, 'public, max-age=600');
+    expect(await page.evaluate(async () => (await fetch('./index.html')).text())).toBe(oldPage);
+    release.serve('/index.html', newPage, html, 200, 'public, max-age=600');
+    expect(await page.evaluate(async () => (await fetch('./index.html')).text())).toBe(oldPage);
+
+    expect(await updateWorker(release, page, workerFor('graticule-vN-test'))).toBe('activated');
+    const cached = await page.evaluate(async () => {
+      const hit = await caches.match('./index.html', { cacheName: 'graticule-vN-test' });
+      return hit ? hit.text() : null;
+    });
+    expect(cached).toBe(newPage);
   });
 });
 

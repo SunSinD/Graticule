@@ -19,7 +19,8 @@ function escapeHtml(text: string): string {
 }
 
 function escapeMarkdown(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/[\\_*[\]<>|`]/g, '\\$&').replace(/[\r\n]+/g, ' ');
+  return text.replace(/&/g, '&amp;').replace(/[~$]/g, char => '&#' + char.charCodeAt(0) + ';')
+    .replace(/[\\_*[\]<>|`]/g, '\\$&').replace(/[\r\n]+/g, ' ');
 }
 
 function escapeTsv(text: string): string {
@@ -79,7 +80,7 @@ const LATEX_CHARS: Readonly<Record<string, string>> = {
 function renderLatex(tables: readonly Table[]): string {
   const escape = (value: string) => value.replace(/[\t\r\n]+/g, ' ')
     .replace(/[\\{}&%$#_~^°µμ–—−Δ→≤<>|]/g, char => LATEX_CHARS[char]!);
-  const row = (cells: readonly string[]) => cells.map(escape).join(' & ').replace(/^(\s*)(\*?)\[/, '$1$2{[}') + ' \\\\';
+  const row = (cells: readonly string[]) => cells.map(escape).join(' & ').replace(/^(\s*)([*[])/, '$1{$2}') + ' \\\\';
   return tables.map(table => [
     '\\begin{table}[ht]', '\\centering', '\\caption{' + escape(table.caption) + '}',
     '\\begin{tabular}{' + table.head.map((_, i) => i >= table.numericFrom ? 'r' : 'l').join('') + '}',

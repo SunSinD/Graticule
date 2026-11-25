@@ -235,7 +235,7 @@ describe('command line', () => {
     const result = cli(flag);
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(`${GRATICULE_VERSION}\n`);
-    expect(GRATICULE_VERSION).toBe('2.0.9');
+    expect(GRATICULE_VERSION).toBe('2.0.10');
     expect(cli('--help').stdout).toContain('--version | -v');
   });
 
@@ -293,6 +293,25 @@ describe('command line', () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toMatch(/--fft timebase.*sample rate exceeds the numeric range/);
     expect(result.stdout).toBe('');
+  });
+
+  test('keeps UART frame boundaries distinct with a large trigger offset', () => {
+    const csv = cli(uartInput, '--decode', 'uart', '--baud', '9600', '--sec-per-div', '1.0416667ms', '--trigger-offset', '1000s', '--csv');
+    expect(csv.status, csv.stderr).toBe(0);
+    const times = csv.stdout.trim().split('\n').slice(1).flatMap(line => line.split(',').slice(0, 2));
+    expect(times).toHaveLength(4);
+    expect(new Set(times).size).toBe(4);
+    expect(times.map(Number).every((time, i, all) => i === 0 || time > all[i - 1]!)).toBe(true);
+  });
+
+  test('treats an --out path ending with a separator as a directory for one format', () => {
+    for (const separator of ['/', '\\']) {
+      if (separator === '\\' && process.platform !== 'win32') continue;
+      const directory = join(root, `slash-out-${separator === '/' ? 'forward' : 'back'}`);
+      const result = cli(input, '--csv', '--out', directory + separator);
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(join(directory, 'capture.csv'), 'utf8')).toContain('time_s,');
+    }
   });
 
   test('protects original inputs, including hardlink aliases', () => {

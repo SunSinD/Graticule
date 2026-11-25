@@ -239,6 +239,14 @@ describe('Bode sine fit', () => {
     });
   });
 
+  test('does not report a later bounce once the response already fell below target across a rejected gap', () => {
+    const result = analyzeBodeBatch([
+      pair(100, 1, 0), { fileName: '200 Hz.png', rejectionReason: 'capture_unreadable' },
+      pair(400, 1, 0), pair(800, 1, 0), pair(1600, 1, 0),
+    ], {}, { '400 Hz.png': { gainDb: -10 }, '800 Hz.png': { gainDb: 0 }, '1600 Hz.png': { gainDb: -10 } });
+    expect(result).toMatchObject({ passbandGainDb: 0, cutoffLowHz: null, cutoffHighHz: null, cutoffHz: null });
+  });
+
   test('averages accepted gains at duplicate frequencies before interpolation', () => {
     const points = [[100, 0], [200, 0], [200, -8], [200, 12], [400, -10]] as const;
     const rows = points.map(([frequencyHz, gainDb], index) => ({

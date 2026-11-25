@@ -66,6 +66,28 @@ describe('BMP decoding', () => {
     }
   });
 
+  test('treats an all-zero explicit alpha channel as opaque but keeps partial alpha', () => {
+    const masks = [0xff0000, 0xff00, 0xff, 0xff000000];
+    const zero = bmp(2, 1, 32, [0, 0, 255, 0, 0, 255, 0, 0], { compression: 3, masks, headerSize: 56 });
+    expect(decodeBmp(zero).data).toEqual(Uint8ClampedArray.from([...red, ...green]));
+    const partial = bmp(2, 1, 32, [0, 0, 255, 0, 0, 255, 0, 64], { compression: 3, masks, headerSize: 56 });
+    expect(decodeBmp(partial).data).toEqual(Uint8ClampedArray.of(255, 0, 0, 0, 0, 255, 0, 64));
+  });
+
+  test('falls back to the buffer length for a zero or oversized header file size', () => {
+    for (const size of [0, 999]) {
+      const bytes = bmp(1, 1, 24, [0, 0, 255, 0]);
+      bytes.writeUInt32LE(size, 2);
+      expect(isSupportedBmpHeader(bytes)).toBe(true);
+      expect(decodeBmp(bytes).data).toEqual(Uint8ClampedArray.from(red));
+      const truncated = bytes.subarray(0, bytes.length - 1);
+      expect(() => decodeBmp(truncated)).toThrow(/truncated/);
+      const badOffset = Buffer.from(bytes);
+      badOffset.writeUInt32LE(bytes.length + 1, 10);
+      expect(() => decodeBmp(badOffset)).toThrow(/BMP/);
+    }
+  });
+
   test('decodes RLE8 runs, absolute mode, deltas, and EOL', () => {
     const bytes = bmp(4, 3, 8, [4, 1, 0, 0, 0, 2, 1, 0, 3, 2, 0, 0, 0, 3, 3, 2, 1, 0, 1, 3, 0, 1],
       { compression: 1, palette });
@@ -83,7 +105,7 @@ describe('BMP decoding', () => {
 
   test('rejects malformed headers, truncated pixels, incompatible compression, and excessive dimensions', () => {
     const valid = bmp(1, 1, 24, [0, 0, 255, 0]);
-    const headerChanges: [number, number][] = [[2, 999], [10, 20], [14, 41], [18, 0], [22, 0], [18, 16384], [30, 1]];
+    const headerChanges: [number, number][] = [[2, 20], [10, 20], [14, 41], [18, 0], [22, 0], [18, 16384], [30, 1]];
     for (const [offset, value] of headerChanges) {
       const invalid = Buffer.from(valid);
       invalid.writeUInt32LE(value, offset);

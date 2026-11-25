@@ -229,8 +229,10 @@ function summarize(points: BodePoint[], options: Required<BodeGateOptions>, elap
   function cutoff(start: BodeFrequency | undefined, step: -1 | 1): number | null {
     if (!start || cutoffTargetDb === null) return null;
     for (let i = frequencies.indexOf(start); i + step >= 0 && i + step < frequencies.length; i += step) {
-      const crossing = interpolateCutoff(frequencies[i]!, frequencies[i + step]!, cutoffTargetDb);
+      const next = frequencies[i + step]!;
+      const crossing = interpolateCutoff(frequencies[i]!, next, cutoffTargetDb);
       if (crossing !== null) return crossing;
+      if (next.gainDb !== null && next.gainDb < cutoffTargetDb) return null;
     }
     return null;
   }

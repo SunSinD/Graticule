@@ -224,6 +224,8 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [fileNote, setFileNote] = useState<string | null>(null);
   const [feedback, setFeedback] = useState('');
+  // Captures whose last save did not fit in browser storage, so they will not survive a reload.
+  const [unsavedIds, setUnsavedIds] = useState<ReadonlySet<string>>(() => new Set());
 
   const [items, setItems] = useState<readonly HistoryItem[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -266,6 +268,8 @@ export function App() {
   const failedSave = useRef<Map<string, HistoryItem>>(new Map());
   // Captures deleted or cleared on disk by another tab. They stay in this session but are never saved again.
   const goneOnDisk = useRef<Set<string>>(new Set());
+  // Goes up on every Clear, so a history load that started before it never brings cleared captures back.
+  const clearGen = useRef(0);
   const batchRef = useRef(false);
   const batchTokenRef = useRef(0);
   const mathByIdRef = useRef<Readonly<Record<string, MathConfig>>>({});
@@ -352,8 +356,19 @@ export function App() {
     for (const i of list) pendingUrls.current.set(i.url, before);
   };
 
+  const markUnsaved = (id: string, unsaved: boolean): void => {
+    setUnsavedIds((prev) => {
+      if (prev.has(id) === unsaved) return prev;
+      const next = new Set(prev);
+      if (unsaved) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+
   useEffect(() => {
     let cancelled = false;
+    const gen = clearGen.current;
     void (async () => {
       let store: HistoryStore | null = null;
       try {
@@ -367,7 +382,7 @@ export function App() {
         setHistoryReady(true);
         return;
       }
-      if (readPref('graticule.keepHistory') === '0') {
+      if (readPref('graticule.keepHistory') === '0' || clearGen.current !== gen) {
         try {
           await store.clear();
         } catch {
@@ -382,6 +397,17 @@ export function App() {
         }
         if (cancelled) {
           releaseItems(loaded);
+          return;
+        }
+        // Cleared while the load ran, so what it read is already gone.
+        if (clearGen.current !== gen) {
+          releaseItems(loaded);
+          try {
+            await store.clear();
+          } catch {
+            /* nothing to clear when storage is blocked */
+          }
+          if (!cancelled) setHistoryReady(true);
           return;
         }
         persisted.current = new Map(loaded.map((i) => [i.id, i]));
@@ -435,6 +461,7 @@ export function App() {
           persisted.current.delete(id);
           failedSave.current.delete(id);
           cancelCursorSave(id);
+          markUnsaved(id, false);
           return;
         }
         for (const gone of evicted) {
@@ -445,10 +472,14 @@ export function App() {
           if (live) failedSave.current.set(gone, live);
         }
         if (!ok) {
-          if (saveSeq.current.get(id) === seq) failedSave.current.set(id, item);
+          if (saveSeq.current.get(id) === seq) {
+            failedSave.current.set(id, item);
+            markUnsaved(id, true);
+          }
           return;
         }
         failedSave.current.delete(id);
+        markUnsaved(id, false);
         // This save carried the newest cursor move, so that move no longer waits on its own.
         if (storeRef.current === store && pendingCursors.current.get(id)?.cursors === item.cursors) cancelCursorSave(id);
         const latest = itemsRef.current.find((i) => i.id === id);
@@ -781,6 +812,8 @@ export function App() {
     inFlightSave.current.clear();
     failedSave.current.clear();
     goneOnDisk.current.clear();
+    clearGen.current += 1;
+    setUnsavedIds(new Set());
     for (const timer of cursorSaves.current.values()) window.clearTimeout(timer);
     cursorSaves.current.clear();
     pendingCursors.current.clear();
@@ -805,6 +838,7 @@ export function App() {
     inFlightSave.current.clear();
     failedSave.current.clear();
     goneOnDisk.current.clear();
+    setUnsavedIds(new Set());
     for (const timer of cursorSaves.current.values()) window.clearTimeout(timer);
     cursorSaves.current.clear();
     pendingCursors.current.clear();
@@ -1487,6 +1521,7 @@ export function App() {
   // Only a capture's own read or extraction error gets the "could not read this file" prefix.
   const fileError = mode === 'single' ? activeItem?.error ?? null : session?.error ?? null;
   const error = notice ?? (fileError ? `${tx.error}: ${fileError}` : null);
+  const historyFull = keepHistory && items.some((i) => unsavedIds.has(i.id));
 
   const toggleTheme = (): void => {
     const next: Theme = dark ? 'light' : 'dark';
@@ -1819,6 +1854,11 @@ export function App() {
         {error && (
           <p className="error" role="alert">
             {error}
+          </p>
+        )}
+        {historyFull && (
+          <p className="status small muted" role="status" data-testid="history-full">
+            {tx.historyFull}
           </p>
         )}
         {status && (

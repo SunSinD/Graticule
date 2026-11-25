@@ -31,7 +31,7 @@ function spacedTimeTicks(svg: string): string[] {
 
 describe('waveform exports', () => {
   test('formats engineering scales with optional units per division and rejects overflow', () => {
-    expect(GRATICULE_VERSION).toBe('2.0.9');
+    expect(GRATICULE_VERSION).toBe('2.0.10');
     expect(parseEngineering('5 mV/div')).toBe(0.005);
     expect(parseEngineering('5 V²')).toBe(5);
     expect(parseEngineering('200 mV²')).toBe(0.2);
@@ -208,7 +208,7 @@ describe('waveform exports', () => {
   test('adds an optional sanitized Bode title in CSV and a custom caption in LaTeX', () => {
     const bode = analyzeBodeBatch([result]);
     expect(renderBodeCsv(bode, 'Sweep, =1+1').split('\n').slice(0, 2)).toEqual([
-      '# Graticule v2.0.9', "# title: Sweep,' =1+1",
+      '# Graticule v2.0.10', "# title: Sweep,' =1+1",
     ]);
     expect(renderBodeCsv(bode, 'Run,"Probe\r\nA"')).toContain('# title: Run,\u201dProbe A\u201d\n');
     expect(renderBodeCsv(bode, ' \t ')).toBe(renderBodeCsv(bode));
@@ -358,11 +358,39 @@ describe('waveform exports', () => {
     ]));
     expect(renderBodeTable(bode, 'tsv', 'en')).toMatch(/'@sample\.png\t[^\n]*\t-4\.50\t/);
     expect(renderBodeTable(bode, 'latex', 'en')).toContain('\n{[}sample.png &');
-    expect(renderBodeTable(bode, 'latex', 'en')).toContain('\n *{[}sample.png &');
+    expect(renderBodeTable(bode, 'latex', 'en')).toContain('\n {*}[sample.png &');
     const header = renderWaveformCsv(result, { C1: '=1+1', C2: '\tprobe' }).split('\n').find(line => line.startsWith('time_s'));
     expect(header).toBe("time_s,'=1+1_v,'=1+1_status,'\tprobe_v,'\tprobe_status");
     for (const prefix of ['=', '+', '-', '@', '\t']) expect(csvField(`${prefix}probe`)).toBe(`'${prefix}probe`);
     expect(csvField('\rprobe')).toBe('"\'\rprobe"');
+  });
+
+  test('quotes semicolon fields for French spreadsheet imports', () => {
+    expect(csvField('Entrée; sortie')).toBe('"Entrée; sortie"');
+    expect(renderWaveformCsv(result, { C1: 'A;B' }).split('\n').find(line => line.startsWith('time_s')))
+      .toContain(',"A;B_v","A;B_status",');
+  });
+
+  test('keeps small voltage changes on a large DC offset relative to the channel resolution', () => {
+    const traces = result.traces.map(trace => trace.channel !== 'C1' ? trace : {
+      ...trace, settings: { ...trace.settings, voltsPerDiv: 0.01 },
+      samples: trace.samples.map(s => s.status === 'ok' ? { ...s, voltage: 100 + (s.col % 2 ? 0.0004 : 0) } : s),
+    });
+    const csv = renderWaveformCsv({ ...result, traces });
+    const values = csv.split('\n').filter(line => /^-?\d/.test(line)).map(line => line.split(',')[1]).filter(Boolean);
+    expect(new Set(values)).toEqual(new Set(['100', '100.0004']));
+    const normal = renderWaveformCsv(result).split('\n').filter(line => /^-?\d/.test(line)).map(line => line.split(',')[1]!);
+    expect(normal.filter(Boolean).every(value => value.replace(/^-|\.|e.*$/g, '').replace(/^0+/, '').length <= 6)).toBe(true);
+  });
+
+  test('escapes Markdown strikethrough and math delimiters and LaTeX leading stars', () => {
+    const markdown = renderTables([{ caption: '~~old~~ $V$', head: ['~a', '$b'], rows: [['x~y', '$1']], numericFrom: 1 }], 'markdown');
+    expect(markdown).toContain('**&#126;&#126;old&#126;&#126; &#36;V&#36;**');
+    expect(markdown).toContain('| &#126;a | &#36;b |');
+    expect(markdown).not.toMatch(/[~$]/);
+    const latex = renderTables([{ caption: 'c', head: ['h', 'v'], rows: [['*probe', '1'], [' *x', '2']], numericFrom: 1 }], 'latex');
+    expect(latex).toContain('\n{*}probe & 1 \\\\');
+    expect(latex).toContain('\n {*}x & 2 \\\\');
   });
 
   test('provides a value column for empty measurement tables', () => {

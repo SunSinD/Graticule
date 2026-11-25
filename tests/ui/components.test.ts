@@ -6,7 +6,7 @@ import { computeMathTrace } from '../../src/core/math.js';
 import { analyzePngBytes } from '../../src/core/pipeline.js';
 import type { SpectrumResult } from '../../src/core/spectrum.js';
 import type { Locale, MathConfig } from '../../src/core/types.js';
-import { ScaleControls, detectionNotes } from '../../src/ui/components/Controls.js';
+import { ProfilePanel, ScaleControls, detectionNotes } from '../../src/ui/components/Controls.js';
 import { CropBox, QuadBox } from '../../src/ui/components/CropBox.js';
 import { CursorOverlay, CursorReadout, cursorTime, snapZero } from '../../src/ui/components/Cursors.js';
 import { EmptyState } from '../../src/ui/components/EmptyState.js';
@@ -253,6 +253,41 @@ describe('Hantek detected grid', () => {
     expect(detectionNotes({ ...base, fallbackLayout: 'hantek-800x480', fallbackReason: 'manual_crop', warnings: ['manual_crop'] })).toEqual([
       'manual_crop',
     ]);
+  });
+});
+
+describe('profile badge', () => {
+  const detection = {
+    profileId: 'universal-fallback' as const,
+    profileName: 'Universal Fallback',
+    matchedAnchors: [],
+    confidence: 0.42,
+    grid: {} as never,
+    digitalOnly: false,
+    warnings: [],
+  };
+  const render = (locale: Locale, d: object): string =>
+    renderToStaticMarkup(
+      createElement(ProfilePanel, { tx: t(locale), choice: 'auto', result: { detection: d } as never, onChoice: noop }),
+    );
+
+  test('names the fallback profile in the chosen language', () => {
+    const fr = render('fr', detection);
+    expect(fr).toContain('<span>Universel</span>');
+    expect(fr).not.toContain('Universal Fallback');
+    expect(render('en', detection)).toContain('<span>Universal</span>');
+  });
+
+  test('keeps the real name of a detected scope profile', () => {
+    expect(render('fr', { ...detection, profileId: 'siglent-sds1000x-e', profileName: 'Siglent SDS1000X-E' })).toContain(
+      '<span>Siglent SDS1000X-E</span>',
+    );
+  });
+});
+
+describe('storage full notice', () => {
+  test.each(['en', 'fr'] as const)('exists in %s', (locale) => {
+    expect(DICTS[locale].historyFull.length).toBeGreaterThan(20);
   });
 });
 

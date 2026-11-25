@@ -325,6 +325,23 @@ describe('history store writes across tabs', () => {
     expect(db.data.has('a')).toBe(false);
   });
 
+  test('a title saved in one tab and a channel label saved from a stale copy in another both survive', async () => {
+    const db = new FakeDb(1000);
+    seed(db, [{ ...item('r1', 10, 1), title: 'Old title', channelLabels: { C1: 'Old C1' } }]);
+    const tabA = idbStore(db as unknown as IDBDatabase);
+    const tabB = idbStore(db as unknown as IDBDatabase);
+    const [a] = await tabA.loadAll();
+    const [b] = await tabB.loadAll();
+    expect((await tabA.put({ ...a!, title: 'New title' })).ok).toBe(true);
+    expect((await tabB.put({ ...b!, channelLabels: { C1: 'Input' } })).ok).toBe(true);
+    expect(db.data.get('r1')).toMatchObject({ title: 'New title', channelLabels: { C1: 'Input' } });
+
+    // A later rename from the copy that only changed labels still lands, and keeps the label.
+    expect((await tabB.put({ ...b!, channelLabels: { C1: 'Input' }, title: 'Tab B title' })).ok).toBe(true);
+    expect((await tabA.put({ ...a!, title: 'New title', channelLabels: { C2: 'Output' } })).ok).toBe(true);
+    expect(db.data.get('r1')).toMatchObject({ title: 'Tab B title', channelLabels: { C2: 'Output' } });
+  });
+
   test('saves still work when the browser refuses Web Locks', async () => {
     vi.stubGlobal('navigator', {
       locks: { request: () => Promise.reject(new DOMException('Access to the Locks API is denied', 'SecurityError')) },

@@ -627,6 +627,55 @@ test('shortcuts dialog keeps keyboard focus inside while open', async ({ page })
   await expect(dialog).toBeHidden();
 });
 
+test('desktop channel cards show a full V/div value such as 500 mV or 1.25 V', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await extractSine(page);
+  const inputs = page.locator('.channels input[id^="vdiv-"]');
+  await expect(inputs.first()).toBeVisible();
+  for (const locale of ['EN', 'FR']) {
+    await page.getByRole('button', { name: locale, exact: true }).click();
+    const count = await inputs.count();
+    expect(count).toBeGreaterThan(0);
+    for (const value of ['500 mV', '1.25 V']) {
+      for (let i = 0; i < count; i++) {
+        const input = inputs.nth(i);
+        await input.fill(value);
+        const fit = await input.evaluate((el: HTMLInputElement) => ({ scroll: el.scrollWidth, client: el.clientWidth }));
+        expect(fit.scroll, `${locale} ${value}`).toBeLessThanOrEqual(fit.client);
+        await input.press('Escape');
+      }
+    }
+  }
+});
+
+test('the shortcuts dialog scrolls inside a short viewport', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 300 });
+  await page.keyboard.press('?');
+  const dialog = page.locator('.modal');
+  await expect(dialog).toBeVisible();
+  const box = await dialog.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    return { top: r.top, bottom: r.bottom, scroll: el.scrollHeight, client: el.clientHeight, overflow: getComputedStyle(el).overflowY };
+  });
+  expect(box.top).toBeGreaterThanOrEqual(0);
+  expect(box.bottom).toBeLessThanOrEqual(300);
+  expect(box.overflow).toBe('auto');
+  expect(box.scroll).toBeGreaterThan(box.client);
+  await dialog.evaluate((el) => el.scrollTo({ top: el.scrollHeight }));
+  expect(await dialog.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+});
+
+test('the fallback profile badge reads Universel in French', async ({ page }) => {
+  await addFiles(page, SINE);
+  await page.getByRole('combobox', { name: /profile/i }).selectOption('universal-fallback');
+  await page.getByRole('button', { name: 'Extract', exact: true }).click();
+  const badge = page.locator('.badge').first();
+  await expect(badge).toContainText('Universal', { timeout: 10_000 });
+  await page.getByRole('button', { name: 'FR', exact: true }).click();
+  await expect(badge).toContainText('Universel');
+  await expect(badge).not.toContainText('Fallback');
+});
+
 /** Spread between the vertical centers of the visible top bar items, so 0 means one clean row. */
 async function headerSpread(page: Page): Promise<number> {
   return page.evaluate(() => {

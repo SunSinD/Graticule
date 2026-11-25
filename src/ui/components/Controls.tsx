@@ -47,7 +47,7 @@ export function ProfilePanel({ tx, choice, result, disabled, onChoice }: Profile
       <h2>{tx.profile}</h2>
       {d && (
         <p className="badge">
-          <span>{d.profileName}</span>
+          <span>{d.profileId === 'universal-fallback' ? tx.profileUniversal : d.profileName}</span>
           <span className="num muted">{Math.round(d.confidence * 100)}%</span>
         </p>
       )}

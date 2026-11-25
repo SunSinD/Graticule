@@ -699,6 +699,17 @@ describe('scope CSV comparison', () => {
     expect(() => parseScopeCsv('second,volt\n0,')).toThrow(/no numeric voltage/);
   });
 
+  test('reads comma decimals in semicolon and tab separated CSVs but not in comma CSVs', () => {
+    for (const separator of [';', '\t']) {
+      const text = ['time_s', 'CH1_V'].join(separator) + '\n' + [['-0,001', '1,5'], ['0', ',25'], ['0,001', '-2,5e-1']]
+        .map(row => row.join(separator)).join('\n');
+      expect(parseScopeCsv(text)).toMatchObject({
+        columns: ['CH1_V'], rows: [{ timeSec: -0.001, values: [1.5] }, { timeSec: 0, values: [0.25] }, { timeSec: 0.001, values: [-0.25] }],
+      });
+    }
+    expect(parseScopeCsv('time_s,CH1_V\n0,"1,5"\n1,2')).toMatchObject({ rows: [{ timeSec: 0, values: [null] }, { timeSec: 1, values: [2] }] });
+  });
+
   test.each(['Channel 1', 'CH5', 'Channel 2 Voltage', 'Bench Output'])('applies Rigol index calibration with a %s header', header => {
     expect(parseScopeCsv(`X,${header},Start,Increment\n0,1,-0.002,0.001\n1,2\n2,3`)).toMatchObject({
       format: 'rigol', columns: [header], rows: [

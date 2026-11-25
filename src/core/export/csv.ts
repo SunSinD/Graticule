@@ -13,7 +13,7 @@ export function csvComment(text: string): string {
 
 export function csvField(text: string): string {
   const safe = spreadsheetText(text);
-  return /^#|[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+  return /^#|[",;\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 
 export function csvTimestamps(times: readonly (number | null)[], sampleInterval: number): string[] {
@@ -87,6 +87,13 @@ export function renderWaveformCsv(result: ExtractionResult, channelLabels?: Part
 
   const series = math ? [...traces.map(t => t.samples), math.samples] : traces.map(t => t.samples);
   const byCol = series.map(samples => new Map<number, TraceSample>(samples.map(s => [s.col, s])));
+  const resolutions = [...traces.map(t => t.settings.voltsPerDiv), ...(math ? [math.voltsPerDiv] : [])]
+    .map(voltsPerDiv => Math.abs(voltsPerDiv / grid.pxPerVDiv));
+  const voltageText = (voltage: number, resolution: number) => {
+    const ratio = Math.abs(voltage) / resolution;
+    const sig = Number.isFinite(ratio) && ratio > 0 ? Math.min(15, Math.max(6, Math.ceil(Math.log10(ratio)) + 3)) : 6;
+    return csvNumber(voltage, sig);
+  };
   const cols = new Set<number>();
   for (const samples of series) for (const s of samples) cols.add(s.col);
   const sortedCols = [...cols].sort((a, b) => a - b);
@@ -101,14 +108,14 @@ export function renderWaveformCsv(result: ExtractionResult, channelLabels?: Part
 
   for (const [i, col] of sortedCols.entries()) {
     const row = [times[i]!];
-    for (const m of byCol) {
+    for (const [series, m] of byCol.entries()) {
       const s = m.get(col);
       if (!s) {
         row.push('', 'unresolved');
         continue;
       }
       const usable = s.status === 'ok' && s.voltage !== null && Number.isFinite(s.voltage);
-      row.push(usable ? csvNumber(s.voltage, 6) : '', s.status);
+      row.push(usable ? voltageText(s.voltage!, resolutions[series]!) : '', s.status);
     }
     lines.push(row.join(','));
   }

@@ -1,31 +1,40 @@
-# Graticule 2.0.9
+# Graticule 2.0.10
 
 Try it live at [sunsind.github.io/Graticule](https://sunsind.github.io/Graticule/).
 
 Download [the offline HTML file](https://github.com/SunSinD/Graticule/releases/latest/download/graticule-portable.html) to use it on a PC with no internet and nothing to install.
 
-## New
+## App and history
 
-- BMP screenshots are read directly in the browser, in the background worker and in the command line, including `--bode` folders and `compare`
-- The command line `.tgz` now carries everything it needs, so `npm install -g --offline ./graticule-2.0.9.tgz` works on a PC with no internet. It needs Node 22 or newer
-- A quiet Offline copy link next to the source code link downloads the HTML file. It is hidden when you already use the HTML file
+- After an update, the offline copy in your browser always loads the new files instead of old cached ones
+- Two open tabs no longer erase each other's title and channel label edits, and clearing history during startup stays cleared
+- When browser storage is full, Graticule says so and keeps the capture open for this session
 
-## Hantek DSO2000 fixes
+## Files
 
-- The C3 trigger arrow no longer leaks into the extracted traces
-- A crop that is not centered on the grid keeps the right scales
-- Graticule now says when it found a Hantek grid and asks for the time and volt scales shown on the scope
-- The hidden area percentage in the JSON output now counts the Hantek annotations and trigger marker
+- 32 bit BMP files with an empty alpha channel now show their real colors
+- BMP files with slightly wrong header sizes are still read
 
-## Scale fields
+## Bode and exports
 
-- A time unit typed in a volt field, or a volt unit typed in a time field, is refused instead of read as a number
-- The plus and minus buttons stop at the largest and smallest scale a field accepts
+- The Bode cutoff is no longer taken from a later bounce after a missing point
+- Scope CSV files split by semicolons or tabs can use decimal commas
+- CSV fields that contain a semicolon are quoted, and small voltage changes on a large DC offset keep their precision
+- Special characters in titles and labels are escaped in LaTeX and Markdown tables
 
-## Docs
+## Command line
 
-- The README links straight to the offline HTML file and explains the three ways to use Graticule offline
-- The README and release notes pass the prose check 100%
+- `--out folder/` writes into that folder
+- UART timestamps keep their full precision
+
+## Interface
+
+- The fallback profile badge reads Universel in French
+- Volt scales such as 500 mV fit in the channel cards on desktop
+- Crop handles at the image edges no longer make the page jump
+- Dragging the whole 4 corners box works on Android phones
+- The shortcuts dialog scrolls on short or zoomed screens
+- fflate is pinned to 0.8.3
 
 ## Credits
 

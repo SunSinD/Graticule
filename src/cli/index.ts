@@ -5,7 +5,7 @@ import { basename, dirname, extname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { columnInterval } from '../core/columns.js';
 import { compareWithScopeCsv, parseScopeCsv } from '../core/compare.js';
-import { csvField, renderBodeCsv, renderWaveformCsv } from '../core/export/csv.js';
+import { csvField, csvTimestamps, renderBodeCsv, renderWaveformCsv } from '../core/export/csv.js';
 import { GRATICULE_VERSION, csvNumber, localizeDecimal, parseEngineering } from '../core/export/format.js';
 import { renderBodeSvg, renderWaveformSvg } from '../core/export/svg.js';
 import { renderBodeTable, renderMeasurementsTable, renderTables } from '../core/export/table.js';
@@ -278,8 +278,9 @@ async function run(): Promise<void> {
         if (table) add('fft', tableExtensions[format], renderSpectrumTable(spectrum, locale, format, values.title));
       }
       if (uart) {
-        const rows = uart.frames.map(frame => [
-          csvNumber(frame.startSec), csvNumber(frame.endSec), frame.hex, frame.ascii,
+        const times = csvTimestamps(uart.frames.flatMap(frame => [frame.startSec, frame.endSec]), columnInterval(result));
+        const rows = uart.frames.map((frame, i) => [
+          times[2 * i]!, times[2 * i + 1]!, frame.hex, frame.ascii,
           String(frame.framingError), String(frame.parityError), String(frame.uncertain),
         ]);
         const head = ['start_s', 'end_s', 'hex', 'ascii', 'framing_error', 'parity_error', 'uncertain'];
@@ -319,7 +320,7 @@ async function writeOutputs(outputs: readonly Output[], stem: string, out: strin
     return;
   }
   const outStat = await statExisting(out);
-  const directory = outputs.length > 1 || outStat?.isDirectory();
+  const directory = outputs.length > 1 || outStat?.isDirectory() || /[\\/]$/.test(out);
   if (directory && outStat && !outStat.isDirectory()) throw new Error(`Output location is not a directory: ${out}`);
   const writes = outputs.map(({ extension, text }) => ({ text, path: directory ? join(out, `${stem}.${extension}`) : out }));
   const inputStats = await Promise.all(inputs.map(path => statExisting(path)));

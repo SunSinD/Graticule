@@ -315,6 +315,45 @@ function withCursors(record: StoredItem, cursors: PlotCursors | null, rev?: numb
   return { ...rest, ...(cursors ? { cursors } : {}), ...(at ? { cursorsAt: at } : {}) };
 }
 
+/**
+ * A full save from a copy that is behind the disk keeps what another tab saved since, field by
+ * field. `base` is what this tab last saved or loaded. A field this copy left as it was in `base` is
+ * taken from disk, so a channel label edit in one tab never puts back an older title from another.
+ * The image, its extraction and its settings stay together as one group.
+ */
+function mergeOnDisk(record: StoredItem, base: StoredItem | undefined, onDisk: StoredItem): StoredItem {
+  if (!base) return record;
+  const { title: _t, channelLabels: _l, ...rest } = record;
+  const sameExtraction =
+    record.name === base.name &&
+    record.bytes === base.bytes &&
+    record.addedAt === base.addedAt &&
+    record.result === base.result &&
+    record.overrides === base.overrides &&
+    record.profile === base.profile &&
+    record.quality === base.quality &&
+    record.isPhoto === base.isPhoto;
+  const title = record.title === base.title ? (typeof onDisk.title === 'string' && onDisk.title.trim() ? onDisk.title : undefined) : record.title;
+  const labels = record.channelLabels === base.channelLabels ? validLabels(onDisk.channelLabels) : record.channelLabels;
+  return {
+    ...rest,
+    ...(sameExtraction
+      ? {
+          name: onDisk.name,
+          bytes: onDisk.bytes,
+          addedAt: onDisk.addedAt,
+          result: onDisk.result,
+          overrides: onDisk.overrides,
+          profile: onDisk.profile,
+          isPhoto: onDisk.isPhoto,
+          quality: onDisk.quality,
+        }
+      : {}),
+    ...(title ? { title } : {}),
+    ...(labels ? { channelLabels: labels } : {}),
+  };
+}
+
 function memoryStore(): HistoryStore {
   const map = new Map<string, StoredItem>();
   return {
@@ -525,6 +564,8 @@ export function idbStore(db: IDBDatabase): HistoryStore {
   const gone: PutResult = { ok: false, evicted: [], gone: true };
   /** The last clear this tab made or saw on load. A newer one came from another tab. */
   let knownClear: string | undefined;
+  /** What this tab last saved or loaded for each capture, so a full save only changes what this tab changed. */
+  const bases = new Map<string, StoredItem>();
   /** True when another tab cleared history after this capture was added, so it must stay gone. */
   const clearedElsewhere = (record: StoredItem, cleared: ClearRecord | undefined): boolean =>
     Boolean(cleared && cleared.token !== knownClear && cleared.at >= record.addedAt);
@@ -554,9 +595,13 @@ export function idbStore(db: IDBDatabase): HistoryStore {
       readItem(db, record.id, (store, onDisk, sides, cleared) => {
         missing = !onDisk && (existing || clearedElsewhere(record, cleared));
         if (missing) return;
+        const merged = onDisk ? mergeOnDisk(record, bases.get(record.id), onDisk) : record;
         const disk = newestCursors(onDisk, sides);
-        store.put(disk.rev > revOf(record) ? withCursors(record, disk.cursors, disk.rev) : record);
+        store.put(disk.rev > revOf(merged) ? withCursors(merged, disk.cursors, disk.rev) : merged);
         for (const side of sides) store.delete(side.id);
+      }).then(() => {
+        if (missing) bases.delete(record.id);
+        else bases.set(record.id, record);
       });
     const usageBefore = await storageUsage();
     try {
@@ -723,11 +768,14 @@ export function idbStore(db: IDBDatabase): HistoryStore {
             ),
           );
         }
-        return loadValid(kept.map((r) => {
+        const items = loadValid(kept.map((r) => {
           const side = newestSide(late.get(r.id) ?? []);
           if (!side || sideRev(side) < revOf(r)) return r;
           return withCursors(r, validCursors(side.cursors), sideRev(side) || undefined);
         }));
+        bases.clear();
+        for (const i of items) bases.set(i.id, toStored(i));
+        return items;
       }),
     put: (item, protectedIds = new Set(), options) => serial(() => put(item, protectedIds, options?.existing === true)),
     updateMeta: (id, patch) =>
@@ -756,6 +804,7 @@ export function idbStore(db: IDBDatabase): HistoryStore {
       serial(() =>
         safe(() =>
           readItem(db, id, (store, _item, sides) => {
+            bases.delete(id);
             store.delete(id);
             for (const side of sides) store.delete(side.id);
           }),
@@ -766,6 +815,7 @@ export function idbStore(db: IDBDatabase): HistoryStore {
         const marker: ClearRecord = { id: CLEAR_KEY, at: Date.now(), token: newId() };
         // Known before the write, so this tab can save its own captures again right after.
         knownClear = marker.token;
+        bases.clear();
         return safe(() =>
           commit(
             db,

@@ -138,7 +138,11 @@ export function parseScopeCsv(text: string): ScopeCsvData {
     }
   }));
   if (!separator) throw new Error('Scope CSV needs a time column and at least one voltage column.');
-  const records = lines.map(line => splitRow(line, separator));
+  const commaDecimal = /^[+-]?(?:\d+,\d*|,\d+)(?:e[+-]?\d+)?$/i;
+  const records = lines.map(line => {
+    const row = splitRow(line, separator);
+    return separator === ',' ? row : row.map(cell => commaDecimal.test(cell) ? cell.replace(',', '.') : cell);
+  });
   const index = records.findIndex(row => timeHeader.test(row[0] ?? '') && row.slice(1).some(Boolean));
   if (index < 0) {
     return checkedCsv('generic', ['Volt'], records.filter(tektronixData)

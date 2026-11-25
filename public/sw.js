@@ -47,7 +47,8 @@ self.addEventListener('install', (event) => {
     const hadComplete = await isComplete(OWN_CACHE);
     try {
       const cache = await caches.open(OWN_CACHE);
-      await cache.addAll([...STATIC_ASSETS, ...PRECACHE_ASSETS]);
+      // The HTTP cache can hold an older index.html for minutes, so every asset is downloaded fresh.
+      await cache.addAll([...STATIC_ASSETS, ...PRECACHE_ASSETS].map((url) => new Request(url, { cache: 'reload' })));
     } catch (error) {
       if (!hadComplete) await caches.delete(OWN_CACHE);
       throw error;
